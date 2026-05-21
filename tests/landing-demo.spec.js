@@ -138,6 +138,105 @@ function check(name, ok, detail = '') {
   check('搜索 weekly：f1 现在在 prototypes 下被找到',
     afterDragSearch.files.includes('f1') && afterDragSearch.folders.includes('prototypes'));
 
+  // ===== 7. 键盘导航：搜索框 ↓ 进列表，↑↓ 切换，Enter 打开，Esc 回 =====
+  console.log('\n[7] 键盘导航');
+  // 重置确保起点干净
+  await page.locator('#demo-reset').click();
+  await page.waitForTimeout(400);
+  await page.fill('#demo-search', '');
+
+  await page.locator('#demo-search').focus();
+  await page.keyboard.press('ArrowDown');
+  await page.waitForTimeout(80);
+  let kbd = await page.evaluate(() => {
+    const f = document.querySelector('#demo-tree .file.kbd-focus');
+    return f && f.dataset.fileId;
+  });
+  check('搜索框按 ↓ → 第一个 file 获得 kbd-focus', kbd === 'f1', 'focus on ' + kbd);
+
+  await page.keyboard.press('ArrowDown');
+  await page.waitForTimeout(60);
+  await page.keyboard.press('ArrowDown');
+  await page.waitForTimeout(60);
+  kbd = await page.evaluate(() => document.querySelector('#demo-tree .file.kbd-focus')?.dataset.fileId);
+  check('连按 ↓↓ 移到第三个 file', kbd === 'f3');
+
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(250);
+  const enterOpened = await page.evaluate(() => ({
+    activeId: [...document.querySelectorAll('#demo-tree .file.active')][0]?.dataset.fileId,
+    previewText: document.getElementById('demo-preview').textContent.slice(0, 40),
+  }));
+  check('Enter 打开当前 kbd-focus 的文件', enterOpened.activeId === 'f3' && /Retro/.test(enterOpened.previewText));
+
+  // Esc 回搜索框
+  await page.keyboard.press('ArrowDown');
+  await page.waitForTimeout(60);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(80);
+  const afterEsc = await page.evaluate(() => ({
+    focused: document.activeElement.id,
+    hasKbdFocus: !!document.querySelector('#demo-tree .file.kbd-focus'),
+  }));
+  check('Esc 回到搜索框 + 清除 kbd-focus',
+    afterEsc.focused === 'demo-search' && !afterEsc.hasKbdFocus);
+
+  // ===== 8. Reset 按钮：恢复初始状态 =====
+  console.log('\n[8] Reset 按钮');
+  // 先做点改动：搜索 + 拖拽 + 点击
+  await page.fill('#demo-search', 'weekly');
+  await page.waitForTimeout(150);
+  await page.fill('#demo-search', '');
+  await page.waitForTimeout(150);
+  await page.locator('#demo-tree .file[data-file-id="f4"]').click();
+  await page.waitForTimeout(200);
+
+  const dirty = await page.evaluate(() => ({
+    unread: [...document.querySelectorAll('#demo-tree .file.unread')].length,
+    activeId: document.querySelector('#demo-tree .file.active')?.dataset.fileId,
+  }));
+  console.log('  改动后:', dirty);
+
+  // 点 reset
+  await page.locator('#demo-reset').click();
+  await page.waitForTimeout(400);
+  const afterReset = await page.evaluate(() => ({
+    unreadCount: [...document.querySelectorAll('#demo-tree .file.unread')].length,
+    stats: document.getElementById('demo-stats').textContent,
+    f1Position: (() => {
+      // f1 应该回到 reports 第一位（初始状态）
+      const reports = [...document.querySelectorAll('#demo-tree .folder[data-folder-id="reports"] .file')];
+      return reports[0]?.dataset.fileId;
+    })(),
+    activeId: document.querySelector('#demo-tree .file.active')?.dataset.fileId,
+    searchValue: document.getElementById('demo-search').value,
+  }));
+  console.log('  ', afterReset);
+  check('Reset 后未读数恢复到 3', afterReset.unreadCount === 3);
+  check('Reset 后 stats 显示"3 未读"', /3\s*未读/.test(afterReset.stats));
+  check('Reset 后 f1 回到 reports 第一位', afterReset.f1Position === 'f1');
+  check('Reset 后没有 active 文件', !afterReset.activeId);
+  check('Reset 后搜索框被清空', afterReset.searchValue === '');
+
+  // ===== 9. Tip 行为 =====
+  console.log('\n[9] Tip：刷新后 2.5s 出现，操作即消失');
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForSelector('#demo-tree .folder');
+  // 滚到 demo 区域，让 IntersectionObserver 触发
+  await page.locator('#demo').scrollIntoViewIfNeeded();
+  // 2.5s + 缓冲
+  await page.waitForTimeout(3000);
+  let tipVisible = await page.evaluate(() =>
+    document.getElementById('demo-tip').classList.contains('show'));
+  check('滚到 demo 后 ~2.5s tip 显示', tipVisible);
+
+  // 任何 click 即消失
+  await page.locator('#demo-tree .file').first().click();
+  await page.waitForTimeout(400);
+  tipVisible = await page.evaluate(() =>
+    document.getElementById('demo-tip').classList.contains('show'));
+  check('点击 demo 内任何元素后 tip 自动消失', !tipVisible);
+
   // ===== 总结 =====
   await browser.close();
   const failed = checks.filter(c => !c.ok);
