@@ -500,6 +500,263 @@
     .mockup .preview p { color: #4b5563; font-size: 12px; margin: 0; line-height: 1.6; }
 
     /* =========================================
+       Interactive Demo (overrides static mockup styles)
+       ========================================= */
+    .demo-hint {
+      display: inline-flex; align-items: center; gap: 8px;
+      margin-bottom: 14px;
+      padding: 7px 14px;
+      background: var(--bg-soft);
+      border: 1px solid var(--hairline);
+      border-radius: 999px;
+      color: var(--text-mute);
+      font-size: 12.5px;
+    }
+    .demo-hint .ico {
+      width: 14px; height: 14px;
+      color: var(--accent);
+      animation: hint-bob 2.4s var(--ease-out) infinite;
+    }
+    @keyframes hint-bob {
+      0%, 100% { transform: translateY(0); }
+      50%      { transform: translateY(-2px); }
+    }
+    .demo-hint kbd { font-size: 10.5px; }
+
+    .demo .body { height: 460px; min-height: unset; }
+    .demo .titlebar { position: relative; }
+    .demo .titlebar .url { flex: none; margin: 0 auto; }
+    .demo .titlebar .key-hint {
+      position: absolute; right: 14px;
+      color: var(--text-faint);
+      font-family: var(--font-mono);
+      font-size: 10px;
+    }
+
+    .demo .sidebar {
+      display: flex; flex-direction: column;
+      padding: 12px 0 6px;
+    }
+    .demo .sidebar .header { padding: 0 12px 12px; margin-bottom: 0; }
+    .demo .search-row {
+      padding: 10px 10px 10px;
+      border-bottom: 1px solid var(--hairline);
+    }
+    .demo-search {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--hairline);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 6px 10px;
+      outline: none;
+      font-size: 11.5px;
+      font-family: inherit;
+      transition: border-color var(--dur-fast) var(--ease);
+    }
+    .demo-search:focus { border-color: var(--accent); }
+    .demo-search::placeholder { color: var(--text-faint); }
+
+    .demo-tree {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 6px 8px;
+      scrollbar-width: thin;
+    }
+    .demo-tree::-webkit-scrollbar { width: 6px; }
+    .demo-tree::-webkit-scrollbar-thumb { background: var(--hairline-strong); border-radius: 3px; }
+
+    .demo .folder-head { transition: background 80ms var(--ease); }
+    .demo .file { transition: background 80ms var(--ease); cursor: pointer; }
+    .demo .folder-head { cursor: pointer; }
+    .demo .toggle { transition: transform var(--dur-fast) var(--ease); display: inline-block; transform-origin: center; }
+    .demo .folder.collapsed > .folder-head .toggle { transform: rotate(-90deg); }
+    .demo .folder.collapsed > .folder-children { display: none; }
+
+    .dragging-ghost {
+      opacity: 0.4;
+      background: rgba(91,156,255,0.12) !important;
+      border-radius: 5px;
+    }
+    .demo .file.dragging,
+    .demo .folder.dragging { cursor: grabbing; }
+
+    .demo .preview {
+      position: relative;
+      transition: opacity 180ms var(--ease);
+    }
+    .demo .preview.fading { opacity: 0; }
+    .demo .preview .empty {
+      display: grid; place-items: center;
+      height: 100%;
+      color: #9098a3;
+      font-size: 13px;
+      gap: 8px;
+      text-align: center;
+    }
+    .demo .preview .empty .ico { font-size: 32px; opacity: 0.4; }
+
+    /* Preview variants */
+    .demo .preview .badge {
+      display: inline-block;
+      padding: 2px 9px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .demo .preview .badge-blue { background: #e8f1ff; color: #2563eb; }
+    .demo .preview .badge-green { background: #ecfdf5; color: #15803d; }
+    .demo .preview .badge-purple { background: #f5f0ff; color: #6d28d9; }
+    .demo .preview .badge-amber { background: #fef3c7; color: #b45309; }
+
+    .demo .preview .okr-row {
+      display: grid; grid-template-columns: 1fr auto; gap: 12px;
+      padding: 10px 14px;
+      background: #fafbfc;
+      border: 1px solid #e8eaed;
+      border-radius: 8px;
+      margin-bottom: 8px;
+    }
+    .demo .preview .okr-title { font-weight: 600; color: #0d1117; font-size: 13px; }
+    .demo .preview .okr-meta { color: #6b7280; font-size: 11px; margin-top: 2px; }
+    .demo .preview .progress-row {
+      display: flex; align-items: center; gap: 10px;
+      grid-column: 1 / -1;
+      margin-top: 6px;
+    }
+    .demo .preview .progress-bar {
+      flex: 1; height: 6px;
+      background: #e8eaed;
+      border-radius: 99px; overflow: hidden;
+    }
+    .demo .preview .progress-bar > span {
+      display: block; height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      border-radius: 99px;
+      transition: width 600ms var(--ease-out);
+    }
+    .demo .preview .progress-num {
+      font-size: 11.5px; color: #0d1117; font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      min-width: 36px; text-align: right;
+    }
+
+    .demo .preview .retro-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 8px;
+    }
+    .demo .preview .retro-col h3 {
+      margin: 0 0 8px;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #6b7280;
+      font-weight: 600;
+    }
+    .demo .preview .retro-card {
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 11.5px;
+      line-height: 1.5;
+      color: #1a1a1a;
+      margin-bottom: 6px;
+      border-left: 3px solid;
+    }
+    .demo .preview .retro-keep   { background: #ecfdf5; border-left-color: #15803d; }
+    .demo .preview .retro-stop   { background: #fef2f2; border-left-color: #b91c1c; }
+    .demo .preview .retro-try    { background: #f5f0ff; border-left-color: #6d28d9; }
+
+    .demo .preview .hero-mock {
+      background: linear-gradient(135deg, #f8fbff 0%, #f5f0ff 100%);
+      padding: 30px 28px;
+      border-radius: 10px;
+      text-align: center;
+    }
+    .demo .preview .hero-mock h2 {
+      font-size: 22px; margin: 0 0 8px;
+      letter-spacing: -0.02em; font-weight: 700; color: #0d1117;
+    }
+    .demo .preview .hero-mock p { color: #4b5563; font-size: 12px; max-width: 380px; margin: 0 auto 14px; }
+    .demo .preview .hero-mock .cta {
+      display: inline-block;
+      padding: 8px 16px;
+      background: linear-gradient(135deg, #2563eb, #6d28d9);
+      color: white;
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .demo .preview .step-list { display: grid; gap: 10px; }
+    .demo .preview .step-card {
+      display: grid; grid-template-columns: 26px 1fr; gap: 12px;
+      padding: 11px 14px;
+      border: 1px solid #e8eaed;
+      border-radius: 8px;
+      background: #fafbfc;
+    }
+    .demo .preview .step-card .step-num {
+      width: 24px; height: 24px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: white;
+      border-radius: 6px;
+      display: grid; place-items: center;
+      font-size: 11px; font-weight: 700;
+    }
+    .demo .preview .step-card .step-title { font-weight: 600; color: #0d1117; font-size: 12.5px; }
+    .demo .preview .step-card .step-desc { color: #6b7280; font-size: 11.5px; margin-top: 2px; }
+
+    .demo .preview .note-list {
+      list-style: none; padding: 0; margin: 0;
+      display: grid; gap: 10px;
+    }
+    .demo .preview .note-list li {
+      display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: flex-start;
+      padding: 10px 12px;
+      background: #fafbfc;
+      border: 1px solid #e8eaed;
+      border-radius: 8px;
+      font-size: 12px;
+      color: #1a1a1a;
+    }
+    .demo .preview .note-list .marker {
+      width: 4px; height: 14px; background: var(--accent); border-radius: 2px; margin-top: 3px;
+    }
+    .demo .preview .note-list .note-title { font-weight: 600; color: #0d1117; font-size: 12.5px; margin-bottom: 2px; }
+    .demo .preview .note-list .note-meta { color: #6b7280; font-size: 11px; }
+
+    .demo .preview .todo-list { list-style: none; padding: 0; margin: 0; }
+    .demo .preview .todo-list li {
+      display: grid; grid-template-columns: 18px 1fr auto; gap: 10px; align-items: center;
+      padding: 8px 0;
+      font-size: 12.5px;
+      color: #1a1a1a;
+      border-bottom: 1px solid #f0f1f3;
+    }
+    .demo .preview .todo-list li:last-child { border-bottom: none; }
+    .demo .preview .todo-list .check {
+      width: 14px; height: 14px;
+      border: 1.5px solid #c0c5cd;
+      border-radius: 4px;
+    }
+    .demo .preview .todo-list .check.done {
+      background: var(--accent); border-color: var(--accent);
+      position: relative;
+    }
+    .demo .preview .todo-list .check.done::after {
+      content: '';
+      position: absolute; left: 3px; top: 1px;
+      width: 4px; height: 7px;
+      border: solid white; border-width: 0 1.7px 1.7px 0;
+      transform: rotate(45deg);
+    }
+    .demo .preview .todo-list li.done { color: #9ca3af; text-decoration: line-through; }
+    .demo .preview .todo-list .tag {
+      font-size: 10px; padding: 2px 7px; border-radius: 999px;
+      background: #f3f4f6; color: #6b7280;
+    }
+
+    /* =========================================
        Features grid
        ========================================= */
     .features {
@@ -787,119 +1044,41 @@
 
 <section class="mockup-wrap reveal">
   <div class="wrap">
-    <div class="mockup" aria-label="Atlas dashboard 界面预览">
+    <div class="demo-hint">
+      <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M8 1.5v2M3.5 3.5l1.5 1.5M1.5 8h2M12.5 5l1.5-1.5M11 8l3 4H8.5L7 13.5 4.5 7l6.5 1z"/>
+      </svg>
+      <span>这是一个真实可交互的 mini Atlas — 试试搜索、点击、拖拽</span>
+    </div>
+    <div class="mockup demo" id="demo" aria-label="可交互的 Atlas dashboard 演示">
       <div class="titlebar">
         <span class="dot r"></span>
         <span class="dot y"></span>
         <span class="dot g"></span>
         <span class="url">localhost:4321</span>
-        <span style="width: 39px"></span>
+        <span class="key-hint" aria-hidden="true">demo</span>
       </div>
-      <div class="body">
+      <div class="body" id="demo-body">
         <aside class="sidebar">
           <div class="header">
             <div class="mark">A</div>
             <div>
               <div style="font-weight:700;font-size:13px">Atlas</div>
-              <div class="stats">8 个文档 · 3 未读</div>
+              <div class="stats" id="demo-stats">— · —</div>
             </div>
           </div>
-          <div class="folder">
-            <div class="folder-head">
-              <span class="toggle">▾</span>
-              <span class="icon">📁</span>
-              <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">reports</span>
-              <span class="dot unread" title="2 未读" aria-hidden="true"></span>
-              <span class="count">3</span>
-            </div>
-            <div class="folder-children">
-              <div class="file unread">
-                <span class="dot unread" aria-hidden="true"></span>
-                <span class="icon">📄</span>
-                <span class="file-name alias">本周指标速览</span>
-                <span class="mtime">5 分钟前</span>
-              </div>
-              <div class="file unread">
-                <span class="dot unread" aria-hidden="true"></span>
-                <span class="icon">📄</span>
-                <span class="file-name">q3-okr-review</span>
-                <span class="mtime">2 小时前</span>
-              </div>
-              <div class="file active">
-                <span class="dot spacer" aria-hidden="true"></span>
-                <span class="icon">📄</span>
-                <span class="file-name">retro-2026-04</span>
-                <span class="mtime">昨天</span>
-              </div>
-            </div>
+          <div class="search-row">
+            <input type="search" class="demo-search" id="demo-search" placeholder="搜索文件名 / 备注…" autocomplete="off" />
           </div>
-          <div class="folder">
-            <div class="folder-head">
-              <span class="toggle">▾</span>
-              <span class="icon">📁</span>
-              <span style="flex:1">prototypes</span>
-              <span class="dot unread" aria-hidden="true"></span>
-              <span class="count">2</span>
-            </div>
-            <div class="folder-children">
-              <div class="file unread">
-                <span class="dot unread" aria-hidden="true"></span>
-                <span class="icon">📄</span>
-                <span class="file-name alias">落地页 v2</span>
-                <span class="mtime">10 分钟前</span>
-              </div>
-              <div class="file">
-                <span class="dot spacer" aria-hidden="true"></span>
-                <span class="icon">📄</span>
-                <span class="file-name">onboarding-flow</span>
-                <span class="mtime">3 天前</span>
-              </div>
-            </div>
-          </div>
-          <div class="folder">
-            <div class="folder-head">
-              <span class="toggle">▸</span>
-              <span class="icon">📁</span>
-              <span style="flex:1">notes</span>
-              <span class="count">3</span>
-            </div>
+          <div class="demo-tree" id="demo-tree">
+            <!-- JS 渲染 -->
           </div>
         </aside>
-        <div class="preview">
-          <h1>Weekly Metrics Snapshot</h1>
-          <div class="meta-line">2026-05-21 · Q3 OKR review</div>
-          <div class="kpi-grid">
-            <div class="kpi">
-              <div class="lbl">Active Users</div>
-              <div class="val">124,381</div>
-              <div class="delta">↑ 3.2%</div>
-            </div>
-            <div class="kpi b2">
-              <div class="lbl">Sessions</div>
-              <div class="val">3.2M</div>
-              <div class="delta">↑ 12%</div>
-            </div>
-            <div class="kpi b3">
-              <div class="lbl">Conversion</div>
-              <div class="val">24.8%</div>
-              <div class="delta">↑ 1.4pp</div>
-            </div>
+        <div class="preview" id="demo-preview">
+          <div class="empty">
+            <div class="ico">📄</div>
+            <div>从左侧选择一个文件预览</div>
           </div>
-          <div class="chart">
-            <svg viewBox="0 0 300 76" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-              <defs>
-                <linearGradient id="g1" x1="0" x2="0" y1="0" y2="1">
-                  <stop offset="0%" stop-color="#5b9cff" stop-opacity="0.28"/>
-                  <stop offset="100%" stop-color="#5b9cff" stop-opacity="0"/>
-                </linearGradient>
-              </defs>
-              <polyline points="0,55 25,48 50,52 75,38 100,42 125,30 150,34 175,22 200,18 225,15 250,12 275,8 300,6"
-                fill="none" stroke="#5b9cff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-              <polyline points="0,76 0,55 25,48 50,52 75,38 100,42 125,30 150,34 175,22 200,18 225,15 250,12 275,8 300,6 300,76"
-                fill="url(#g1)" stroke="none" />
-            </svg>
-          </div>
-          <p>Last 7 days show steady growth across all key metrics, primarily driven by the homepage feed redesign rolled out earlier this week.</p>
         </div>
       </div>
     </div>
@@ -1145,6 +1324,482 @@ atlas</code></pre>
       if (d && d.version) document.getElementById('cur-version').textContent = d.version;
     })
     .catch(() => {});
+</script>
+
+<!-- ============================================
+     Interactive demo: mini Atlas
+     ============================================ -->
+<script src="./Sortable.min.js" defer></script>
+<script defer>
+(function () {
+  // ----- mock data -----
+  const state = {
+    search: '',
+    activeId: null,
+    tree: [
+      { type:'folder', id:'reports', name:'reports', expanded:true, children:[
+        { type:'file', id:'f1', name:'weekly-summary',   alias:'本周指标速览', mtime:'5 分钟前',   unread:true,  view:'weekly' },
+        { type:'file', id:'f2', name:'q3-okr-review',    mtime:'2 小时前',     unread:true,  view:'okr' },
+        { type:'file', id:'f3', name:'retro-2026-04',    mtime:'昨天',        unread:false, view:'retro' },
+      ]},
+      { type:'folder', id:'prototypes', name:'prototypes', expanded:true, children:[
+        { type:'file', id:'f4', name:'landing-page-v2',  alias:'落地页 v2',   mtime:'10 分钟前',  unread:true,  view:'landing' },
+        { type:'file', id:'f5', name:'onboarding-flow',  mtime:'3 天前',      unread:false, view:'onboarding' },
+      ]},
+      { type:'folder', id:'notes', name:'notes', expanded:false, children:[
+        { type:'file', id:'f6', name:'meeting-notes',    mtime:'1 小时前',    unread:false, view:'notes' },
+        { type:'file', id:'f7', name:'todo',             mtime:'昨天',        unread:false, view:'todo' },
+        { type:'file', id:'f8', name:'ideas',            mtime:'2 天前',      unread:false, view:'ideas' },
+      ]},
+    ],
+  };
+
+  // ----- preview HTML 内容 -----
+  const previews = {
+    weekly: `
+      <h1>Weekly Metrics Snapshot</h1>
+      <div class="meta-line">2026-05-21 · <span class="badge badge-blue">Reports</span></div>
+      <div class="kpi-grid">
+        <div class="kpi">
+          <div class="lbl">Active Users</div>
+          <div class="val">124,381</div>
+          <div class="delta">↑ 3.2%</div>
+        </div>
+        <div class="kpi b2">
+          <div class="lbl">Sessions</div>
+          <div class="val">3.2M</div>
+          <div class="delta">↑ 12%</div>
+        </div>
+        <div class="kpi b3">
+          <div class="lbl">Conversion</div>
+          <div class="val">24.8%</div>
+          <div class="delta">↑ 1.4pp</div>
+        </div>
+      </div>
+      <div class="chart">
+        <svg viewBox="0 0 300 76" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="g1" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stop-color="#5b9cff" stop-opacity="0.28"/>
+              <stop offset="100%" stop-color="#5b9cff" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <polyline points="0,55 25,48 50,52 75,38 100,42 125,30 150,34 175,22 200,18 225,15 250,12 275,8 300,6"
+            fill="none" stroke="#5b9cff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          <polyline points="0,76 0,55 25,48 50,52 75,38 100,42 125,30 150,34 175,22 200,18 225,15 250,12 275,8 300,6 300,76"
+            fill="url(#g1)" stroke="none" />
+        </svg>
+      </div>
+      <p>Last 7 days show steady growth across all key metrics, primarily driven by the homepage feed redesign rolled out earlier this week.</p>
+    `,
+    okr: `
+      <h1>Q3 OKR Review</h1>
+      <div class="meta-line">Reviewed 2026-05-19 · <span class="badge badge-blue">Reports</span></div>
+      <div class="okr-row">
+        <div>
+          <div class="okr-title">O1 — Improve product-led growth</div>
+          <div class="okr-meta">3 of 4 KRs on track</div>
+        </div>
+        <div class="badge badge-green">On Track</div>
+        <div class="progress-row">
+          <div class="progress-bar"><span style="width:74%"></span></div>
+          <div class="progress-num">74%</div>
+        </div>
+      </div>
+      <div class="okr-row">
+        <div>
+          <div class="okr-title">O2 — Expand to APAC region</div>
+          <div class="okr-meta">2 of 5 KRs at risk</div>
+        </div>
+        <div class="badge badge-amber">At Risk</div>
+        <div class="progress-row">
+          <div class="progress-bar"><span style="width:42%"></span></div>
+          <div class="progress-num">42%</div>
+        </div>
+      </div>
+      <div class="okr-row">
+        <div>
+          <div class="okr-title">O3 — Reduce churn by 20%</div>
+          <div class="okr-meta">All KRs complete</div>
+        </div>
+        <div class="badge badge-green">Complete</div>
+        <div class="progress-row">
+          <div class="progress-bar"><span style="width:100%"></span></div>
+          <div class="progress-num">100%</div>
+        </div>
+      </div>
+    `,
+    retro: `
+      <h1>April Retrospective</h1>
+      <div class="meta-line">Sprint 24 · <span class="badge badge-purple">Team</span></div>
+      <div class="retro-grid">
+        <div class="retro-col">
+          <h3>Keep</h3>
+          <div class="retro-card retro-keep">每日 standup 改成 async，节省 4h/周</div>
+          <div class="retro-card retro-keep">pair review 制度让 bug 率下降 35%</div>
+        </div>
+        <div class="retro-col">
+          <h3>Stop</h3>
+          <div class="retro-card retro-stop">周五的全员会议 — 多数同事时间被占</div>
+          <div class="retro-card retro-stop">手动跑 e2e 测试，已被 CI 替代</div>
+        </div>
+        <div class="retro-col">
+          <h3>Try</h3>
+          <div class="retro-card retro-try">引入 design review 节点</div>
+          <div class="retro-card retro-try">每个 sprint 留 1 天做技术债清理</div>
+        </div>
+      </div>
+    `,
+    landing: `
+      <h1>Landing Page v2</h1>
+      <div class="meta-line">Mock · <span class="badge badge-purple">Prototype</span></div>
+      <div class="hero-mock">
+        <h2>Build faster, ship smarter.</h2>
+        <p>The all-in-one platform for product teams. Track progress, gather feedback, and iterate without context switching.</p>
+        <span class="cta">Get Started Free →</span>
+      </div>
+      <p style="margin-top:14px">Designed by @ai · Latest revision improved Hero contrast and CTA prominence based on heatmap data from v1.</p>
+    `,
+    onboarding: `
+      <h1>Onboarding Flow</h1>
+      <div class="meta-line">4 steps · <span class="badge badge-purple">Prototype</span></div>
+      <div class="step-list">
+        <div class="step-card">
+          <div class="step-num">1</div>
+          <div>
+            <div class="step-title">Welcome screen</div>
+            <div class="step-desc">Brief intro to the product, set expectations.</div>
+          </div>
+        </div>
+        <div class="step-card">
+          <div class="step-num">2</div>
+          <div>
+            <div class="step-title">Connect your data source</div>
+            <div class="step-desc">OAuth or API key. Skipable for trial users.</div>
+          </div>
+        </div>
+        <div class="step-card">
+          <div class="step-num">3</div>
+          <div>
+            <div class="step-title">Personalize dashboard</div>
+            <div class="step-desc">Choose which widgets to show first.</div>
+          </div>
+        </div>
+        <div class="step-card">
+          <div class="step-num">4</div>
+          <div>
+            <div class="step-title">Invite teammates</div>
+            <div class="step-desc">Optional — can be done from settings later.</div>
+          </div>
+        </div>
+      </div>
+    `,
+    notes: `
+      <h1>Meeting Notes</h1>
+      <div class="meta-line">2026-05-20 · <span class="badge badge-amber">Notes</span></div>
+      <ul class="note-list">
+        <li>
+          <div class="marker"></div>
+          <div>
+            <div class="note-title">Q3 路线图对齐</div>
+            <div class="note-meta">3 个核心方向已确认，技术评审下周开始</div>
+          </div>
+        </li>
+        <li>
+          <div class="marker"></div>
+          <div>
+            <div class="note-title">竞品分析</div>
+            <div class="note-meta">A、B 厂动作整理完成，差异化机会在数据层</div>
+          </div>
+        </li>
+        <li>
+          <div class="marker"></div>
+          <div>
+            <div class="note-title">招聘计划</div>
+            <div class="note-meta">下季度需补 2 名前端、1 名 DA</div>
+          </div>
+        </li>
+      </ul>
+    `,
+    todo: `
+      <h1>Todo</h1>
+      <div class="meta-line">5 items · <span class="badge badge-amber">Notes</span></div>
+      <ul class="todo-list">
+        <li class="done"><span class="check done"></span><span>调研可交互 demo 方案</span><span class="tag">research</span></li>
+        <li class="done"><span class="check done"></span><span>landing page 通用化示例</span><span class="tag">docs</span></li>
+        <li><span class="check"></span><span>把 demo 做成真正可拖拽 / 可搜索</span><span class="tag">feature</span></li>
+        <li><span class="check"></span><span>录一段 30s GIF 放到 README</span><span class="tag">marketing</span></li>
+        <li><span class="check"></span><span>计划 0.2.0 的特性</span><span class="tag">roadmap</span></li>
+      </ul>
+    `,
+    ideas: `
+      <h1>Ideas</h1>
+      <div class="meta-line">Draft · <span class="badge badge-amber">Notes</span></div>
+      <ul class="note-list">
+        <li>
+          <div class="marker"></div>
+          <div>
+            <div class="note-title">支持给文件打 tag / 颜色</div>
+            <div class="note-meta">侧栏快速过滤，配合搜索可以更高效定位</div>
+          </div>
+        </li>
+        <li>
+          <div class="marker"></div>
+          <div>
+            <div class="note-title">menubar 常驻应用</div>
+            <div class="note-meta">用 Tauri 包装一层，点击图标弹窗，未读数显示在小图标上</div>
+          </div>
+        </li>
+        <li>
+          <div class="marker"></div>
+          <div>
+            <div class="note-title">分享视图（read-only URL）</div>
+            <div class="note-meta">把某个 HTML 临时分享给团队，不暴露其他文件</div>
+          </div>
+        </li>
+      </ul>
+    `,
+  };
+
+  // ----- helpers -----
+  const $tree    = document.getElementById('demo-tree');
+  const $preview = document.getElementById('demo-preview');
+  const $stats   = document.getElementById('demo-stats');
+  const $search  = document.getElementById('demo-search');
+
+  const findFolder = (id) => state.tree.find(n => n.type === 'folder' && n.id === id);
+  const findFile = (id) => {
+    for (const f of state.tree) {
+      if (f.type === 'folder') {
+        const file = f.children.find(c => c.id === id);
+        if (file) return file;
+      }
+    }
+    return null;
+  };
+  const totalFiles = () => state.tree.reduce((s, f) => s + (f.children?.length || 0), 0);
+  const totalUnread = () => state.tree.reduce((s, f) => s + (f.children || []).filter(c => c.unread).length, 0);
+
+  const escHtml = (s) => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function fileMatches(f) {
+    if (!state.search) return true;
+    const q = state.search.toLowerCase();
+    return f.name.toLowerCase().includes(q) || (f.alias && f.alias.toLowerCase().includes(q));
+  }
+  function folderMatches(f) {
+    if (!state.search) return true;
+    return f.children.some(fileMatches);
+  }
+
+  // ----- render -----
+  function render() {
+    $tree.innerHTML = '';
+    for (const folder of state.tree) {
+      if (!folderMatches(folder)) continue;
+      $tree.appendChild(renderFolder(folder));
+    }
+    initSortables();
+    updateStats();
+  }
+
+  function renderFolder(folder) {
+    const visibleChildren = folder.children.filter(fileMatches);
+    const unread = folder.children.filter(c => c.unread).length;
+
+    const div = document.createElement('div');
+    div.className = 'folder' + (folder.expanded ? '' : ' collapsed');
+    div.dataset.nodeType = 'folder';
+    div.dataset.folderId = folder.id;
+    div.innerHTML = `
+      <div class="folder-head">
+        <span class="toggle">▾</span>
+        <span class="icon">📁</span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(folder.name)}</span>
+        ${unread > 0 ? '<span class="dot unread" title="' + unread + ' 未读"></span>' : ''}
+        <span class="count">${visibleChildren.length}</span>
+      </div>
+      <div class="folder-children" data-folder-id="${folder.id}"></div>
+    `;
+    const childrenEl = div.querySelector('.folder-children');
+    for (const file of visibleChildren) {
+      childrenEl.appendChild(renderFile(file));
+    }
+    return div;
+  }
+
+  function renderFile(file) {
+    const div = document.createElement('div');
+    div.className = 'file'
+      + (file.unread ? ' unread' : '')
+      + (file.id === state.activeId ? ' active' : '');
+    div.dataset.nodeType = 'file';
+    div.dataset.fileId = file.id;
+    div.innerHTML = `
+      <span class="dot ${file.unread ? 'unread' : 'spacer'}"></span>
+      <span class="icon">📄</span>
+      <span class="file-name${file.alias ? ' alias' : ''}">${escHtml(file.alias || file.name)}</span>
+      <span class="mtime">${escHtml(file.mtime)}</span>
+    `;
+    return div;
+  }
+
+  function updateStats() {
+    $stats.textContent = `${totalFiles()} 个文档 · ${totalUnread()} 未读`;
+  }
+
+  // ----- interactions -----
+  function openFile(file) {
+    if (!file) return;
+    state.activeId = file.id;
+    if (file.unread) file.unread = false;
+
+    $preview.classList.add('fading');
+    setTimeout(() => {
+      $preview.innerHTML = previews[file.view] || `<div class="empty"><div class="ico">📄</div><div>预览暂未提供</div></div>`;
+      $preview.classList.remove('fading');
+    }, 150);
+
+    // 更新激活态 + 红点（不重渲染整树，避免打断 SortableJS 拖拽态）
+    $tree.querySelectorAll('.file').forEach(el => {
+      el.classList.toggle('active', el.dataset.fileId === file.id);
+    });
+    const fileEl = $tree.querySelector('.file[data-file-id="' + file.id + '"]');
+    if (fileEl) {
+      fileEl.classList.remove('unread');
+      const dot = fileEl.querySelector('.dot');
+      if (dot) { dot.classList.remove('unread'); dot.classList.add('spacer'); }
+    }
+    // 更新所属 folder 的未读小红点
+    state.tree.forEach(folder => {
+      if (folder.type !== 'folder') return;
+      const folderEl = $tree.querySelector('.folder[data-folder-id="' + folder.id + '"]');
+      if (!folderEl) return;
+      const remainUnread = folder.children.filter(c => c.unread).length;
+      const head = folderEl.querySelector('.folder-head');
+      const dot = head.querySelector('.dot.unread');
+      if (remainUnread === 0 && dot) dot.remove();
+    });
+    updateStats();
+  }
+
+  function toggleFolder(id) {
+    const folder = findFolder(id);
+    if (!folder) return;
+    folder.expanded = !folder.expanded;
+    const folderEl = $tree.querySelector('.folder[data-folder-id="' + id + '"]');
+    if (folderEl) folderEl.classList.toggle('collapsed', !folder.expanded);
+  }
+
+  // 事件委托：点击 folder header 折叠展开；点击 file 打开
+  $tree.addEventListener('click', (e) => {
+    const fileEl = e.target.closest('.file');
+    if (fileEl) {
+      const file = findFile(fileEl.dataset.fileId);
+      if (file) openFile(file);
+      return;
+    }
+    const head = e.target.closest('.folder-head');
+    if (head) {
+      const folderEl = head.closest('.folder');
+      if (folderEl) toggleFolder(folderEl.dataset.folderId);
+    }
+  });
+
+  // 搜索：debounce 60ms
+  let searchTimer = null;
+  $search.addEventListener('input', (e) => {
+    const v = e.target.value;
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      if (state.search === v) return;
+      state.search = v;
+      render();
+    }, 60);
+  });
+
+  // ----- 拖拽（SortableJS）-----
+  let sortInstances = [];
+  function destroySortables() {
+    for (const s of sortInstances) {
+      try { s.destroy(); } catch {}
+    }
+    sortInstances = [];
+  }
+  function initSortables() {
+    if (!window.Sortable) return;
+    destroySortables();
+    const containers = [...$tree.querySelectorAll('.folder-children')];
+    for (const el of containers) {
+      sortInstances.push(new window.Sortable(el, {
+        group: 'demo-files',
+        animation: 150,
+        ghostClass: 'dragging-ghost',
+        onEnd: rebuildFromDom,
+      }));
+    }
+  }
+
+  function rebuildFromDom() {
+    // 先快照所有文件（避免在循环中修改 state.tree 后找不到刚被"弹出"的文件）
+    const fileById = {};
+    state.tree.forEach(folder => {
+      if (folder.type !== 'folder') return;
+      folder.children.forEach(c => { fileById[c.id] = c; });
+    });
+    // 从 DOM 反推 tree.children 顺序与归属
+    state.tree.forEach(folder => {
+      if (folder.type !== 'folder') return;
+      const folderEl = $tree.querySelector('.folder[data-folder-id="' + folder.id + '"]');
+      if (!folderEl) return;
+      const childrenEl = folderEl.querySelector('.folder-children');
+      const newChildren = [];
+      for (const c of childrenEl.children) {
+        if (c.dataset.nodeType === 'file') {
+          const file = fileById[c.dataset.fileId];
+          if (file) newChildren.push(file);
+        }
+      }
+      folder.children = newChildren;
+    });
+    // 更新 folder 的 count + 未读小红点显示，但不重建整树（SortableJS 状态保持）
+    state.tree.forEach(folder => {
+      if (folder.type !== 'folder') return;
+      const folderEl = $tree.querySelector('.folder[data-folder-id="' + folder.id + '"]');
+      if (!folderEl) return;
+      const head = folderEl.querySelector('.folder-head');
+      const countEl = head.querySelector('.count');
+      if (countEl) countEl.textContent = folder.children.filter(fileMatches).length;
+      const unread = folder.children.filter(c => c.unread).length;
+      let dot = head.querySelector('.dot.unread');
+      if (unread > 0 && !dot) {
+        dot = document.createElement('span');
+        dot.className = 'dot unread';
+        dot.title = unread + ' 未读';
+        head.insertBefore(dot, countEl);
+      } else if (unread === 0 && dot) {
+        dot.remove();
+      }
+    });
+    updateStats();
+  }
+
+  // ----- start -----
+  function start() {
+    render();
+    // 默认打开第一条 unread 文件，让进入页面就有内容看（preview 不空）
+    const first = state.tree.flatMap(f => f.children || []).find(c => c.unread) ||
+                  state.tree.flatMap(f => f.children || [])[0];
+    if (first) {
+      // 预填 preview（不触发 unread 消除，让用户能看到红点效果）
+      $preview.innerHTML = previews[first.view] || '';
+    }
+  }
+
+  // 等 Sortable 加载（defer 保证执行顺序，但兜底）
+  if (window.Sortable) start();
+  else window.addEventListener('load', start, { once: true });
+})();
 </script>
 
 </body>
