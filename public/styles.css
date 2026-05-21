@@ -223,6 +223,11 @@ body.resizing iframe { pointer-events: none; }
 }
 .folder-header:hover { background: var(--bg-hover); }
 .folder-header.drop-target { background: var(--bg-active); }
+/* 拖拽悬停 600ms 即将自动展开的视觉提示 */
+.folder-header.drag-hover {
+  background: var(--bg-active);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
 .folder-toggle {
   width: 12px;
   text-align: center;

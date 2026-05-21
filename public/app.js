@@ -573,7 +573,15 @@ function initSortables() {
       filter: '[contenteditable="true"], .folder-actions, .folder-actions *, .file-actions, .file-actions *',
       preventOnFilter: false,
       fallbackOnBody: true,
+      // forceFallback: 不用 native HTML5 drag，统一走 mouse 事件路径
+      // 让 onMove 在每次有意义的鼠标移动都触发（支持 hover-to-expand 检测）
+      forceFallback: true,
       swapThreshold: 0.55,
+      // 在 onMove 里做两件事：
+      //   1. hover-to-expand：拖拽悬停在折叠 folder 头上 600ms 自动展开
+      //   2. 阻止 folder 拖进自己或自己的子孙
+      // 用 onMove（而不是 document mousemove）是因为 native HTML5 drag 模式下
+      // mousemove 不触发；onMove 由 SortableJS 内部统一了 native/fallback 两种模式。
       // 阻止 folder 拖进自己或自己的子孙：避免在数据层形成循环引用
       onMove(evt) {
         const dragged = evt.dragged;
@@ -582,17 +590,62 @@ function initSortables() {
         if (!draggedId) return true;
         let p = evt.to;
         while (p && p !== document.body) {
-          if (p.dataset && p.dataset.folderId === draggedId) {
-            return false;  // 目标在被拖动 folder 的子树里，禁止
-          }
+          if (p.dataset && p.dataset.folderId === draggedId) return false;
           p = p.parentElement;
         }
         return true;
       },
-      onEnd: rebuildTreeFromDom,
+      onStart() { isDragging = true; },
+      onEnd() {
+        isDragging = false;
+        clearDragHover();
+        rebuildTreeFromDom();
+      },
     }));
   }
 }
+
+// hover-to-expand：拖拽悬停在折叠 folder 头上 600ms 自动展开
+// forceFallback 模式下用 document mousemove + elementFromPoint 检测，
+// 比 onMove 更可靠（onMove 仅在 sibling 切换时触发，错过 hover 在 folder header 上的情况）
+let isDragging = false;
+let dragHoverHead = null;
+let dragHoverTimer = null;
+function clearDragHover() {
+  if (dragHoverTimer) { clearTimeout(dragHoverTimer); dragHoverTimer = null; }
+  if (dragHoverHead) { dragHoverHead.classList.remove('drag-hover'); dragHoverHead = null; }
+}
+document.addEventListener('mousemove', (e) => {
+  if (!isDragging) return;
+  // 用 elementFromPoint 拿真实位置下方元素（绕开 SortableJS ghost 干扰）
+  const elAt = document.elementFromPoint(e.clientX, e.clientY);
+  let head = elAt && typeof elAt.closest === 'function' ? elAt.closest('.folder-header') : null;
+  if (head) {
+    const parent = head.parentElement;
+    if (!parent || !parent.classList.contains('folder') || !parent.classList.contains('collapsed')) {
+      head = null;
+    }
+  }
+  if (head === dragHoverHead) return;
+  clearDragHover();
+  if (head) {
+    dragHoverHead = head;
+    head.classList.add('drag-hover');
+    dragHoverTimer = setTimeout(() => {
+      const folderEl = head.closest('.folder');
+      if (!folderEl) return;
+      const folderId = folderEl.dataset.folderId;
+      if (state.collapsed.has(folderId)) {
+        state.collapsed.delete(folderId);
+        saveCollapsed();
+        folderEl.classList.remove('collapsed');
+      }
+      head.classList.remove('drag-hover');
+      dragHoverHead = null;
+      dragHoverTimer = null;
+    }, 600);
+  }
+});
 
 function rebuildTreeFromDom() {
   const newTree = readContainer(els.tree);
