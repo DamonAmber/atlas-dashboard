@@ -1,10 +1,19 @@
 # Atlas
 
+[![npm version](https://img.shields.io/npm/v/atlas-dashboard?color=5b9cff&label=npm&style=flat-square)](https://www.npmjs.com/package/atlas-dashboard)
+[![npm downloads](https://img.shields.io/npm/dm/atlas-dashboard?color=8b95a7&label=downloads&style=flat-square)](https://www.npmjs.com/package/atlas-dashboard)
+[![license](https://img.shields.io/npm/l/atlas-dashboard?color=8b95a7&style=flat-square)](./LICENSE)
+[![node](https://img.shields.io/node/v/atlas-dashboard?color=8b95a7&style=flat-square)](https://nodejs.org/)
+[![website](https://img.shields.io/badge/website-damonamber.github.io-5b9cff?style=flat-square)](https://damonamber.github.io/atlas-dashboard/)
+
 > 本地 HTML 文档统一浏览/管理 dashboard。
 > 扫描你指定的目录里的所有 `.html` 文件，提供：
 > 目录树（嵌套分组、拖拽重排）· 备注名 · 未读红点 · 桌面通知 · 在访达打开 · ⌘B 收侧栏 · iframe 平滑预览。
 
 适合的场景：你让 AI 在不同项目里到处生成 HTML 报告/原型/总结，浏览器 Tab 越积越多——Atlas 把它们汇聚在一处，AI 更新过的文档会标红，看完即清。
+
+🌐 介绍页：**https://damonamber.github.io/atlas-dashboard/**
+📦 npm：**https://www.npmjs.com/package/atlas-dashboard**
 
 ---
 

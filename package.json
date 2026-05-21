@@ -22,8 +22,18 @@
     "lib/",
     "public/",
     "server.js",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
+  "homepage": "https://damonamber.github.io/atlas-dashboard/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DamonAmber/atlas-dashboard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/DamonAmber/atlas-dashboard/issues"
+  },
+  "author": "DamonAmber",
   "scripts": {
     "start": "node bin/atlas.js",
     "dev": "node --watch bin/atlas.js",
