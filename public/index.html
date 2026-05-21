@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Atlas — HTML 文档总览</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script>
+    // 提前同步设置初始状态，避免首次加载看到收起动画
+    (function () {
+      try {
+        if (localStorage.getItem('atlas:sidebarCollapsed') === '1') {
+          document.documentElement.classList.add('init-sidebar-collapsed');
+        }
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+  <aside class="sidebar" id="sidebar">
+    <header class="sidebar-header">
+      <div class="brand">
+        <div class="brand-mark">A</div>
+        <div class="brand-text">
+          <div class="brand-title">Atlas</div>
+          <div class="brand-sub" id="stats">扫描中…</div>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="btn-refresh" title="重新扫描磁盘">
+          <svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M8 3a5 5 0 0 0-4.546 2.916.75.75 0 1 1-1.362-.633A6.5 6.5 0 0 1 14.5 7.75v.5l1.22-1.22a.75.75 0 1 1 1.06 1.06l-2.5 2.5a.75.75 0 0 1-1.06 0l-2.5-2.5a.75.75 0 1 1 1.06-1.06l1.22 1.22v-.5A5 5 0 0 0 8 3Zm0 10a5 5 0 0 0 4.546-2.916.75.75 0 1 1 1.362.633A6.5 6.5 0 0 1 1.5 8.25v-.5L.28 8.97a.75.75 0 0 1-1.06-1.06l2.5-2.5a.75.75 0 0 1 1.06 0l2.5 2.5a.75.75 0 0 1-1.06 1.06L3 7.75v.5A5 5 0 0 0 8 13Z"/></svg>
+        </button>
+        <button id="btn-new-folder" title="新建顶层分组">＋</button>
+        <button id="btn-mark-all" title="全部标为已读">✓</button>
+        <button id="btn-settings" title="设置">⚙</button>
+      </div>
+    </header>
+
+    <div class="filter">
+      <input id="search" type="search" placeholder="搜索文件名 / 备注 / 路径（按 / 聚焦）" />
+      <label class="only-unread">
+        <input type="checkbox" id="only-unread" />
+        <span>仅未读</span>
+      </label>
+    </div>
+
+    <div id="tree" class="tree"></div>
+
+    <footer class="sidebar-footer">
+      <span id="save-status" title="保存状态">●</span>
+      <span class="hint">拖拽分组 / 文件来重排，可嵌套</span>
+    </footer>
+  </aside>
+
+  <div class="resizer" id="resizer" title="拖拽调整侧边栏宽度"></div>
+
+  <main class="main">
+    <header class="main-header">
+      <button id="btn-toggle-sidebar" class="toggle-sidebar" title="收起 / 展开侧边栏（⌘B）">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <path fill="currentColor" d="M2.5 2.5h11a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1zm.5 1v9h2.75v-9H3zm3.75 0v9h6.25v-9H6.75z"/>
+        </svg>
+      </button>
+      <div class="crumbs" id="crumbs">
+        <span class="placeholder">从左侧选择一个 HTML 开始预览</span>
+      </div>
+      <div class="main-actions">
+        <button id="btn-mark-unread" disabled title="标为未读">未读</button>
+        <button id="btn-reveal" disabled title="在访达中显示">📂</button>
+        <button id="btn-open-external" disabled title="在浏览器新标签打开">⤴</button>
+        <button id="btn-copy-path" disabled title="复制文件路径">📋</button>
+      </div>
+    </header>
+    <div class="preview">
+      <iframe id="preview" title="预览"></iframe>
+      <div class="empty" id="empty-state">
+        <div class="empty-art">📄</div>
+        <div>选中左侧目录中的任意 HTML 文件即可预览</div>
+        <div class="empty-tip">提示：按 <kbd>/</kbd> 聚焦搜索框，hover 文件可编辑备注名</div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 设置弹窗 -->
+  <div class="modal hidden" id="settings-modal">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel">
+      <header class="modal-header">
+        <h2>设置</h2>
+        <button class="modal-close" data-close>✕</button>
+      </header>
+      <section class="modal-section">
+        <h3>扫描根目录</h3>
+        <p class="muted">Atlas 会扫描以下所有目录中的 HTML 文件（按 <code>maxDepth</code> 限制深度）。</p>
+        <ul class="root-list" id="root-list"></ul>
+        <div class="root-add">
+          <input id="root-input" type="text" placeholder="/Users/xxx/Documents/AIProjects" />
+          <button id="root-add-btn">添加</button>
+        </div>
+      </section>
+      <section class="modal-section">
+        <h3>桌面通知</h3>
+        <label class="row">
+          <input type="checkbox" id="notify-toggle" />
+          <span>HTML 文件有新增 / 更新时弹出系统通知</span>
+        </label>
+        <p class="muted" id="notify-hint">需要浏览器允许通知权限。</p>
+      </section>
+      <section class="modal-section">
+        <h3>已忽略目录名（黑名单）</h3>
+        <p class="muted">扫描时会跳过同名目录。逗号分隔。</p>
+        <input id="ignore-input" type="text" />
+        <div class="row-end">
+          <button id="ignore-save-btn">保存</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script src="/vendor/Sortable.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

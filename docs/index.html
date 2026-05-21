@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Atlas — 本地 HTML 文档统一浏览/管理 dashboard</title>
+  <meta name="description" content="AI 在多个项目里到处生成 HTML 报告/原型？Atlas 扫描你指定的目录，把所有 HTML 收进一个本地 dashboard：嵌套分组、未读红点、桌面通知、备注名、拖拽重排。npx 一行启动。" />
+  <meta property="og:title" content="Atlas — 本地 HTML 文档 dashboard" />
+  <meta property="og:description" content="AI 项目散落的 HTML 文档，统一收纳一处。" />
+  <meta property="og:type" content="website" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235b9cff'/%3E%3Ctext x='50%25' y='52%25' dominant-baseline='middle' text-anchor='middle' fill='white' font-family='-apple-system,system-ui' font-size='18' font-weight='700'%3EA%3C/text%3E%3C/svg%3E" />
+  <style>
+    :root {
+      --bg: #0e1116;
+      --bg-elev: #161a21;
+      --bg-elev-2: #1d222b;
+      --bg-hover: #232a35;
+      --bg-active: #2d3a52;
+      --border: #262b35;
+      --text: #e6e8ec;
+      --text-dim: #8b95a7;
+      --text-faint: #5b6478;
+      --accent: #5b9cff;
+      --accent-2: #8b5bff;
+      --unread: #ff5b5b;
+      --ok: #4ade80;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code, pre, kbd {
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    }
+    code {
+      background: var(--bg-elev-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: 0.9em;
+    }
+    pre {
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 18px;
+      overflow-x: auto;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    pre code {
+      background: transparent;
+      border: none;
+      padding: 0;
+    }
+    kbd {
+      background: var(--bg-elev-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: 0.85em;
+    }
+
+    /* ----- Layout ----- */
+    .wrap { max-width: 980px; margin: 0 auto; padding: 0 24px; }
+
+    nav {
+      position: sticky; top: 0;
+      background: rgba(14, 17, 22, 0.85);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      z-index: 10;
+    }
+    nav .wrap {
+      display: flex; align-items: center; justify-content: space-between;
+      height: 56px;
+    }
+    nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; }
+    nav .brand-mark {
+      width: 26px; height: 26px; border-radius: 7px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      display: grid; place-items: center;
+      color: white; font-size: 13px; font-weight: 800;
+    }
+    nav .links { display: flex; gap: 18px; font-size: 14px; }
+    nav .links a { color: var(--text-dim); }
+    nav .links a:hover { color: var(--text); text-decoration: none; }
+
+    /* ----- Hero ----- */
+    .hero { padding: 64px 0 32px; }
+    .hero h1 {
+      font-size: 56px;
+      line-height: 1.05;
+      margin: 0 0 12px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, #ffffff 0%, #b8c0cf 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    .hero .lede {
+      font-size: 20px;
+      color: var(--text-dim);
+      max-width: 680px;
+      margin: 0 0 24px;
+      line-height: 1.5;
+    }
+    .hero .lede strong { color: var(--text); font-weight: 600; }
+    .install-row {
+      display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+      margin: 24px 0 12px;
+    }
+    .install-cmd {
+      display: inline-flex; align-items: center; gap: 10px;
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 16px;
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 14px;
+      color: var(--text);
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+    }
+    .install-cmd:hover { border-color: var(--text-faint); background: var(--bg-elev-2); }
+    .install-cmd .prompt { color: var(--text-faint); }
+    .install-cmd .copy {
+      color: var(--text-faint); font-size: 11px; margin-left: 6px;
+      transition: color .15s;
+    }
+    .install-cmd:hover .copy { color: var(--accent); }
+    .install-cmd.copied .copy { color: var(--ok); }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 12px 20px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg-elev);
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 500;
+      transition: background .15s, border-color .15s, transform .08s;
+    }
+    .btn:hover { background: var(--bg-elev-2); border-color: var(--text-faint); text-decoration: none; }
+    .btn:active { transform: scale(0.97); }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      border-color: transparent;
+      color: white;
+      font-weight: 600;
+    }
+    .btn-primary:hover { background: linear-gradient(135deg, #6ba8ff, #9c6dff); }
+
+    .hero .meta {
+      margin-top: 18px;
+      color: var(--text-faint);
+      font-size: 13px;
+    }
+    .hero .meta a { color: var(--text-dim); }
+
+    /* ----- Section ----- */
+    section { padding: 56px 0; border-top: 1px solid var(--border); }
+    section h2 {
+      font-size: 28px;
+      margin: 0 0 8px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    section .sec-lede {
+      color: var(--text-dim);
+      margin: 0 0 32px;
+      font-size: 16px;
+      max-width: 700px;
+    }
+
+    /* ----- Pain → Solution ----- */
+    .pain {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+    .pain .card {
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px 22px;
+    }
+    .pain .card h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-dim);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .pain .card .ico {
+      width: 22px; height: 22px;
+      border-radius: 6px;
+      display: grid; place-items: center;
+      flex: none;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .pain .before .ico { background: rgba(255, 91, 91, 0.15); color: var(--unread); }
+    .pain .after .ico { background: rgba(91, 156, 255, 0.15); color: var(--accent); }
+    .pain .card p { margin: 0; color: var(--text); font-size: 14px; line-height: 1.7; }
+
+    /* ----- Features grid ----- */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+    }
+    .feat {
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 22px 24px;
+      transition: border-color .15s, transform .15s;
+    }
+    .feat:hover { border-color: var(--text-faint); transform: translateY(-1px); }
+    .feat h3 {
+      margin: 0 0 6px;
+      font-size: 16px;
+      font-weight: 600;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .feat h3 .badge {
+      font-size: 11px;
+      color: var(--text-faint);
+      background: var(--bg-elev-2);
+      border: 1px solid var(--border);
+      padding: 1px 8px;
+      border-radius: 10px;
+      font-weight: 500;
+    }
+    .feat p { margin: 0; color: var(--text-dim); font-size: 14px; line-height: 1.65; }
+
+    /* ----- Mockup ----- */
+    .mockup-wrap { padding-top: 16px; padding-bottom: 8px; }
+    .mockup {
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.3);
+      font-size: 12px;
+    }
+    .mockup .titlebar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 10px 14px;
+      background: var(--bg-elev-2);
+      border-bottom: 1px solid var(--border);
+    }
+    .mockup .titlebar .dot {
+      width: 11px; height: 11px; border-radius: 50%;
+    }
+    .mockup .titlebar .dot.r { background: #ff5f57; }
+    .mockup .titlebar .dot.y { background: #febc2e; }
+    .mockup .titlebar .dot.g { background: #28c840; }
+    .mockup .titlebar .url {
+      margin-left: 12px;
+      color: var(--text-faint);
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+    }
+    .mockup .body {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      min-height: 360px;
+    }
+    .mockup .sidebar {
+      border-right: 1px solid var(--border);
+      padding: 12px 8px;
+    }
+    .mockup .sidebar .header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 4px 6px 14px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 10px;
+    }
+    .mockup .sidebar .header .mark {
+      width: 22px; height: 22px; border-radius: 6px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      display: grid; place-items: center;
+      color: white; font-size: 11px; font-weight: 800;
+    }
+    .mockup .sidebar .stats { color: var(--text-faint); font-size: 10px; }
+    .mockup .folder { margin: 2px 0; }
+    .mockup .folder-head {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 12px;
+    }
+    .mockup .folder-head:hover { background: var(--bg-hover); }
+    .mockup .toggle { color: var(--text-faint); font-size: 9px; }
+    .mockup .icon { width: 14px; opacity: 0.8; }
+    .mockup .count {
+      color: var(--text-faint);
+      background: var(--bg-elev-2);
+      padding: 1px 6px;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 500;
+    }
+    .mockup .folder-children { padding-left: 22px; }
+    .mockup .file {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 8px;
+      border-radius: 5px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .mockup .file:hover { background: var(--bg-hover); }
+    .mockup .file.active { background: var(--bg-active); }
+    .mockup .file.unread { font-weight: 600; }
+    .mockup .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%; flex: none;
+    }
+    .mockup .dot.unread { background: var(--unread); }
+    .mockup .dot.spacer { background: transparent; }
+    .mockup .file-name {
+      flex: 1;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .mockup .alias { font-style: italic; color: var(--text); }
+    .mockup .mtime { color: var(--text-faint); font-size: 10px; }
+    .mockup .preview {
+      background: white;
+      padding: 24px 32px;
+      color: #1a1a1a;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      overflow: auto;
+    }
+    .mockup .preview h1 {
+      font-size: 22px;
+      margin: 0 0 14px;
+      color: #1a1a1a;
+      background: none;
+      -webkit-text-fill-color: initial;
+      letter-spacing: 0;
+    }
+    .mockup .preview .meta-line { color: #6b7280; font-size: 11px; margin-bottom: 18px; }
+    .mockup .preview .kpi-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+      margin-bottom: 20px;
+    }
+    .mockup .preview .kpi {
+      background: #f9fafb; border: 1px solid #e5e7eb;
+      border-radius: 8px; padding: 10px 12px;
+      border-left: 3px solid #5b9cff;
+    }
+    .mockup .preview .kpi .lbl { color: #6b7280; font-size: 10px; margin-bottom: 4px; }
+    .mockup .preview .kpi .val { font-size: 18px; font-weight: 700; color: #1a1a1a; }
+    .mockup .preview .kpi .delta { font-size: 9px; color: #16a34a; margin-top: 2px; }
+    .mockup .preview .chart {
+      height: 60px;
+      background: linear-gradient(180deg, #eff6ff 0%, transparent 100%);
+      border-radius: 4px;
+      position: relative;
+      margin-bottom: 8px;
+      overflow: hidden;
+    }
+    .mockup .preview .chart svg { width: 100%; height: 100%; }
+    .mockup .preview p { color: #4b5563; font-size: 12px; margin: 0; }
+
+    /* ----- Commands table ----- */
+    .cmd-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    .cmd-table th {
+      text-align: left;
+      color: var(--text-dim);
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .cmd-table td {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    .cmd-table tr:last-child td { border-bottom: none; }
+    .cmd-table td:first-child { white-space: nowrap; }
+    .cmd-table code { background: var(--bg-elev-2); }
+
+    /* ----- Steps ----- */
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }
+    .step {
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 22px 24px;
+      position: relative;
+    }
+    .step .num {
+      position: absolute;
+      top: -12px; left: 20px;
+      width: 26px; height: 26px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: white;
+      display: grid; place-items: center;
+      font-size: 13px; font-weight: 700;
+    }
+    .step h3 {
+      margin: 4px 0 10px;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .step p { color: var(--text-dim); font-size: 13px; margin: 0 0 12px; line-height: 1.6; }
+    .step pre { font-size: 12px; padding: 10px 14px; }
+
+    /* ----- Footer ----- */
+    footer {
+      padding: 40px 0 60px;
+      border-top: 1px solid var(--border);
+      color: var(--text-faint);
+      font-size: 13px;
+    }
+    footer .wrap {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    footer .links { display: flex; gap: 18px; }
+    footer .links a { color: var(--text-dim); }
+
+    @media (max-width: 720px) {
+      .hero h1 { font-size: 38px; }
+      .hero .lede { font-size: 17px; }
+      .pain { grid-template-columns: 1fr; }
+      .features { grid-template-columns: 1fr; }
+      .steps { grid-template-columns: 1fr; }
+      .mockup .body { grid-template-columns: 1fr; }
+      .mockup .sidebar { border-right: none; border-bottom: 1px solid var(--border); }
+      nav .links { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <div class="brand">
+      <div class="brand-mark">A</div>
+      <span>Atlas</span>
+    </div>
+    <div class="links">
+      <a href="#features">特性</a>
+      <a href="#install">安装</a>
+      <a href="#commands">命令</a>
+      <a href="https://www.npmjs.com/package/atlas-dashboard" target="_blank" rel="noopener">npm</a>
+      <a href="https://github.com/DamonAmber/atlas-dashboard" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <h1>AI 项目散落的 HTML，<br/>统一收纳一处。</h1>
+    <p class="lede">
+      <strong>Atlas</strong> 扫描你指定的目录，把所有 <code>.html</code> 文件汇集到一个本地 dashboard：
+      嵌套分组、未读红点、桌面通知、备注名、拖拽重排——
+      <strong>不再让 AI 一更新就开一个新浏览器 Tab。</strong>
+    </p>
+    <div class="install-row">
+      <span class="install-cmd" id="install-cmd" data-cmd="npx atlas-dashboard">
+        <span class="prompt">$</span><span>npx atlas-dashboard</span>
+        <span class="copy">复制</span>
+      </span>
+      <a class="btn" href="https://github.com/DamonAmber/atlas-dashboard" target="_blank" rel="noopener">
+        GitHub
+      </a>
+      <a class="btn" href="https://www.npmjs.com/package/atlas-dashboard" target="_blank" rel="noopener">
+        npm
+      </a>
+    </div>
+    <p class="meta">
+      MIT · Node 18+ · macOS / Linux / Windows · 当前版本 <code id="cur-version">0.1.1</code>
+    </p>
+  </div>
+</header>
+
+<section id="why">
+  <div class="wrap">
+    <h2>它解决了什么？</h2>
+    <p class="sec-lede">
+      你让 AI 在不同项目下生成 HTML 报告/原型/总结，时间一长就是这样：
+    </p>
+    <div class="pain">
+      <div class="card before">
+        <h3><span class="ico">×</span> 没有 Atlas</h3>
+        <p>
+          Tab 越积越多——AI 每次更新 HTML 都自动 <code>open</code> 一次。<br/>
+          找文件靠记忆——不同项目的 HTML 散在各自目录，没有统一入口。<br/>
+          看不到更新——AI 改了哪个文件，没法一眼看出。
+        </p>
+      </div>
+      <div class="card after">
+        <h3><span class="ico">✓</span> 有 Atlas</h3>
+        <p>
+          一个 Tab 看全部——所有项目 HTML 聚到 <code>localhost:4321</code>。<br/>
+          更新即标红——基于文件 mtime，未读自动出红点。<br/>
+          看完即清——点开预览即标已读，专注没看过的。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="mockup-wrap">
+  <div class="wrap">
+    <div class="mockup" aria-label="Atlas dashboard 界面预览">
+      <div class="titlebar">
+        <span class="dot r"></span>
+        <span class="dot y"></span>
+        <span class="dot g"></span>
+        <span class="url">localhost:4321</span>
+      </div>
+      <div class="body">
+        <aside class="sidebar">
+          <div class="header">
+            <div class="mark">A</div>
+            <div>
+              <div style="font-weight:700;font-size:13px">Atlas</div>
+              <div class="stats">15 个文档 · 3 未读</div>
+            </div>
+          </div>
+          <div class="folder">
+            <div class="folder-head">
+              <span class="toggle">▾</span>
+              <span class="icon">📁</span>
+              <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">dashboard</span>
+              <span class="dot unread" title="2 未读"></span>
+              <span class="count">5</span>
+            </div>
+            <div class="folder-children">
+              <div class="file unread">
+                <span class="dot unread"></span>
+                <span class="icon">📄</span>
+                <span class="file-name alias">数据报告 v3</span>
+                <span class="mtime">5 分钟前</span>
+              </div>
+              <div class="file unread">
+                <span class="dot unread"></span>
+                <span class="icon">📄</span>
+                <span class="file-name">tracking_summary</span>
+                <span class="mtime">2 小时前</span>
+              </div>
+              <div class="file active">
+                <span class="dot spacer"></span>
+                <span class="icon">📄</span>
+                <span class="file-name">module_understanding</span>
+                <span class="mtime">昨天</span>
+              </div>
+            </div>
+          </div>
+          <div class="folder">
+            <div class="folder-head">
+              <span class="toggle">▾</span>
+              <span class="icon">📁</span>
+              <span style="flex:1">米家耗材</span>
+              <span class="dot unread"></span>
+              <span class="count">1</span>
+            </div>
+            <div class="folder-children">
+              <div class="file unread">
+                <span class="dot unread"></span>
+                <span class="icon">📄</span>
+                <span class="file-name">figma-capture</span>
+                <span class="mtime">10 分钟前</span>
+              </div>
+            </div>
+          </div>
+          <div class="folder">
+            <div class="folder-head">
+              <span class="toggle">▾</span>
+              <span class="icon">📁</span>
+              <span style="flex:1">MijiaPM</span>
+              <span class="count">6</span>
+            </div>
+          </div>
+        </aside>
+        <div class="preview">
+          <h1>米家首页仪表盘数据分析报告</h1>
+          <div class="meta-line">2026-05-21 · KR1 体验优化方向</div>
+          <div class="kpi-grid">
+            <div class="kpi">
+              <div class="lbl">DAU</div>
+              <div class="val">12.4M</div>
+              <div class="delta">↑ 3.2%</div>
+            </div>
+            <div class="kpi">
+              <div class="lbl">人均使用时长</div>
+              <div class="val">8'32"</div>
+              <div class="delta">↑ 12s</div>
+            </div>
+            <div class="kpi">
+              <div class="lbl">CTR</div>
+              <div class="val">24.8%</div>
+              <div class="delta">↑ 1.4pp</div>
+            </div>
+          </div>
+          <div class="chart">
+            <svg viewBox="0 0 300 60" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+              <polyline points="0,45 30,38 60,42 90,32 120,28 150,30 180,22 210,18 240,15 270,12 300,8"
+                fill="none" stroke="#5b9cff" stroke-width="1.8" />
+              <polyline points="0,60 0,45 30,38 60,42 90,32 120,28 150,30 180,22 210,18 240,15 270,12 300,8 300,60"
+                fill="rgba(91,156,255,0.15)" stroke="none" />
+            </svg>
+          </div>
+          <p>近 7 日数据呈现稳定上升趋势，主要驱动来自首页推荐位的优化与新增信息流模块……</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2>它能做什么</h2>
+    <p class="sec-lede">围绕"看 HTML 文档"这件事做到底，每一个细节都为减少打扰服务。</p>
+    <div class="features">
+      <div class="feat">
+        <h3>📂 嵌套目录树 <span class="badge">可拖拽</span></h3>
+        <p>按一级项目目录自动归类。可手动新建子分组、拖拽文件/分组重排。物理文件位置不动，只在虚拟层重组。</p>
+      </div>
+      <div class="feat">
+        <h3>🔴 未读红点 <span class="badge">基于 mtime</span></h3>
+        <p>AI 改过哪个 HTML，文件名后立即出红点。点开预览即清除——你能精准锁定"还没看过"的内容。</p>
+      </div>
+      <div class="feat">
+        <h3>🔔 桌面通知 <span class="badge">SSE + chokidar</span></h3>
+        <p>HTML 文件新增/修改时弹系统通知。<code>⚙ 设置</code> 里一键开关，浏览器原生 Notification API。</p>
+      </div>
+      <div class="feat">
+        <h3>✎ 备注名 <span class="badge">不改源文件</span></h3>
+        <p>给文件起一个你能记住的别名（"数据报告 v3"），原文件名不变。备注存在 Atlas 自己的 store 里。</p>
+      </div>
+      <div class="feat">
+        <h3>📂 在访达 / 资源管理器中显示 <span class="badge">跨平台</span></h3>
+        <p>每个文件的 📂 按钮，macOS 用 <code>open -R</code>、Windows 用 <code>explorer /select</code>、Linux 用 <code>xdg-open</code>。</p>
+      </div>
+      <div class="feat">
+        <h3>🖱 拖拽调宽 + 收侧栏 <span class="badge">⌘B</span></h3>
+        <p>侧边栏宽度可拖拽调整，<kbd>⌘B</kbd> / <kbd>Ctrl+B</kbd> 一键收起。iframe 不会因为侧栏切换而抖动。</p>
+      </div>
+      <div class="feat">
+        <h3>🔎 搜索 + 仅未读 <span class="badge">/ 聚焦</span></h3>
+        <p>搜索框匹配文件名、备注、相对路径。<kbd>/</kbd> 一键聚焦，「仅未读」开关快速过滤。</p>
+      </div>
+      <div class="feat">
+        <h3>📁 多扫描根 <span class="badge">设置面板</span></h3>
+        <p>在 <code>⚙ 设置</code> 里增删扫描根目录，立即生效。配置存在用户目录 <code>~/.atlas/</code>，不会动你的项目文件。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>三步上手</h2>
+    <p class="sec-lede">不需要开发环境。一条 npx 命令搞定首次运行。</p>
+    <div class="steps">
+      <div class="step">
+        <div class="num">1</div>
+        <h3>启动</h3>
+        <p>不需要安装。直接 npx：</p>
+        <pre><code>npx atlas-dashboard</code></pre>
+        <p>或者全局安装后用 <code>atlas</code> 命令：</p>
+        <pre><code>npm i -g atlas-dashboard
+atlas</code></pre>
+      </div>
+      <div class="step">
+        <div class="num">2</div>
+        <h3>首次配置</h3>
+        <p>第一次启动会问几个问题（全部都有合理默认值，回车跳过即可）：</p>
+        <pre><code>👋 欢迎使用 Atlas
+
+? 要扫描哪些目录的 HTML？(逗号分隔)
+  默认: ~/Documents
+? 监听端口？
+  默认: 4321
+? 要忽略的目录名？
+  默认: node_modules,.git,...
+
+✓ 已写入 ~/.atlas/config.json</code></pre>
+      </div>
+      <div class="step">
+        <div class="num">3</div>
+        <h3>访问</h3>
+        <p>浏览器打开：</p>
+        <pre><code>http://localhost:4321</code></pre>
+        <p>建议加到书签栏。然后让你的 AI 不要再 <code>open</code> HTML——把规则加到 AI 的全局配置（如 <code>~/.claude/CLAUDE.md</code>）即可。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="commands">
+  <div class="wrap">
+    <h2>命令</h2>
+    <p class="sec-lede">前台启动用于调试，后台守护进程用于日常常驻。</p>
+    <table class="cmd-table">
+      <thead>
+        <tr>
+          <th>命令</th>
+          <th>作用</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><code>atlas</code></td><td>前台启动（首次会引导配置；<kbd>Ctrl+C</kbd> 退出）</td></tr>
+        <tr><td><code>atlas start</code></td><td>后台启动，立即返回，写 PID 与日志</td></tr>
+        <tr><td><code>atlas stop</code></td><td>停止后台服务</td></tr>
+        <tr><td><code>atlas restart</code></td><td>重启后台服务</td></tr>
+        <tr><td><code>atlas status</code></td><td>查看运行状态（pid / url / uptime / 扫描根）</td></tr>
+        <tr><td><code>atlas log</code></td><td><code>tail -f</code> 日志</td></tr>
+        <tr><td><code>atlas init</code></td><td>重新进入交互引导（仅配置，不启动）</td></tr>
+        <tr><td><code>atlas --port &lt;n&gt;</code></td><td>临时换端口（不写回配置）</td></tr>
+        <tr><td><code>atlas --root &lt;path&gt;</code></td><td>临时加扫描根（可重复，不写回配置）</td></tr>
+        <tr><td><code>atlas --config</code></td><td>打印配置 / 日志 / PID 文件位置</td></tr>
+        <tr><td><code>atlas --help</code></td><td>查看完整帮助</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="ai-rule">
+  <div class="wrap">
+    <h2>让 AI 不再每次打开 HTML</h2>
+    <p class="sec-lede">
+      Atlas 解决了"散乱 + Tab 爆炸"，但<strong>自动 <code>open xxx.html</code> 是 AI 端的行为</strong>。
+      把这条规则加到 AI 工具的全局配置（如 <code>~/.claude/CLAUDE.md</code>）：
+    </p>
+<pre><code>生成或更新 HTML 文档后，不要执行 open / xdg-open 打开浏览器。
+本机运行着 Atlas dashboard（http://localhost:4321），
+它会自动通过 mtime 显示未读红点。</code></pre>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>© 2026 · Atlas · MIT License</div>
+    <div class="links">
+      <a href="https://www.npmjs.com/package/atlas-dashboard" target="_blank" rel="noopener">npm</a>
+      <a href="https://github.com/DamonAmber/atlas-dashboard" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/DamonAmber/atlas-dashboard/issues" target="_blank" rel="noopener">Issues</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // 复制安装命令
+  const cmd = document.getElementById('install-cmd');
+  cmd.addEventListener('click', () => {
+    navigator.clipboard.writeText(cmd.dataset.cmd).then(() => {
+      cmd.classList.add('copied');
+      cmd.querySelector('.copy').textContent = '已复制 ✓';
+      setTimeout(() => {
+        cmd.classList.remove('copied');
+        cmd.querySelector('.copy').textContent = '复制';
+      }, 1600);
+    });
+  });
+
+  // 平滑滚动
+  document.querySelectorAll('a[href^="#"]').forEach(a => {
+    a.addEventListener('click', (e) => {
+      const target = document.querySelector(a.getAttribute('href'));
+      if (target) {
+        e.preventDefault();
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  });
+
+  // 自动从 npm registry 拉最新版本号
+  fetch('https://registry.npmjs.org/atlas-dashboard/latest')
+    .then(r => r.json())
+    .then(d => {
+      if (d.version) document.getElementById('cur-version').textContent = d.version;
+    })
+    .catch(() => {});
+</script>
+
+</body>
+</html>

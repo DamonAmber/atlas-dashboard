@@ -1,0 +1,43 @@
+{
+  "name": "atlas-dashboard",
+  "version": "0.1.1",
+  "description": "本地 HTML 文档统一浏览/管理 dashboard：扫描你指定的目录，提供统一目录树、未读红点、桌面通知。",
+  "keywords": [
+    "html",
+    "dashboard",
+    "preview",
+    "viewer",
+    "local",
+    "localhost",
+    "ai-output",
+    "documentation"
+  ],
+  "license": "MIT",
+  "main": "server.js",
+  "bin": {
+    "atlas": "bin/atlas.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "public/",
+    "server.js",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "node bin/atlas.js",
+    "dev": "node --watch bin/atlas.js",
+    "test": "node tests/inline-edit.spec.js && node tests/sidebar.spec.js && node tests/scroll-stuck.spec.js && node tests/no-sortable-leak.spec.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "chokidar": "^5.0.0",
+    "express": "^4.19.2",
+    "prompts": "^2.4.2"
+  },
+  "devDependencies": {
+    "playwright": "^1.60.0"
+  }
+}
