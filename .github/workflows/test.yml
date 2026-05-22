@@ -41,28 +41,22 @@ jobs:
           npm pack
           node tests/e2e-install.spec.js
 
-      # 4. 准备 fixture + 启服务，跑依赖服务的 spec
+      # 4. 准备 fixture（足够长以便 scroll 测试）+ 启服务，跑依赖服务的 spec
       - name: Prepare fixture HTML files
         run: |
           mkdir -p .ci-fixtures/proj-a .ci-fixtures/proj-b .ci-fixtures/proj-c
-          cat > .ci-fixtures/proj-a/index.html <<'EOF'
-          <!doctype html><html><body>
-          <h1>Project A</h1>
-          <p>This page contains keyword echarts and rgb.</p>
-          </body></html>
-          EOF
-          cat > .ci-fixtures/proj-a/dashboard.html <<'EOF'
-          <!doctype html><html><body>
-          <h1>Dashboard report</h1>
-          <p>Some chart with svg, flex layout.</p>
-          </body></html>
-          EOF
-          cat > .ci-fixtures/proj-b/index.html <<'EOF'
-          <!doctype html><html><body><h1>Project B</h1></body></html>
-          EOF
-          cat > .ci-fixtures/proj-c/notes.html <<'EOF'
-          <!doctype html><html><body><h1>Notes</h1><p>echarts dashboard data</p></body></html>
-          EOF
+          node -e "
+          const fs = require('fs');
+          const filler = '<p>填充行：让文档长一点供 scroll 测试用 lorem ipsum dolor sit amet</p>\n'.repeat(300);
+          fs.writeFileSync('.ci-fixtures/proj-a/index.html',
+            '<!doctype html><html><body><h1>Project A</h1><p>contains keyword echarts rgb</p>' + filler + '</body></html>');
+          fs.writeFileSync('.ci-fixtures/proj-a/dashboard.html',
+            '<!doctype html><html><body><h1>Dashboard report</h1><p>chart svg flex layout</p>' + filler + '</body></html>');
+          fs.writeFileSync('.ci-fixtures/proj-b/index.html',
+            '<!doctype html><html><body><h1>Project B</h1>' + filler + '</body></html>');
+          fs.writeFileSync('.ci-fixtures/proj-c/notes.html',
+            '<!doctype html><html><body><h1>Notes</h1><p>echarts dashboard data</p>' + filler + '</body></html>');
+          "
 
       - name: Start Atlas service in background
         env:
