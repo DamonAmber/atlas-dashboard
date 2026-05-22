@@ -341,11 +341,28 @@ function renderFolder(folder) {
   }
   folderEl.appendChild(childrenEl);
 
-  header.addEventListener('click', (e) => {
+  // 用 pointerdown + pointerup 替代 click（同 file 元素）
+  // SortableJS forceFallback 模式吞掉 click 事件，导致点击 folder header
+  // 有时不响应、要点 2-3 次才能折叠/展开
+  let hpdX = 0, hpdY = 0, hpdDown = false;
+  header.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
     if (e.target.closest('.folder-actions')) return;
     if (e.target.classList.contains('folder-name') && e.target.isContentEditable) return;
-    toggleFolder(folder.id);
+    hpdX = e.clientX; hpdY = e.clientY; hpdDown = true;
   });
+  header.addEventListener('pointerup', (e) => {
+    if (!hpdDown || e.button !== 0) return;
+    hpdDown = false;
+    if (e.target.closest('.folder-actions')) return;
+    if (e.target.classList.contains('folder-name') && e.target.isContentEditable) return;
+    const dx = Math.abs(e.clientX - hpdX);
+    const dy = Math.abs(e.clientY - hpdY);
+    if (dx <= 5 && dy <= 5) {
+      toggleFolder(folder.id);
+    }
+  });
+  header.addEventListener('pointercancel', () => { hpdDown = false; });
   header.querySelector('[data-act="new-sub"]').addEventListener('click', async (e) => {
     e.stopPropagation();
     const name = prompt(`在「${folder.name}」中新建子分组：`, '新分组');

@@ -37,11 +37,9 @@ function check(name, ok, detail = '') {
   if (!targetInfo) { console.error('找不到第二个 folder'); process.exit(1); }
 
   // 确保它是折叠状态（如果展开就先折叠）
+  // folder-header 现在用 pointer events 监听点击，所以必须用 Playwright 真实点击
   if (!targetInfo.collapsed) {
-    await page.evaluate((id) => {
-      const folder = document.querySelector(`.folder[data-folder-id="${id}"]`);
-      folder.querySelector('.folder-header').click();
-    }, targetInfo.id);
+    await page.locator(`.folder[data-folder-id="${targetInfo.id}"] > .folder-header`).first().click();
     await page.waitForTimeout(200);
   }
 
@@ -123,13 +121,13 @@ function check(name, ok, detail = '') {
   await page.waitForTimeout(300);
 
   // ----- 反向测试：移开 header 再回去时不应自动展开（timer 应被清掉）-----
-  // 重新折叠该 folder
-  await page.evaluate((id) => {
-    const folder = document.querySelector(`.folder[data-folder-id="${id}"]`);
-    if (!folder.classList.contains('collapsed')) {
-      folder.querySelector('.folder-header').click();
-    }
-  }, targetInfo.id);
+  // 重新折叠该 folder（pointer events，必须用真实 click）
+  const stillExpanded = await page.evaluate((id) =>
+    !document.querySelector(`.folder[data-folder-id="${id}"]`).classList.contains('collapsed'),
+    targetInfo.id);
+  if (stillExpanded) {
+    await page.locator(`.folder[data-folder-id="${targetInfo.id}"] > .folder-header`).first().click();
+  }
   await page.waitForTimeout(200);
 
   // 拖到 header 上停 200ms（< 600ms 不该展开），然后离开

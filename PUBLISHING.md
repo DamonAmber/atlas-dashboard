@@ -120,7 +120,7 @@ done
 
 **要求所有 spec 都"失败 0 项"**。任意一个失败必须先修才能发版。
 
-> 当前 spec 清单（14 个）：
+> 当前 spec 清单（15 个）：
 > - `inline-edit.spec.js` — 编辑文件名 / 备注（17 项）
 > - `sidebar.spec.js` — 侧边栏开关、宽度、动画（5 项）
 > - `sidebar-perf.spec.js` — 帧率门槛（p95 ≤ 25ms / max ≤ 50ms）
@@ -131,7 +131,8 @@ done
 > - `drag-hover-expand.spec.js` — 拖到折叠 folder 头上 600ms 自动展开（6 项）
 > - `no-sortable-leak.spec.js` — Sortable 实例不累积（5 项）
 > - `v0.2-features.spec.js` — 键盘导航 / 最近打开 / 全文搜索（15 项）
-> - `click-with-jitter.spec.js` — 点击带抖动仍能打开（5 项）
+> - `click-with-jitter.spec.js` — file 点击带抖动仍能打开（5 项）
+> - `folder-toggle-with-jitter.spec.js` — folder 头点击带抖动仍能折叠/展开（4 项）
 > - `search-cn-and-highlight.spec.js` — 中文单字搜索 + iframe 内高亮跳转（13 项）
 > - `landing-demo.spec.js` — landing page demo 交互（27 项，file://，不依赖服务）
 > - `e2e-install.spec.js` — npm pack + 模拟陌生用户安装
@@ -385,6 +386,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.3.2** (2026-05-22) — 修复 folder header 点击有时不响应（要点 2-3 次才能折叠/展开）。和 0.3.0 file 那个 click bug 同源——SortableJS forceFallback 模式吞掉 click 事件。folder header 也改用 `pointerdown` 记位置 + `pointerup` 检查偏移触发 toggleFolder，绕开 click 事件链。新加 spec `folder-toggle-with-jitter.spec.js`（4 项）。
 
 - **0.3.1** (2026-05-22) — ① 修复全文搜索：中文单字（如"灯"）原本被 `q.length < 2` 拦截不发请求。后端区分 ASCII / 非 ASCII，中文/日文/韩文等单字符放行，ASCII 仍要求 ≥ 2 字符避免 'a' 这种太宽的查询。② 新功能：打开文件后 iframe 内自动高亮命中文字（同源直接操作 contentDocument，TreeWalker 注入 `<mark>`），首个匹配自动滚到中间标橙色，顶栏出现 `1 / N` 跳转徽章 + ▲▼ 按钮，搜索框 Enter / Shift+Enter 也能跳。
 
