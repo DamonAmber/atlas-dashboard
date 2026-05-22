@@ -346,7 +346,11 @@ async function getFileText(filePath, mtime) {
 
 app.get('/api/search', async (req, res) => {
   const q = (req.query.q || '').toString().trim().toLowerCase();
-  if (q.length < 2) return res.json({ matches: [] });
+  if (q.length === 0) return res.json({ matches: [] });
+  // ASCII 单字符（'a'/'e' 等）匹配面太广，要求 ≥ 2；
+  // 非 ASCII（中文/日文/韩文）单字符通常是有意义的词，允许搜
+  const isAscii = /^[\x00-\x7F]+$/.test(q);
+  if (isAscii && q.length < 2) return res.json({ matches: [] });
   try {
     const scanned = await scanHtmlFiles();
     const matches = [];

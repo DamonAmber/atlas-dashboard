@@ -44,6 +44,9 @@ const els = {
   recentList: document.getElementById('recent-list'),
   recentToggle: document.getElementById('recent-toggle'),
   updateBadge: document.getElementById('update-badge'),
+  matchBadge: document.getElementById('match-badge'),
+  matchPrev: document.getElementById('match-prev'),
+  matchNext: document.getElementById('match-next'),
 };
 
 // ---------- 侧边栏宽度 / 收起 ----------
@@ -863,6 +866,149 @@ function setActiveFile(filePath, doNavigate) {
 
 els.preview.addEventListener('load', () => {
   els.preview.classList.remove('loading');
+  // iframe 加载完成 → 注入搜索词高亮
+  updateIframeHighlight();
+});
+
+// ---------- iframe 内高亮搜索命中 ----------
+// 同源（都是 localhost:4321），可直接操作 contentDocument
+const HIGHLIGHT_STYLE_ATTR = 'data-atlas-hl-style';
+const HIGHLIGHT_MARK_ATTR = 'data-atlas-hl';
+
+function clearIframeHighlight(doc) {
+  if (!doc) return;
+  doc.querySelectorAll(`mark[${HIGHLIGHT_MARK_ATTR}]`).forEach(mark => {
+    const parent = mark.parentNode;
+    if (!parent) return;
+    while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+    parent.removeChild(mark);
+    parent.normalize();
+  });
+}
+
+function injectHighlightStyle(doc) {
+  if (doc.querySelector(`style[${HIGHLIGHT_STYLE_ATTR}]`)) return;
+  const style = doc.createElement('style');
+  style.setAttribute(HIGHLIGHT_STYLE_ATTR, '1');
+  style.textContent = `
+    mark[${HIGHLIGHT_MARK_ATTR}] {
+      background: #fff176 !important;
+      color: #1a1a1a !important;
+      padding: 0 1px;
+      border-radius: 2px;
+      box-shadow: 0 0 0 1px #fbc02d40;
+    }
+    mark[${HIGHLIGHT_MARK_ATTR}].atlas-hl-current {
+      background: #ff9800 !important;
+      box-shadow: 0 0 0 2px #ff5722, 0 4px 12px rgba(255, 87, 34, 0.4) !important;
+    }
+  `;
+  (doc.head || doc.documentElement).appendChild(style);
+}
+
+let highlightMatches = [];
+let highlightCurrentIdx = -1;
+
+function highlightInIframe(query) {
+  const doc = (() => {
+    try { return els.preview.contentDocument; } catch { return null; }
+  })();
+  if (!doc || !doc.body) return;
+
+  clearIframeHighlight(doc);
+  highlightMatches = [];
+  highlightCurrentIdx = -1;
+  updateMatchBadge(0, 0);
+
+  if (!query) return;
+  const q = query.toLowerCase();
+  const ql = q.length;
+
+  injectHighlightStyle(doc);
+
+  // 收集所有要拆分的 text node，避免遍历时同时 mutate
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const p = node.parentElement;
+      if (!p) return NodeFilter.FILTER_REJECT;
+      const tag = p.tagName;
+      if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' ||
+          p.closest(`[${HIGHLIGHT_MARK_ATTR}]`)) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      const text = node.nodeValue || '';
+      return text.toLowerCase().indexOf(q) >= 0
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_REJECT;
+    },
+  });
+  const todo = [];
+  while (walker.nextNode()) todo.push(walker.currentNode);
+
+  for (const node of todo) {
+    const text = node.nodeValue;
+    const lower = text.toLowerCase();
+    const frag = doc.createDocumentFragment();
+    let last = 0;
+    let idx = 0;
+    while ((idx = lower.indexOf(q, last)) !== -1) {
+      if (idx > last) frag.appendChild(doc.createTextNode(text.slice(last, idx)));
+      const mark = doc.createElement('mark');
+      mark.setAttribute(HIGHLIGHT_MARK_ATTR, '1');
+      mark.textContent = text.slice(idx, idx + ql);
+      frag.appendChild(mark);
+      highlightMatches.push(mark);
+      last = idx + ql;
+    }
+    if (last < text.length) frag.appendChild(doc.createTextNode(text.slice(last)));
+    if (node.parentNode) node.parentNode.replaceChild(frag, node);
+  }
+
+  if (highlightMatches.length > 0) {
+    highlightCurrentIdx = 0;
+    highlightMatches[0].classList.add('atlas-hl-current');
+    highlightMatches[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+  updateMatchBadge(highlightMatches.length, highlightCurrentIdx);
+}
+
+function gotoMatch(delta) {
+  if (!highlightMatches.length) return;
+  const cur = highlightMatches[highlightCurrentIdx];
+  if (cur) cur.classList.remove('atlas-hl-current');
+  highlightCurrentIdx = (highlightCurrentIdx + delta + highlightMatches.length) % highlightMatches.length;
+  const next = highlightMatches[highlightCurrentIdx];
+  next.classList.add('atlas-hl-current');
+  next.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  updateMatchBadge(highlightMatches.length, highlightCurrentIdx);
+}
+
+function updateMatchBadge(total, currentIdx) {
+  const badge = els.matchBadge;
+  if (!badge) return;
+  if (total === 0) {
+    badge.classList.add('hidden');
+    return;
+  }
+  badge.classList.remove('hidden');
+  badge.querySelector('.match-text').textContent = `${currentIdx + 1} / ${total}`;
+}
+
+// 在 search 改变 / iframe load 后被调用
+function updateIframeHighlight() {
+  highlightInIframe(state.search);
+}
+
+// 上下跳转按钮
+els.matchPrev.addEventListener('click', () => gotoMatch(-1));
+els.matchNext.addEventListener('click', () => gotoMatch(1));
+
+// 搜索框聚焦时按 Enter 跳到下一处，Shift+Enter 上一处
+els.search.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && highlightMatches.length > 0) {
+    e.preventDefault();
+    gotoMatch(e.shiftKey ? -1 : 1);
+  }
 });
 
 // ---------- 顶部按钮 ----------
@@ -886,6 +1032,13 @@ async function doContentSearch(q) {
   } catch {}
 }
 
+function shouldSearchContent(q) {
+  if (!q) return false;
+  if (q.length >= 2) return true;
+  // 单字符：仅当非 ASCII（中文/日文等）才搜，'a' 这种太宽不搜
+  return /[^\x00-\x7F]/.test(q);
+}
+
 els.search.addEventListener('input', (e) => {
   const v = e.target.value;
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
@@ -894,8 +1047,10 @@ els.search.addEventListener('input', (e) => {
     state.search = v;
     state.contentMatches = new Map();   // 先按文件名渲染（即时反馈）
     render();
-    if (v && v.length >= 2) doContentSearch(v);   // 异步加上内容匹配
+    if (shouldSearchContent(v)) doContentSearch(v);
     else contentSearchSeq++;             // cancel pending
+    // 同步刷新 iframe 内高亮
+    updateIframeHighlight();
   }, 80);
 });
 els.onlyUnread.addEventListener('change', (e) => { state.onlyUnread = e.target.checked; render(); });
