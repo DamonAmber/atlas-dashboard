@@ -47,7 +47,7 @@ jobs:
           mkdir -p .ci-fixtures/proj-a .ci-fixtures/proj-b .ci-fixtures/proj-c
           node -e "
           const fs = require('fs');
-          const filler = '<p>填充行：让文档长一点供 scroll 测试用 lorem ipsum dolor sit amet</p>\n'.repeat(300);
+          const filler = '<p>填充行：让文档长一点供 scroll 测试用 lorem ipsum dolor sit amet 数据 内容</p>\n'.repeat(300);
           fs.writeFileSync('.ci-fixtures/proj-a/index.html',
             '<!doctype html><html><body><h1>Project A</h1><p>contains keyword echarts rgb</p>' + filler + '</body></html>');
           fs.writeFileSync('.ci-fixtures/proj-a/dashboard.html',
