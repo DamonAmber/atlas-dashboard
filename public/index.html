@@ -37,11 +37,19 @@
     </header>
 
     <div class="filter">
-      <input id="search" type="search" placeholder="搜索文件名 / 备注 / 路径（按 / 聚焦）" />
+      <input id="search" type="search" placeholder="搜索文件名 / 备注 / 路径 / 内容（按 / 聚焦）" />
       <label class="only-unread">
         <input type="checkbox" id="only-unread" />
         <span>仅未读</span>
       </label>
+    </div>
+
+    <div id="recent-bar" class="recent-bar hidden">
+      <div class="recent-bar-header">
+        <span>最近</span>
+        <button id="recent-toggle" type="button" title="收起 / 展开" aria-label="收起 / 展开最近">▾</button>
+      </div>
+      <div id="recent-list" class="recent-list"></div>
     </div>
 
     <div id="tree" class="tree"></div>

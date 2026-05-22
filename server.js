@@ -60,6 +60,7 @@ function migrateStore(raw) {
   if (Array.isArray(raw.tree)) {
     raw.seen = raw.seen || {};
     raw.aliases = raw.aliases || {};
+    raw.recent = Array.isArray(raw.recent) ? raw.recent : [];
     return raw;
   }
   // 旧版 {folders: [{id,name,files:[]}], seen}
@@ -71,9 +72,16 @@ function migrateStore(raw) {
       collapsed: false,
       children: (f.files || []).map(p => ({ type: 'file', path: p })),
     }));
-    return { tree, seen: raw.seen || {}, aliases: raw.aliases || {} };
+    return { tree, seen: raw.seen || {}, aliases: raw.aliases || {}, recent: [] };
   }
-  return { tree: [], seen: {}, aliases: {} };
+  return { tree: [], seen: {}, aliases: {}, recent: [] };
+}
+
+const RECENT_MAX = 10;
+function pushRecent(store, filePath) {
+  const list = (store.recent || []).filter(p => p !== filePath);
+  list.unshift(filePath);
+  store.recent = list.slice(0, RECENT_MAX);
 }
 
 function saveStore(store) {
@@ -310,6 +318,57 @@ function mountRawRoutes() {
 }
 mountRawRoutes();
 
+// 全文搜索：HTML 内容缓存（按 mtime 失效）+ 简单 contains 匹配
+const contentCache = new Map();   // path → { mtime, text }
+async function getFileText(filePath, mtime) {
+  const cached = contentCache.get(filePath);
+  if (cached && cached.mtime === mtime) return cached.text;
+  try {
+    const raw = await fsp.readFile(filePath, 'utf8');
+    const text = raw
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/\s+/g, ' ')
+      .toLowerCase();
+    contentCache.set(filePath, { mtime, text });
+    return text;
+  } catch {
+    return '';
+  }
+}
+
+app.get('/api/search', async (req, res) => {
+  const q = (req.query.q || '').toString().trim().toLowerCase();
+  if (q.length < 2) return res.json({ matches: [] });
+  try {
+    const scanned = await scanHtmlFiles();
+    const matches = [];
+    for (const f of scanned) {
+      const text = await getFileText(f.path, f.mtime);
+      const idx = text.indexOf(q);
+      if (idx >= 0) {
+        const start = Math.max(0, idx - 35);
+        const end = Math.min(text.length, idx + q.length + 35);
+        const snippet = (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
+        matches.push({ path: f.path, snippet });
+      }
+    }
+    // GC：缓存大于 500 个文件时清掉一半
+    if (contentCache.size > 500) {
+      const all = [...contentCache.entries()].sort((a, b) => a[1].mtime - b[1].mtime);
+      for (let i = 0; i < all.length / 2; i++) contentCache.delete(all[i][0]);
+    }
+    res.json({ matches });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/state', async (_req, res) => {
   try {
     const scanned = await scanHtmlFiles();
@@ -333,9 +392,20 @@ app.get('/api/state', async (_req, res) => {
       };
     }
 
+    // 清理 recent 中已不存在的文件
+    const allPaths = new Set(scanned.map(f => f.path));
+    if (Array.isArray(store.recent)) {
+      const cleaned = store.recent.filter(p => allPaths.has(p));
+      if (cleaned.length !== store.recent.length) {
+        store.recent = cleaned;
+        saveStore(store);
+      }
+    }
+
     res.json({
       tree: store.tree,
       files: fileMap,
+      recent: store.recent || [],
       scanRoots: getScanRoots(),
       scannedCount: scanned.length,
     });
@@ -390,6 +460,7 @@ app.post('/api/seen', (req, res) => {
   }
   const store = loadStore();
   store.seen[filePath] = Date.now();
+  pushRecent(store, filePath);   // 同时更新 recent
   saveStore(store);
   res.json({ ok: true, seenAt: store.seen[filePath] });
 });

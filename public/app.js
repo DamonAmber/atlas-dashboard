@@ -1,10 +1,13 @@
 const state = {
   tree: [],
   files: {},
+  recent: [],
   activeFilePath: null,
   search: '',
+  contentMatches: new Map(),       // path → snippet（全文搜索结果）
   onlyUnread: false,
   collapsed: new Set(JSON.parse(localStorage.getItem('atlas:collapsed') || '[]')),
+  recentCollapsed: localStorage.getItem('atlas:recentCollapsed') === '1',
   notifyEnabled: localStorage.getItem('atlas:notify') === '1',
 };
 
@@ -37,6 +40,9 @@ const els = {
   notifyHint: document.getElementById('notify-hint'),
   ignoreInput: document.getElementById('ignore-input'),
   ignoreSaveBtn: document.getElementById('ignore-save-btn'),
+  recentBar: document.getElementById('recent-bar'),
+  recentList: document.getElementById('recent-list'),
+  recentToggle: document.getElementById('recent-toggle'),
 };
 
 // ---------- 侧边栏宽度 / 收起 ----------
@@ -177,10 +183,12 @@ async function fetchState() {
     const data = await res.json();
     state.tree = data.tree;
     state.files = data.files;
+    state.recent = Array.isArray(data.recent) ? data.recent : [];
     const unread = Object.values(data.files).filter(f => f.unread).length;
     els.stats.textContent = `${Object.keys(data.files).length} 个文档 · ${unread} 未读`;
     setSaveStatus('idle');
     render();
+    renderRecent();
   } catch (e) {
     console.error(e);
     setSaveStatus('error');
@@ -217,7 +225,8 @@ function fileMatches(file) {
   const q = state.search.toLowerCase();
   return file.name.toLowerCase().includes(q)
     || file.relPath.toLowerCase().includes(q)
-    || (file.alias && file.alias.toLowerCase().includes(q));
+    || (file.alias && file.alias.toLowerCase().includes(q))
+    || state.contentMatches.has(file.path);   // 内容匹配
 }
 function nodeMatches(node) {
   if (node.type === 'file') {
@@ -252,6 +261,36 @@ function render() {
   initSortables();
   if (state.activeFilePath && state.files[state.activeFilePath]) {
     setActiveFile(state.activeFilePath, false);
+  }
+}
+
+function renderRecent() {
+  const list = state.recent || [];
+  // 过滤掉磁盘上已不存在的（state.files 里没有）
+  const usable = list.filter(p => !!state.files[p]);
+  if (usable.length === 0) {
+    els.recentBar.classList.add('hidden');
+    return;
+  }
+  els.recentBar.classList.remove('hidden');
+  els.recentBar.classList.toggle('collapsed', state.recentCollapsed);
+  els.recentList.innerHTML = '';
+  for (const p of usable) {
+    const file = state.files[p];
+    const div = document.createElement('div');
+    div.className = 'recent-item'
+      + (file.unread ? ' unread' : '')
+      + (file.alias ? ' has-alias' : '')
+      + (p === state.activeFilePath ? ' active' : '');
+    div.dataset.path = p;
+    div.title = file.alias ? `${file.alias}\n${file.relPath}` : file.relPath;
+    div.innerHTML = `
+      <span class="recent-icon">📄</span>
+      <span class="recent-name">${escapeHtml(file.alias || file.name.replace(/\.html$/i, ''))}</span>
+      <span class="recent-project">${escapeHtml(file.projectName)}</span>
+    `;
+    div.addEventListener('click', () => openFile(p));
+    els.recentList.appendChild(div);
   }
 }
 
@@ -344,10 +383,29 @@ function renderFile(file, node) {
     return el;
   }
   const fileEl = document.createElement('div');
-  fileEl.className = 'file' + (file.unread ? ' unread' : '') + (file.alias ? ' has-alias' : '') + (file.path === state.activeFilePath ? ' active' : '');
+  // 是否是"仅内容匹配"（文件名/备注/路径都不命中，只内容命中）
+  const snippet = state.contentMatches.get(file.path);
+  const q = state.search ? state.search.toLowerCase() : '';
+  const isNameMatch = q && (
+    file.name.toLowerCase().includes(q)
+    || file.relPath.toLowerCase().includes(q)
+    || (file.alias && file.alias.toLowerCase().includes(q))
+  );
+  const contentOnly = !!snippet && !isNameMatch;
+  fileEl.className = 'file'
+    + (file.unread ? ' unread' : '')
+    + (file.alias ? ' has-alias' : '')
+    + (file.path === state.activeFilePath ? ' active' : '')
+    + (contentOnly ? ' content-match' : '');
   fileEl.dataset.nodeType = 'file';
   fileEl.dataset.path = file.path;
-  fileEl.title = file.alias ? `${file.alias}\n${file.name}\n${file.relPath}` : `${file.name}\n${file.relPath}`;
+  fileEl.tabIndex = -1;  // 可被 JS focus，但不出现在 Tab 序列中
+  let titleParts = [];
+  if (file.alias) titleParts.push(file.alias);
+  titleParts.push(file.name);
+  titleParts.push(file.relPath);
+  if (snippet) titleParts.push('🔍 ' + snippet);
+  fileEl.title = titleParts.join('\n');
   const displayName = file.alias || file.name.replace(/\.html$/i, '');
   fileEl.innerHTML = `
     <span class="unread-dot"></span>
@@ -688,6 +746,10 @@ async function openFile(filePath) {
   const file = state.files[filePath];
   if (!file) return;
   setActiveFile(filePath, true);
+
+  // 更新 recent（即时本地，server 端会通过 /api/seen 同步）
+  state.recent = [filePath, ...(state.recent || []).filter(p => p !== filePath)].slice(0, 10);
+
   if (file.unread) {
     file.unread = false;
     file.seenAt = Date.now();
@@ -697,7 +759,15 @@ async function openFile(filePath) {
       body: JSON.stringify({ path: filePath }),
     }).catch(console.error);
     updateUnreadDecorations();
+  } else {
+    // 即使没有 unread 也要把这次打开 push 到 server 的 recent
+    fetch('/api/seen', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: filePath }),
+    }).catch(() => {});
   }
+  renderRecent();
 }
 
 function updateUnreadDecorations() {
@@ -773,14 +843,35 @@ els.preview.addEventListener('load', () => {
 
 // ---------- 顶部按钮 ----------
 let searchDebounceTimer = null;
+els.recentToggle.addEventListener('click', () => {
+  state.recentCollapsed = !state.recentCollapsed;
+  localStorage.setItem('atlas:recentCollapsed', state.recentCollapsed ? '1' : '0');
+  els.recentBar.classList.toggle('collapsed', state.recentCollapsed);
+});
+
+let contentSearchSeq = 0;
+async function doContentSearch(q) {
+  const my = ++contentSearchSeq;
+  try {
+    const r = await fetch('/api/search?q=' + encodeURIComponent(q));
+    if (!r.ok || my !== contentSearchSeq) return;
+    const data = await r.json();
+    if (my !== contentSearchSeq) return;
+    state.contentMatches = new Map((data.matches || []).map(m => [m.path, m.snippet]));
+    render();
+  } catch {}
+}
+
 els.search.addEventListener('input', (e) => {
   const v = e.target.value;
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
-  // 短延时防抖：连续输入只在停顿后渲染一次
   searchDebounceTimer = setTimeout(() => {
     if (state.search === v) return;
     state.search = v;
+    state.contentMatches = new Map();   // 先按文件名渲染（即时反馈）
     render();
+    if (v && v.length >= 2) doContentSearch(v);   // 异步加上内容匹配
+    else contentSearchSeq++;             // cancel pending
   }, 80);
 });
 els.onlyUnread.addEventListener('change', (e) => { state.onlyUnread = e.target.checked; render(); });
@@ -849,6 +940,52 @@ document.addEventListener('keydown', (e) => {
     els.search.value = '';
     state.search = '';
     render();
+  }
+});
+
+// ---------- 键盘导航：搜索框 ↓ 进列表，列表 ↑↓ Enter Esc ----------
+function visibleFilesInOrder() {
+  return [...els.tree.querySelectorAll('.file')]
+    .filter(el => !el.closest('.folder.collapsed'));
+}
+function setKbdFocus(el) {
+  els.tree.querySelectorAll('.file.kbd-focus').forEach(e => e.classList.remove('kbd-focus'));
+  if (el) {
+    el.classList.add('kbd-focus');
+    el.focus({ preventScroll: false });
+    el.scrollIntoView({ block: 'nearest' });
+  }
+}
+els.search.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') {
+    const list = visibleFilesInOrder();
+    if (list.length) {
+      e.preventDefault();
+      setKbdFocus(list[0]);
+    }
+  }
+});
+els.tree.addEventListener('keydown', (e) => {
+  // 不打断 inline rename / alias 编辑
+  if (e.target.isContentEditable) return;
+  const focused = e.target.closest('.file');
+  if (!focused) return;
+  const list = visibleFilesInOrder();
+  const idx = list.indexOf(focused);
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (idx < list.length - 1) setKbdFocus(list[idx + 1]);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (idx > 0) setKbdFocus(list[idx - 1]);
+    else { setKbdFocus(null); els.search.focus(); }
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    openFile(focused.dataset.path);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    setKbdFocus(null);
+    els.search.focus();
   }
 });
 

@@ -1,0 +1,105 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+
+      # 1. CLI smoke：能正常打印 help / version
+      - name: CLI smoke test
+        run: |
+          node bin/atlas.js --version
+          node bin/atlas.js --help
+
+      # 2. landing page demo（file:// 协议，不依赖服务）
+      - name: Landing demo
+        run: node tests/landing-demo.spec.js
+
+      # 3. 端到端：模拟全新机器 npx 安装 + 首次引导 + 启动
+      - name: End-to-end install
+        run: |
+          npm pack
+          node tests/e2e-install.spec.js
+
+      # 4. 准备 fixture + 启服务，跑依赖服务的 spec
+      - name: Prepare fixture HTML files
+        run: |
+          mkdir -p .ci-fixtures/proj-a .ci-fixtures/proj-b .ci-fixtures/proj-c
+          cat > .ci-fixtures/proj-a/index.html <<'EOF'
+          <!doctype html><html><body>
+          <h1>Project A</h1>
+          <p>This page contains keyword echarts and rgb.</p>
+          </body></html>
+          EOF
+          cat > .ci-fixtures/proj-a/dashboard.html <<'EOF'
+          <!doctype html><html><body>
+          <h1>Dashboard report</h1>
+          <p>Some chart with svg, flex layout.</p>
+          </body></html>
+          EOF
+          cat > .ci-fixtures/proj-b/index.html <<'EOF'
+          <!doctype html><html><body><h1>Project B</h1></body></html>
+          EOF
+          cat > .ci-fixtures/proj-c/notes.html <<'EOF'
+          <!doctype html><html><body><h1>Notes</h1><p>echarts dashboard data</p></body></html>
+          EOF
+
+      - name: Start Atlas service in background
+        env:
+          ATLAS_HOME: ${{ github.workspace }}/.ci-atlas-home
+        run: |
+          mkdir -p $ATLAS_HOME
+          cat > $ATLAS_HOME/config.json <<EOF
+          {
+            "scanRoots": ["${{ github.workspace }}/.ci-fixtures"],
+            "ignore": ["node_modules", ".git"],
+            "port": 4321,
+            "maxDepth": 4
+          }
+          EOF
+          node bin/atlas.js > /tmp/atlas-ci.log 2>&1 &
+          # 等服务起来
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -sf http://localhost:4321/api/state >/dev/null; then
+              echo "Atlas ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          curl -sf http://localhost:4321/api/state >/dev/null || (echo "Atlas failed to start" && cat /tmp/atlas-ci.log && exit 1)
+
+      - name: Run service-dependent specs
+        env:
+          ATLAS_HOME: ${{ github.workspace }}/.ci-atlas-home
+        run: |
+          set -e
+          node tests/inline-edit.spec.js
+          node tests/sidebar.spec.js
+          node tests/scroll-stuck.spec.js
+          node tests/drag-hover-expand.spec.js
+          node tests/no-sortable-leak.spec.js
+          node tests/v0.2-features.spec.js
+
+      - name: Show atlas log on failure
+        if: failure()
+        run: cat /tmp/atlas-ci.log || true
