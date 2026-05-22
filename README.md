@@ -203,6 +203,11 @@ ATLAS_HOME=/tmp/atlas-debug atlas init   # 用临时配置不污染主配置
 
 ---
 
+## 维护者文档
+
+- **[PUBLISHING.md](./PUBLISHING.md)** — 发版的标准流程（npm publish + GitHub Release + CI 验证）。**任何改动了发版方式的 PR 必须同步更新此文件**。
+- **[.github/workflows/](./.github/workflows/)** — CI / Release 自动化配置。
+
 ## License
 
 MIT
