@@ -1,0 +1,71 @@
+name: release
+
+# 推送 v* 格式的 tag 时触发，从 PUBLISHING.md 抽取该版本的描述创建 GitHub Release
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version notes
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # 抽取 PUBLISHING.md 中 "- **<VERSION>**" 那一段（含本版本到下一版本之前）
+          NOTES=$(awk -v ver="$VERSION" '
+            /^- \*\*[0-9]+\.[0-9]+\.[0-9]+\*\*/ {
+              if (found) exit
+              if ($0 ~ "\\*\\*" ver "\\*\\*") found = 1
+            }
+            found { print }
+          ' PUBLISHING.md)
+
+          if [ -z "$NOTES" ]; then
+            NOTES="- **$VERSION** — 详见 [PUBLISHING.md](https://github.com/${{ github.repository }}/blob/main/PUBLISHING.md)"
+          fi
+
+          {
+            echo "notes<<EOF_NOTES"
+            echo "$NOTES"
+            echo "EOF_NOTES"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          BODY=$(cat <<'EOF_BODY'
+          ${{ steps.notes.outputs.notes }}
+
+          ---
+
+          📦 **npm**: https://www.npmjs.com/package/atlas-dashboard/v/$VERSION
+          🌐 **介绍页**: https://damonamber.github.io/atlas-dashboard/
+          📝 **完整版本历史**: https://github.com/${{ github.repository }}/blob/main/PUBLISHING.md
+
+          安装/升级:
+          ```bash
+          npm i -g atlas-dashboard@$VERSION
+          # 或
+          npx atlas-dashboard@$VERSION
+          ```
+          EOF_BODY
+          )
+          # 替换 $VERSION
+          BODY="${BODY//\$VERSION/$VERSION}"
+
+          gh release create "v$VERSION" \
+            --title "Atlas $VERSION" \
+            --notes "$BODY" \
+            --verify-tag

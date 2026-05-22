@@ -7,6 +7,8 @@ const { exec, spawn } = require('child_process');
 const chokidar = require('chokidar');
 const { EventEmitter } = require('events');
 const userPaths = require('./lib/paths');
+const updateCheck = require('./lib/update-check');
+const pkg = require('./package.json');
 
 // 路径注入：CLI（bin/atlas.js）通过环境变量传，开发模式落到默认 ~/.atlas/
 const ROOT_DIR = __dirname;
@@ -525,6 +527,16 @@ app.post('/api/reveal', (req, res) => {
   });
 });
 
+// 升级信息：基于缓存返回，server 启动时已经在后台刷新缓存
+app.get('/api/update-info', (_req, res) => {
+  const result = updateCheck.getCachedResult(pkg.version);
+  if (result) {
+    res.json({ current: pkg.version, latest: result.latest, hasUpdate: true });
+  } else {
+    res.json({ current: pkg.version, latest: null, hasUpdate: false });
+  }
+});
+
 app.get('/api/config', (_req, res) => {
   res.json({
     scanRoots: config.scanRoots || [],
@@ -583,6 +595,8 @@ const httpServer = app.listen(PORT, () => {
   console.log(`  配置: ${CONFIG_PATH}`);
   console.log(`  扫描根: ${getScanRoots().join(', ')}\n`);
   startWatchers();
+  // 后台异步刷新升级检查缓存
+  updateCheck.refreshInBackground(pkg.name);
 });
 
 httpServer.on('error', (err) => {

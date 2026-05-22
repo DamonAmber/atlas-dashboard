@@ -43,6 +43,7 @@ const els = {
   recentBar: document.getElementById('recent-bar'),
   recentList: document.getElementById('recent-list'),
   recentToggle: document.getElementById('recent-toggle'),
+  updateBadge: document.getElementById('update-badge'),
 };
 
 // ---------- 侧边栏宽度 / 收起 ----------
@@ -417,11 +418,29 @@ function renderFile(file, node) {
       <button data-act="reveal" title="在访达中显示">📂</button>
     </span>
   `;
-  fileEl.addEventListener('click', (e) => {
+  // 用 pointerdown + pointerup 替代 click：
+  // SortableJS forceFallback 模式会在鼠标按下后任何 mousemove 启动拖拽并 preventDefault click，
+  // 导致用户手抖几像素就 click 失效（"点 3-4 次才打开"）。
+  // pointer 事件早于 click 触发，且 SortableJS 不会拦截。
+  let pdX = 0, pdY = 0, pdDown = false;
+  fileEl.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
     if (e.target.closest('.file-actions')) return;
     if (e.target.classList.contains('file-name') && e.target.isContentEditable) return;
-    openFile(file.path);
+    pdX = e.clientX; pdY = e.clientY; pdDown = true;
   });
+  fileEl.addEventListener('pointerup', (e) => {
+    if (!pdDown || e.button !== 0) return;
+    pdDown = false;
+    if (e.target.closest('.file-actions')) return;
+    if (e.target.classList.contains('file-name') && e.target.isContentEditable) return;
+    const dx = Math.abs(e.clientX - pdX);
+    const dy = Math.abs(e.clientY - pdY);
+    if (dx <= 5 && dy <= 5) {
+      openFile(file.path);
+    }
+  });
+  fileEl.addEventListener('pointercancel', () => { pdDown = false; });
   fileEl.querySelector('[data-act="alias"]').addEventListener('click', (e) => {
     e.stopPropagation();
     startEditAlias(file, fileEl.querySelector('.file-name'));
@@ -634,6 +653,9 @@ function initSortables() {
       // forceFallback: 不用 native HTML5 drag，统一走 mouse 事件路径
       // 让 onMove 在每次有意义的鼠标移动都触发（支持 hover-to-expand 检测）
       forceFallback: true,
+      // 鼠标按下后必须移动 5px 才识别为拖拽。否则手抖被当成 drag，吞掉 click 事件，
+      // 用户表现为"点击文件没反应、要点 3~4 次才能打开"
+      touchStartThreshold: 5,
       swapThreshold: 0.55,
       // 在 onMove 里做两件事：
       //   1. hover-to-expand：拖拽悬停在折叠 folder 头上 600ms 自动展开
@@ -1133,8 +1155,35 @@ function connectSSE() {
   };
 }
 
+// 升级检查：拉一次，发现新版本就显示标签
+async function checkForUpdate() {
+  try {
+    const r = await fetch('/api/update-info');
+    if (!r.ok) return;
+    const info = await r.json();
+    if (info.hasUpdate && info.latest) {
+      els.updateBadge.classList.remove('hidden');
+      els.updateBadge.querySelector('.text').textContent = `${info.current} → ${info.latest}`;
+      els.updateBadge.title = `新版本 ${info.latest} 可用，点击查看升级命令`;
+      els.updateBadge.onclick = (e) => {
+        e.preventDefault();
+        const cmd = `npm i -g atlas-dashboard@latest`;
+        navigator.clipboard.writeText(cmd).then(() => {
+          els.updateBadge.querySelector('.text').textContent = '命令已复制 ✓';
+          setTimeout(() => {
+            els.updateBadge.querySelector('.text').textContent = `${info.current} → ${info.latest}`;
+          }, 1600);
+        });
+      };
+    }
+  } catch {}
+}
+
 setInterval(() => { if (!document.hidden) fetchState(); }, 60_000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) fetchState(); });
 
 fetchState();
 connectSSE();
+checkForUpdate();
+// 每天再查一次（页面长期开着的情况）
+setInterval(checkForUpdate, 24 * 60 * 60 * 1000);

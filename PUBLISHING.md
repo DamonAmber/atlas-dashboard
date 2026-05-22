@@ -147,6 +147,7 @@ rm -rf "$TMP"
 
 ### 已发布版本
 
+- **0.3.0** (2026-05-22) — ① 修复：鼠标点击文件时若有 1-3px 抖动会被 SortableJS 当成拖拽吞掉 click，表现为"点 3-4 次才打开"。改用 pointerdown 记位置 + pointerup 检查偏移触发 openFile，绕开 click 事件链。② 升级提示：CLI 启动时显示新版本可用（每天最多查一次，缓存到 `~/.atlas/update-check.json`）；Dashboard 顶栏右侧出现脉动小标签，点击复制升级命令。③ GitHub Releases 自动化：push tag `v*` 时 workflow 抽取 PUBLISHING.md 当版本描述自动创建 Release。
 - **0.2.1** (2026-05-22) — 修复：键盘导航留下的 `.kbd-focus` 视觉态没自动清除，与 `.active` 同时出现造成"多个文件被选中"的视觉异常。`setActiveFile` 切换 active 时统一清掉 kbd-focus，CSS 上 kbd-focus 改为 outline-only（不再争夺背景色）。
 - **0.2.0** (2026-05-22) — 三个功能改进：① 键盘导航（搜索框 `↓` 进列表、`↑↓` 切换、`Enter` 打开、`Esc` 回搜索）；② 最近打开快捷栏（侧栏顶部 LRU 队列，最多 10 项，跨项目秒回）；③ HTML 全文搜索（后端 contains 匹配 + mtime 缓存，仅内容命中的文件标 🔍）。GitHub Actions CI 落地（push/PR 自动跑测试）。
 - **0.1.2** (2026-05-21) — 加拖拽 hover-to-expand：拖文件悬停在折叠 folder 头上 600ms 自动展开。`forceFallback: true` 让 SortableJS 走统一 mouse 事件路径；`document.mousemove + elementFromPoint` 检测鼠标下方真实元素（onMove 不可靠，只在 sibling 切换时触发）。同步 `state.collapsed` + localStorage 持久化。

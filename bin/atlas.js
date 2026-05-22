@@ -22,6 +22,7 @@ const http = require('http');
 const { spawn } = require('child_process');
 const paths = require('../lib/paths');
 const { runInit } = require('../lib/init');
+const updateCheck = require('../lib/update-check');
 const pkg = require('../package.json');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -263,6 +264,7 @@ async function cmdStart(args) {
     console.warn(`  ! 进程已起，但 :${port} 在 4 秒内未响应；查看日志: atlas log`);
   }
   console.log(`  日志: ${paths.logPath()}`);
+  printUpdateNotice();
 }
 
 async function cmdStop({ silentIfStopped = false } = {}) {
@@ -327,6 +329,7 @@ async function cmdStatus() {
     console.log(`  扫描根:`);
     cfg.scanRoots.forEach(r => console.log(`    · ${r}`));
   }
+  printUpdateNotice();
 }
 
 function cmdLog() {
@@ -365,6 +368,7 @@ async function cmdInit(args) {
 
 // 默认（无子命令）：前台启动
 async function cmdForeground(args) {
+  printUpdateNotice();
   const existing = readPid();
   if (existing) {
     console.warn(`! 注意：已有后台 Atlas 运行（pid ${existing}），即将启动一个新前台实例。`);
@@ -394,7 +398,26 @@ async function cmdForeground(args) {
 }
 
 // ==================== main ====================
+function printUpdateNotice() {
+  const r = updateCheck.getCachedResult(pkg.version);
+  if (!r) return;
+  // 框格式提示
+  const cmd = `npm i -g atlas-dashboard@latest`;
+  const lines = [
+    '',
+    `  ╭─ Atlas: 新版本可用 ──`,
+    `  │  ${r.current}  →  ${r.latest}`,
+    `  │  升级: ${cmd}`,
+    `  ╰─`,
+    '',
+  ];
+  console.log(lines.join('\n'));
+}
+
 async function main() {
+  // 后台异步检查更新，不阻塞主流程
+  updateCheck.refreshInBackground(pkg.name);
+
   const args = parseArgs(process.argv.slice(2));
   if (args.help) return printHelp();
   if (args.version) return console.log(pkg.version);
