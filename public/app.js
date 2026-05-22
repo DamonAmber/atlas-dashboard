@@ -804,6 +804,8 @@ function updateUnreadDecorations() {
 function setActiveFile(filePath, doNavigate) {
   state.activeFilePath = filePath;
   els.tree.querySelectorAll('.file.active').forEach(e => e.classList.remove('active'));
+  // 切换 active 时清除键盘焦点态，避免"两个被选中"的视觉异常
+  els.tree.querySelectorAll('.file.kbd-focus').forEach(e => e.classList.remove('kbd-focus'));
   const fileEl = els.tree.querySelector(`.file[data-path="${CSS.escape(filePath)}"]`);
   if (fileEl) fileEl.classList.add('active');
 

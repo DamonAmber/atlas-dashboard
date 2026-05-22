@@ -48,9 +48,31 @@ function check(name, ok, detail = '') {
   await page.waitForTimeout(400);
   const afterEnter = await page.evaluate(() => ({
     activePath: document.querySelector('.file.active')?.dataset.path,
+    kbdFocusCount: document.querySelectorAll('.file.kbd-focus').length,
     iframeNotEmpty: !document.getElementById('preview').classList.contains('hidden'),
   }));
   check('Enter 打开当前 kbd-focus 的文件', afterEnter.activePath === kbd2);
+  check('Enter 后 kbd-focus 自动清除（避免与 active 视觉冲突）', afterEnter.kbdFocusCount === 0);
+
+  // 模拟混合操作：键盘 ↓ 后用鼠标点击其他文件，kbd-focus 应被清除
+  await page.locator('#search').focus();
+  await page.keyboard.press('ArrowDown');
+  await page.waitForTimeout(60);
+  // 鼠标点击别的文件
+  const otherFile = await page.evaluate(() => {
+    const files = [...document.querySelectorAll('#tree .file')].filter(el => !el.closest('.folder.collapsed'));
+    return files[2]?.dataset.path;
+  });
+  if (otherFile) {
+    await page.locator(`#tree .file[data-path="${otherFile.replace(/(["\\])/g, '\\$1')}"]`).first().click();
+    await page.waitForTimeout(200);
+    const afterMixedClick = await page.evaluate(() => ({
+      activeCount: document.querySelectorAll('.file.active').length,
+      kbdFocusCount: document.querySelectorAll('.file.kbd-focus').length,
+    }));
+    check('键盘 ↓ 后鼠标点击其他文件，kbd-focus 被清除（不再"两个被选中"）',
+      afterMixedClick.kbdFocusCount === 0);
+  }
 
   // Esc 回搜索框
   await page.keyboard.press('ArrowDown');

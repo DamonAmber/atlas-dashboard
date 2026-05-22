@@ -290,10 +290,14 @@ body.resizing iframe { pointer-events: none; }
   background: var(--bg-active);
   box-shadow: inset 0 0 0 1px var(--accent);
 }
-/* 键盘焦点（↑↓ 导航时）— 比 hover 视觉更明显 */
+/* 键盘焦点（↑↓ 导航时）— 与 active 视觉明显区分：active 是填充背景，kbd-focus 是边框 */
 .file.kbd-focus {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.file.kbd-focus.active {
+  /* 同一个文件既是 active 又是 kbd-focus 时，叠加：背景 + 边框 */
   background: var(--bg-active);
-  box-shadow: inset 0 0 0 1px var(--accent);
 }
 .file:focus { outline: none; }
 
