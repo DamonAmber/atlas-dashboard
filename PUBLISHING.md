@@ -147,6 +147,22 @@ done
 
 **重要**：必须用 `- **<X.Y.Z>**` 这种格式（前面短横线、版本号用双星号包裹），因为 GitHub Release workflow 用 awk 按这个 pattern 抽取本版变更日志。
 
+### 步骤 1.5：同步 landing page（`docs/index.html`）
+
+**这是约束，不是建议**。任何用户可见的功能改动都必须更新 landing page，否则就是"网页和实际功能不一致"——用户会困惑、抱怨。
+
+按本版改动逐项检查：
+
+- [ ] **加了新功能** → 在 `docs/index.html` 的 `#features` grid 加一张 `.feat` 卡片，或扩充已有卡片的描述
+- [ ] **改了 UI 交互**（如新键盘快捷键、新按钮、新视觉态）→ 改对应卡片的 `<p>` 描述
+- [ ] **加了新 CLI 子命令** → 改 `#commands` 表格里的命令清单
+- [ ] **改了截图相关的 mockup**（`.demo` 区）→ 同步 `docs/index.html` 里 demo 的 mock 数据 / 交互
+- [ ] **改了 README 用户视角部分** → 多半 landing page 也要同步
+
+改完 push 即可（不需要发 npm 新版），GitHub Pages 自动重新部署到 https://damonamber.github.io/atlas-dashboard/
+
+> 这一步**不是事后补**。发版前就要做完。如果发完版才发现网页落后于功能，立即 commit + push 修，并在下次发版的 PUBLISHING.md 描述里说明（"② 同步遗漏的 landing page 文档"）。
+
 ### 步骤 2：升 package.json 版本号
 
 ```bash

@@ -9,7 +9,8 @@
 
 ## 必守规则
 
-- **改了发版相关流程**（命令、自动化、tools、token 机制）→ **同步更新 PUBLISHING.md**。这是约束不是建议。
+- **改了用户可见的功能**（UI、交互、CLI 命令、新快捷键）→ **必须同步 `docs/index.html`** 的 `#features` 特性卡 / `#commands` 命令清单 / 必要时连 demo 也改。任何 PR 落地前过一遍 PUBLISHING.md 的"步骤 1.5"清单。**网页和实际功能不一致是 P0 bug**。
+- **改了发版相关流程**（命令、自动化、tools、token 机制）→ **同步更新 PUBLISHING.md**。
 - **加了新的测试 spec**（`tests/*.spec.js`）→ 把它加到 PUBLISHING.md 的"步骤 0：跑全套测试"清单里。
 - **加了新的 GitHub workflow**（`.github/workflows/*`）→ 在 PUBLISHING.md 的"自动化（你不用管）"表格里加一行。
 - **凭据类信息**（npm token / GitHub PAT / npm recovery codes）**永远不在聊天里贴**——让用户自己在终端里粘到 `~/.npmrc` 或环境变量。
