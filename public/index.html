@@ -88,6 +88,64 @@
         <button id="btn-copy-path" disabled title="复制文件路径">📋</button>
       </div>
     </header>
+
+    <!-- 新版本提示 banner：发现 npm 上有更新时由 JS 显示 -->
+    <div id="update-banner" class="update-banner hidden" role="status" aria-live="polite">
+      <div class="ub-row">
+        <span class="ub-stripe" aria-hidden="true"></span>
+        <span class="ub-pulse" aria-hidden="true"></span>
+        <span class="ub-text">
+          <strong>Atlas <span class="ub-version">—</span></strong>
+          <span class="ub-sep ub-when-idle">已发布</span>
+          <span class="ub-phase ub-when-busy" aria-live="polite">准备中…</span>
+        </span>
+
+        <!-- idle 模式：双按钮 + 命令块 + ✕ -->
+        <button class="ub-upgrade ub-when-idle" type="button" title="自动下载并重启 Atlas（无需终端）">
+          <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+            <path d="M6 2 L6 9 M3 6 L6 9 L9 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
+          <span>立即更新</span>
+        </button>
+        <button class="ub-cmd ub-when-idle" type="button" title="点击复制升级命令">
+          <span class="ub-cmd-prompt" aria-hidden="true">$</span>
+          <code class="ub-cmd-text">npm i -g atlas-dashboard@latest</code>
+          <span class="ub-cmd-hint" aria-hidden="true">复制</span>
+        </button>
+        <button class="ub-close ub-when-idle" type="button" title="不再提示这个版本" aria-label="关闭">
+          <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+            <path d="M2 2 L10 10 M10 2 L2 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+          </svg>
+        </button>
+
+        <!-- busy 模式：indeterminate 进度条 + 折叠日志 -->
+        <div class="ub-progress ub-when-busy" aria-hidden="true"><div class="ub-progress-bar"></div></div>
+        <button class="ub-log-toggle ub-when-busy" type="button" aria-expanded="false">
+          <span class="ub-log-toggle-text">查看日志</span>
+          <svg viewBox="0 0 12 12" width="9" height="9" aria-hidden="true" class="ub-chev">
+            <path d="M3 4.5 L6 7.5 L9 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
+        </button>
+
+        <!-- error 模式：消息 + 重试 -->
+        <span class="ub-error-text ub-when-error"></span>
+        <button class="ub-retry ub-when-error" type="button">重试</button>
+        <button class="ub-cmd ub-when-error ub-cmd-fallback" type="button" title="点击复制升级命令">
+          <span class="ub-cmd-prompt" aria-hidden="true">$</span>
+          <code class="ub-cmd-text">npm i -g atlas-dashboard@latest</code>
+          <span class="ub-cmd-hint" aria-hidden="true">复制</span>
+        </button>
+        <button class="ub-close ub-when-error" type="button" aria-label="关闭">
+          <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+            <path d="M2 2 L10 10 M10 2 L2 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- 折叠的实时日志 -->
+      <pre class="ub-log" aria-live="polite"></pre>
+    </div>
+
     <div class="preview">
       <iframe id="preview" title="预览"></iframe>
       <div class="empty" id="empty-state">

@@ -582,6 +582,108 @@ app.get('/api/update-info', (_req, res) => {
   }
 });
 
+// 一键自升级：spawn npm install -g atlas-dashboard@latest，stdout/stderr 实时
+// 通过 SSE 推送给 frontend；安装成功后 spawn detached helper 重启 server，自杀。
+// 失败：保持 server 存活，emit error 事件，frontend 可以重试。
+let _upgradeInFlight = false;
+app.post('/api/self-upgrade', (req, res) => {
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.flushHeaders?.();
+
+  const send = (payload) => {
+    try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch {}
+  };
+
+  if (_upgradeInFlight) {
+    send({ phase: 'error', message: '已经有升级在进行中，请稍候' });
+    return res.end();
+  }
+  _upgradeInFlight = true;
+
+  send({ phase: 'start', message: '开始下载新版本…', current: pkg.version });
+
+  // npm install 命令——shell:true 让 PATH 解析 npm
+  const npm = spawn('npm', ['install', '-g', 'atlas-dashboard@latest'], {
+    env: process.env,
+    shell: false,
+  });
+
+  const onChunk = (stream) => (chunk) => {
+    const text = chunk.toString();
+    text.split(/\r?\n/).filter(Boolean).forEach(line => {
+      send({ phase: 'log', stream, text: line });
+    });
+  };
+  npm.stdout.on('data', onChunk('stdout'));
+  npm.stderr.on('data', onChunk('stderr'));
+
+  npm.on('error', (err) => {
+    _upgradeInFlight = false;
+    send({ phase: 'error', message: 'spawn npm 失败：' + err.message });
+    res.end();
+  });
+
+  npm.on('exit', (code) => {
+    if (code !== 0) {
+      _upgradeInFlight = false;
+      send({ phase: 'error', message: `npm install 失败，退出码 ${code}` });
+      res.end();
+      return;
+    }
+
+    send({ phase: 'installed', message: '下载完成，正在重启 Atlas…' });
+
+    // 写一份 helper 脚本到 ~/.atlas/restart-helper-{ts}.js
+    // 用 template 文件复制——这样升级覆盖 lib/ 的瞬间，已经写好的 helper 文件不受影响
+    let helperPath;
+    try {
+      const tmpl = fs.readFileSync(path.join(ROOT_DIR, 'lib', 'restart-helper-template.js'), 'utf8');
+      helperPath = path.join(userPaths.configDir(), `restart-helper-${Date.now()}.js`);
+      fs.writeFileSync(helperPath, tmpl);
+    } catch (err) {
+      _upgradeInFlight = false;
+      send({ phase: 'error', message: '写入 helper 脚本失败：' + err.message });
+      res.end();
+      return;
+    }
+
+    const atlasBin = path.join(ROOT_DIR, 'bin', 'atlas.js');
+    const logFile = userPaths.logPath();
+
+    try {
+      const helper = spawn(process.execPath, [helperPath, String(process.pid), atlasBin, logFile], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      helper.unref();
+    } catch (err) {
+      _upgradeInFlight = false;
+      send({ phase: 'error', message: 'spawn helper 失败：' + err.message });
+      res.end();
+      return;
+    }
+
+    send({ phase: 'restarting', message: 'server 即将关闭，前端会自动重连…' });
+    res.end();
+
+    // 给 SSE 流和 PID 文件清理留 1s，再退出，让 helper 接管
+    setTimeout(() => {
+      try { fs.unlinkSync(userPaths.pidPath()); } catch {}
+      process.exit(0);
+    }, 1000);
+  });
+
+  // 客户端断开（用户关 tab）→ 不取消正在跑的 npm，但停止推送
+  req.on('close', () => {
+    // 不重置 _upgradeInFlight——npm 还在跑
+  });
+});
+
 // 目录浏览：让用户在 Dashboard 里图形化选择扫描根，不用手输绝对路径。
 // 服务跑在用户本机（localhost only），文件系统访问由 OS 权限控制。
 app.get('/api/browse', async (req, res) => {
@@ -659,12 +761,19 @@ app.get('/api/events', (req, res) => {
   const send = (payload) => {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
-  const onFs = (e) => send(e);
+  const onFs = (e) => send({ channel: 'fs', ...e });
+  const onUpdate = (e) => send({ channel: 'update', ...e });
   events.on('fs', onFs);
+  events.on('update', onUpdate);
+
+  // 新连接进来时，若已知有可用更新，立即推一次（避免依赖 frontend 主动 fetch）
+  const cached = updateCheck.getCachedResult(pkg.version);
+  if (cached) send({ channel: 'update', current: pkg.version, latest: cached.latest });
 
   const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
   req.on('close', () => {
     events.off('fs', onFs);
+    events.off('update', onUpdate);
     clearInterval(ping);
   });
 });
@@ -675,8 +784,17 @@ const httpServer = app.listen(PORT, () => {
   console.log(`  配置: ${CONFIG_PATH}`);
   console.log(`  扫描根: ${getScanRoots().join(', ')}\n`);
   startWatchers();
-  // 后台异步刷新升级检查缓存
-  updateCheck.refreshInBackground(pkg.name);
+  // 升级检查：启动立即查一次 + 每 1h 重复，发现新版本时 SSE 推到所有 tab
+  const checkUpdate = async () => {
+    try {
+      const r = await updateCheck.refreshAndCheck(pkg.name, pkg.version);
+      if (r.changed) {
+        events.emit('update', { current: pkg.version, latest: r.latest });
+      }
+    } catch {}
+  };
+  checkUpdate();
+  setInterval(checkUpdate, updateCheck.CHECK_INTERVAL_MS);
 });
 
 httpServer.on('error', (err) => {

@@ -612,6 +612,296 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
   50%      { box-shadow: 0 0 0 5px rgba(91, 156, 255, 0); }
 }
 
+/* ---------- 新版本提示 banner ---------- */
+/* 风格：原生 IDE 风格通知条——左侧 accent stripe + 平铺底色，不喧哗。
+ * 默认 36px 高，态切换到 busy 且日志展开时撑高到 ~220px。
+ * 三种态：idle（默认）/ busy（升级中）/ error（失败）—— 由 .state-busy / .state-error 类切换
+ */
+.update-banner {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elev-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  transition: max-height var(--dur, 200ms) var(--ease, ease),
+              opacity var(--dur-fast, 120ms),
+              border-bottom-color var(--dur-fast, 120ms);
+  max-height: 36px;
+}
+.update-banner.hidden {
+  max-height: 0;
+  opacity: 0;
+  border-bottom-color: transparent;
+  pointer-events: none;
+}
+.update-banner.log-open { max-height: 240px; }
+
+.update-banner .ub-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  flex: none;
+  padding: 0 8px 0 16px;
+}
+
+/* 态切换规则放在文件最后（见 banner 块尾部） */
+
+/* 左侧 accent 竖条——3px 宽 */
+.update-banner .ub-stripe {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--accent);
+}
+
+/* 脉动小红点（unread 色）——表达 "有新东西" */
+.update-banner .ub-pulse {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--unread);
+  box-shadow: 0 0 0 0 rgba(255, 91, 91, 0.5);
+  animation: ub-pulse 1.8s ease-out infinite;
+  flex: none;
+}
+@media (prefers-color-scheme: light) {
+  .update-banner .ub-pulse { box-shadow: 0 0 0 0 rgba(230, 57, 70, 0.5); }
+  @keyframes ub-pulse-light {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(230, 57, 70, 0.5); }
+    60%      { box-shadow: 0 0 0 5px rgba(230, 57, 70, 0); }
+  }
+  .update-banner .ub-pulse { animation-name: ub-pulse-light; }
+}
+@keyframes ub-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 91, 91, 0.5); }
+  60%      { box-shadow: 0 0 0 5px rgba(255, 91, 91, 0); }
+}
+
+/* 主文字 */
+.update-banner .ub-text { display: inline-flex; align-items: baseline; gap: 6px; }
+.update-banner .ub-text strong {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.update-banner .ub-text .ub-sep { color: var(--text-faint); }
+
+/* 升级命令——内联 code 块，整体可点击 */
+.update-banner .ub-cmd {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  padding: 0 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11.5px;
+  transition: border-color var(--dur-fast, 120ms),
+              background var(--dur-fast, 120ms),
+              color var(--dur-fast, 120ms);
+}
+.update-banner .ub-cmd:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.update-banner .ub-cmd:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(91, 156, 255, 0.25);
+}
+.update-banner .ub-cmd-prompt { color: var(--text-faint); user-select: none; }
+.update-banner .ub-cmd-text { color: var(--text); }
+.update-banner .ub-cmd-hint {
+  color: var(--text-faint);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+}
+.update-banner .ub-cmd.copied {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.update-banner .ub-cmd.copied .ub-cmd-text,
+.update-banner .ub-cmd.copied .ub-cmd-prompt,
+.update-banner .ub-cmd.copied .ub-cmd-hint { color: var(--ok); }
+
+/* 关闭按钮——极简 */
+.update-banner .ub-close {
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 0;
+  flex: none;
+  transition: background var(--dur-fast, 120ms), color var(--dur-fast, 120ms);
+}
+.update-banner .ub-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* "立即更新" 主按钮——accent fill，主推这个动作 */
+.update-banner .ub-upgrade {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 12px;
+  margin-left: auto;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: filter var(--dur-fast, 120ms), transform var(--dur-fast, 120ms);
+}
+.update-banner .ub-upgrade:hover { filter: brightness(1.08); }
+.update-banner .ub-upgrade:active { transform: translateY(1px); }
+.update-banner .ub-upgrade:disabled { opacity: 0.5; cursor: default; }
+.update-banner .ub-upgrade svg { display: block; }
+/* idle 时主按钮居右靠拢，命令块紧随其后（margin-left: auto 已在 ub-upgrade 上） */
+.update-banner .ub-upgrade + .ub-cmd { margin-left: 0; }
+.update-banner.state-error .ub-cmd { margin-left: 0; }
+
+/* busy 模式：阶段文字 */
+.update-banner .ub-phase {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* indeterminate 进度条 */
+.update-banner .ub-progress {
+  flex: 1;
+  margin-left: auto;
+  max-width: 360px;
+  height: 4px;
+  background: var(--bg-hover);
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+}
+.update-banner .ub-progress-bar {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: 35%;
+  background: var(--accent);
+  border-radius: 999px;
+  animation: ub-prog 1.6s cubic-bezier(.4,0,.2,1) infinite;
+}
+@keyframes ub-prog {
+  0%   { left: -35%; width: 35%; }
+  50%  { left: 30%;  width: 50%; }
+  100% { left: 100%; width: 35%; }
+}
+
+/* "查看日志" 折叠按钮 */
+.update-banner .ub-log-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast), background var(--dur-fast), color var(--dur-fast);
+}
+.update-banner .ub-log-toggle:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.update-banner .ub-log-toggle .ub-chev {
+  transition: transform var(--dur-fast);
+}
+.update-banner.log-open .ub-log-toggle .ub-chev {
+  transform: rotate(180deg);
+}
+
+/* 实时日志区——折叠时高度 0 */
+.update-banner .ub-log {
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  white-space: pre-wrap;
+  max-height: 0;
+  transition: max-height var(--dur, 200ms) var(--ease);
+}
+.update-banner.log-open .ub-log {
+  max-height: 200px;
+  padding: 8px 16px;
+}
+.update-banner .ub-log .log-line { display: block; }
+.update-banner .ub-log .log-line.stderr { color: var(--text); }
+
+/* error 模式 */
+.update-banner.state-error { border-bottom-color: var(--unread); }
+.update-banner.state-error .ub-stripe { background: var(--unread); }
+.update-banner .ub-error-text {
+  color: var(--unread);
+  font-weight: 500;
+  margin-left: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 380px;
+}
+.update-banner .ub-retry {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast), background var(--dur-fast);
+}
+.update-banner .ub-retry:hover { border-color: var(--accent); background: var(--bg-hover); }
+
+/* 态切换（必须放在所有按钮/元素具体样式之后，否则被覆盖）。
+ * 默认隐藏 busy / error 元素；切到对应态时再显示。
+ * .ub-progress 是 div（非 inline-flex），用 flex 显示。
+ */
+.update-banner .ub-when-busy,
+.update-banner .ub-when-error { display: none !important; }
+.update-banner.state-busy .ub-when-idle,
+.update-banner.state-busy .ub-when-error { display: none !important; }
+.update-banner.state-busy .ub-when-busy:not(.ub-progress) { display: inline-flex !important; }
+.update-banner.state-busy .ub-progress { display: block !important; }
+.update-banner.state-error .ub-when-idle,
+.update-banner.state-error .ub-when-busy { display: none !important; }
+.update-banner.state-error .ub-when-error { display: inline-flex !important; }
+/* error 模式下 .ub-error-text 是 span，要求 inline 即可 */
+.update-banner.state-error .ub-error-text { display: inline-block !important; }
+
 .preview {
   flex: 1;
   position: relative;

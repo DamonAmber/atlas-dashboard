@@ -52,6 +52,7 @@ const els = {
   recentList: document.getElementById('recent-list'),
   recentToggle: document.getElementById('recent-toggle'),
   updateBadge: document.getElementById('update-badge'),
+  updateBanner: document.getElementById('update-banner'),
   matchBadge: document.getElementById('match-badge'),
   matchPrev: document.getElementById('match-prev'),
   matchNext: document.getElementById('match-next'),
@@ -1445,12 +1446,19 @@ function connectSSE() {
   evtSrc.onmessage = (msg) => {
     let data;
     try { data = JSON.parse(msg.data); } catch { return; }
+
+    // 新版本可用——立即弹 banner + 桌面通知
+    if (data.channel === 'update') {
+      if (window.__handleUpdateSSE) window.__handleUpdateSSE(data);
+      return;
+    }
+
+    // 文件系统事件（旧 fs 流，兼容没 channel 的旧 payload）
     if (data.kind === 'add') {
       notify('📄 新 HTML 文档', `${data.projectName} / ${data.name}`);
     } else if (data.kind === 'change') {
       notify('✏️ HTML 已更新', `${data.projectName} / ${data.name}`);
     }
-    // 节流刷新（chokidar awaitWriteFinish 已经稳定，但还是合并多次事件）
     if (pendingRefresh) clearTimeout(pendingRefresh);
     pendingRefresh = setTimeout(() => { pendingRefresh = null; fetchState(); }, 400);
   };
@@ -1459,26 +1467,242 @@ function connectSSE() {
   };
 }
 
-// 升级检查：拉一次，发现新版本就显示标签
+// ---------- 新版本提示：banner + 顶栏小标签 + 桌面通知 ----------
+const UPDATE_DISMISS_KEY = 'atlas-update-dismissed';
+const notifiedVersions = new Set(); // 桌面通知本会话只发一次
+
+function getDismissed() {
+  try { return localStorage.getItem(UPDATE_DISMISS_KEY) || ''; } catch { return ''; }
+}
+function setDismissed(version) {
+  try { localStorage.setItem(UPDATE_DISMISS_KEY, version); } catch {}
+}
+
+// 把 ub-cmd 这种"点击复制命令"按钮统一绑定（idle / error 兜底两个 .ub-cmd 都用）
+function bindCmdCopy(cmdBtn) {
+  cmdBtn.addEventListener('click', async () => {
+    const cmd = cmdBtn.querySelector('.ub-cmd-text').textContent;
+    const hint = cmdBtn.querySelector('.ub-cmd-hint');
+    try {
+      await navigator.clipboard.writeText(cmd);
+      cmdBtn.classList.add('copied');
+      const old = hint.textContent;
+      hint.textContent = '已复制 ✓';
+      setTimeout(() => {
+        cmdBtn.classList.remove('copied');
+        hint.textContent = old;
+      }, 1800);
+    } catch {
+      showToast({ kind: 'error', text: '复制失败，请手动选中复制' });
+    }
+  });
+}
+
+function setBannerPhase(text) {
+  const phaseEl = els.updateBanner.querySelector('.ub-phase');
+  if (phaseEl) phaseEl.textContent = text;
+}
+
+function appendBannerLog(line, stream = 'stdout') {
+  const logEl = els.updateBanner.querySelector('.ub-log');
+  if (!logEl) return;
+  const span = document.createElement('span');
+  span.className = `log-line ${stream}`;
+  span.textContent = line;
+  logEl.appendChild(span);
+  // 自动滚到底
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function clearBannerLog() {
+  const logEl = els.updateBanner.querySelector('.ub-log');
+  if (logEl) logEl.innerHTML = '';
+}
+
+// 启动一键升级流程
+async function startSelfUpgrade() {
+  els.updateBanner.classList.remove('state-error');
+  els.updateBanner.classList.add('state-busy');
+  setBannerPhase('正在下载新版本…');
+  clearBannerLog();
+
+  // 用 fetch + ReadableStream 处理 SSE（POST 不能用 EventSource）
+  let resp;
+  try {
+    resp = await fetch('/api/self-upgrade', { method: 'POST' });
+  } catch (err) {
+    showUpgradeError('网络错误：' + err.message);
+    return;
+  }
+  if (!resp.ok || !resp.body) {
+    showUpgradeError(`server 错误：HTTP ${resp.status}`);
+    return;
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let restartingSeen = false;
+
+  while (true) {
+    let chunk;
+    try {
+      chunk = await reader.read();
+    } catch {
+      // server 关闭连接（重启时正常）
+      break;
+    }
+    if (chunk.done) break;
+    buf += decoder.decode(chunk.value, { stream: true });
+    const events = buf.split('\n\n');
+    buf = events.pop() || '';
+    for (const ev of events) {
+      const m = ev.match(/^data:\s*(.+)$/m);
+      if (!m) continue;
+      let data;
+      try { data = JSON.parse(m[1]); } catch { continue; }
+      handleUpgradeEvent(data);
+      if (data.phase === 'restarting') restartingSeen = true;
+      if (data.phase === 'error') return; // 已经显示错误，停止
+    }
+  }
+
+  // 流结束——如果看到了 restarting，进入"等 server 上线"阶段
+  if (restartingSeen) {
+    setBannerPhase('Atlas 重启中，正在重连…');
+    waitForServerBack();
+  }
+}
+
+function handleUpgradeEvent(data) {
+  switch (data.phase) {
+    case 'start':
+      setBannerPhase(data.message || '开始升级…');
+      break;
+    case 'log':
+      appendBannerLog(data.text, data.stream);
+      break;
+    case 'installed':
+      setBannerPhase(data.message || '下载完成，正在重启…');
+      break;
+    case 'restarting':
+      setBannerPhase(data.message || '正在重启 Atlas…');
+      break;
+    case 'error':
+      showUpgradeError(data.message || '未知错误');
+      break;
+  }
+}
+
+function showUpgradeError(message) {
+  els.updateBanner.classList.remove('state-busy');
+  els.updateBanner.classList.add('state-error');
+  const errEl = els.updateBanner.querySelector('.ub-error-text');
+  if (errEl) errEl.textContent = '✕ ' + message;
+}
+
+// server 重启后，轮询 /api/state 等它上线，然后自动 reload 页面
+async function waitForServerBack() {
+  const start = Date.now();
+  // 最多等 60s
+  while (Date.now() - start < 60_000) {
+    await new Promise(r => setTimeout(r, 1000));
+    try {
+      const r = await fetch('/api/update-info', { cache: 'no-store' });
+      if (r.ok) {
+        const info = await r.json();
+        // current 字段就是新版本号——说明新 server 已起
+        setBannerPhase(`✓ 已更新到 ${info.current}，正在刷新…`);
+        await new Promise(r2 => setTimeout(r2, 800));
+        location.reload();
+        return;
+      }
+    } catch {}
+  }
+  showUpgradeError('重连超时，请手动刷新页面');
+}
+
+function bindUpdateBannerOnce() {
+  if (els.updateBanner.dataset.bound) return;
+  els.updateBanner.dataset.bound = '1';
+
+  // 所有 .ub-cmd（idle 和 error 兜底）都绑定复制
+  els.updateBanner.querySelectorAll('.ub-cmd').forEach(bindCmdCopy);
+
+  // 一键更新主按钮
+  const upgradeBtn = els.updateBanner.querySelector('.ub-upgrade');
+  upgradeBtn.addEventListener('click', () => {
+    upgradeBtn.disabled = true;
+    startSelfUpgrade();
+  });
+
+  // 重试
+  const retryBtn = els.updateBanner.querySelector('.ub-retry');
+  retryBtn.addEventListener('click', () => {
+    startSelfUpgrade();
+  });
+
+  // 日志折叠
+  const logToggle = els.updateBanner.querySelector('.ub-log-toggle');
+  logToggle.addEventListener('click', () => {
+    const isOpen = els.updateBanner.classList.toggle('log-open');
+    logToggle.setAttribute('aria-expanded', String(isOpen));
+    logToggle.querySelector('.ub-log-toggle-text').textContent = isOpen ? '收起日志' : '查看日志';
+  });
+
+  // 关闭按钮（idle 和 error 各一个）
+  els.updateBanner.querySelectorAll('.ub-close').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const v = els.updateBanner.dataset.version || '';
+      if (v) setDismissed(v);
+      els.updateBanner.classList.add('hidden');
+    });
+  });
+}
+
+function showUpdateUI(current, latest) {
+  if (!latest) return;
+  // 顶栏小标签——常驻提示，关掉 banner 后仍可见
+  els.updateBadge.classList.remove('hidden');
+  els.updateBadge.querySelector('.text').textContent = `${current} → ${latest}`;
+  els.updateBadge.title = `新版本 ${latest} 可用，点击查看升级命令`;
+  els.updateBadge.onclick = (e) => {
+    e.preventDefault();
+    const cmd = `npm i -g atlas-dashboard@latest`;
+    navigator.clipboard.writeText(cmd).then(() => {
+      els.updateBadge.querySelector('.text').textContent = '命令已复制 ✓';
+      setTimeout(() => {
+        els.updateBadge.querySelector('.text').textContent = `${current} → ${latest}`;
+      }, 1600);
+    });
+  };
+
+  // 横幅——只在用户未对当前版本 dismiss 过时显示
+  bindUpdateBannerOnce();
+  if (getDismissed() !== latest) {
+    els.updateBanner.dataset.version = latest;
+    els.updateBanner.querySelector('.ub-version').textContent = latest;
+    // 复位到 idle 态（防止上次是错误态）
+    els.updateBanner.classList.remove('state-busy', 'state-error', 'log-open');
+    const upBtn = els.updateBanner.querySelector('.ub-upgrade');
+    if (upBtn) upBtn.disabled = false;
+    els.updateBanner.classList.remove('hidden');
+  }
+
+  // 桌面通知：本会话每个版本只发一次（避免连开几小时反复扰人）
+  if (!notifiedVersions.has(latest)) {
+    notifiedVersions.add(latest);
+    notify(`🚀 Atlas ${latest} 已发布`, `当前 ${current}，点击 banner 复制升级命令`);
+  }
+}
+
 async function checkForUpdate() {
   try {
     const r = await fetch('/api/update-info');
     if (!r.ok) return;
     const info = await r.json();
     if (info.hasUpdate && info.latest) {
-      els.updateBadge.classList.remove('hidden');
-      els.updateBadge.querySelector('.text').textContent = `${info.current} → ${info.latest}`;
-      els.updateBadge.title = `新版本 ${info.latest} 可用，点击查看升级命令`;
-      els.updateBadge.onclick = (e) => {
-        e.preventDefault();
-        const cmd = `npm i -g atlas-dashboard@latest`;
-        navigator.clipboard.writeText(cmd).then(() => {
-          els.updateBadge.querySelector('.text').textContent = '命令已复制 ✓';
-          setTimeout(() => {
-            els.updateBadge.querySelector('.text').textContent = `${info.current} → ${info.latest}`;
-          }, 1600);
-        });
-      };
+      showUpdateUI(info.current, info.latest);
     }
   } catch {}
 }
@@ -1489,5 +1713,10 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) fetc
 fetchState();
 connectSSE();
 checkForUpdate();
-// 每天再查一次（页面长期开着的情况）
-setInterval(checkForUpdate, 24 * 60 * 60 * 1000);
+// 长期开着的页面也定期复查（兜底，server SSE 推送是主路径）
+setInterval(checkForUpdate, 60 * 60 * 1000);
+
+// 把 SSE 'update' channel 接进 banner
+window.__handleUpdateSSE = (data) => {
+  if (data && data.latest) showUpdateUI(data.current, data.latest);
+};
