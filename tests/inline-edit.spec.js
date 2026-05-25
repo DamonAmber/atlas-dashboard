@@ -305,9 +305,10 @@ function check(name, ok, detail) {
 })();
 
 async function clickEditAlias(page, filePath) {
-  // 先 hover 让 .file-actions 显示，再点击 ✎
+  // 先 hover 让 .file-actions 从 width:0 展开到 38px（120ms transition），再点击 ✎
   const fileSel = `.file[data-path="${cssEsc(filePath)}"]`;
   await page.locator(fileSel).hover();
+  await page.waitForTimeout(180);
   await page.locator(`${fileSel} [data-act="alias"]`).click({ force: true });
   await page.waitForSelector('.file-name[contenteditable="true"]');
 }
