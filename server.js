@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const fsp = require('fs/promises');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { exec, spawn } = require('child_process');
@@ -538,6 +539,41 @@ app.get('/api/update-info', (_req, res) => {
     res.json({ current: pkg.version, latest: result.latest, hasUpdate: true });
   } else {
     res.json({ current: pkg.version, latest: null, hasUpdate: false });
+  }
+});
+
+// 目录浏览：让用户在 Dashboard 里图形化选择扫描根，不用手输绝对路径。
+// 服务跑在用户本机（localhost only），文件系统访问由 OS 权限控制。
+app.get('/api/browse', async (req, res) => {
+  try {
+    const requested = req.query.path;
+    let target;
+    if (!requested || typeof requested !== 'string' || !requested.trim()) {
+      target = os.homedir();
+    } else {
+      target = userPaths.expand(requested);
+    }
+    target = path.resolve(target);
+    const stat = await fsp.stat(target);
+    if (!stat.isDirectory()) {
+      return res.status(400).json({ error: '不是目录: ' + target });
+    }
+    const showHidden = req.query.hidden === '1';
+    const entries = await fsp.readdir(target, { withFileTypes: true });
+    const dirs = entries
+      .filter(e => e.isDirectory() && (showHidden || !e.name.startsWith('.')))
+      .map(e => ({ name: e.name, path: path.join(target, e.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+    const parent = path.dirname(target);
+    res.json({
+      path: target,
+      parent: parent === target ? null : parent,
+      home: os.homedir(),
+      entries: dirs,
+      separator: path.sep,
+    });
+  } catch (e) {
+    res.status(400).json({ error: e.code === 'ENOENT' ? '路径不存在' : (e.code || e.message) });
   }
 });
 

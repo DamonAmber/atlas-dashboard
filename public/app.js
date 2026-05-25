@@ -36,6 +36,14 @@ const els = {
   rootList: document.getElementById('root-list'),
   rootInput: document.getElementById('root-input'),
   rootAddBtn: document.getElementById('root-add-btn'),
+  rootBrowseBtn: document.getElementById('root-browse-btn'),
+  dirPicker: document.getElementById('dir-picker'),
+  dirCurrent: document.getElementById('dir-current'),
+  dirList: document.getElementById('dir-list'),
+  dirUp: document.getElementById('dir-up'),
+  dirHome: document.getElementById('dir-home'),
+  dirCancel: document.getElementById('dir-cancel'),
+  dirSelect: document.getElementById('dir-select'),
   notifyToggle: document.getElementById('notify-toggle'),
   notifyHint: document.getElementById('notify-hint'),
   ignoreInput: document.getElementById('ignore-input'),
@@ -1233,6 +1241,82 @@ els.rootAddBtn.addEventListener('click', async () => {
     const cfg2 = await (await fetch('/api/config')).json();
     renderRootList(cfg2.scanRoots);
     fetchState();
+  }
+});
+
+// ---------- 目录浏览器 picker ----------
+let pickerHomePath = '';
+async function loadDir(path) {
+  const url = path ? '/api/browse?path=' + encodeURIComponent(path) : '/api/browse';
+  els.dirList.innerHTML = '<div class="dir-empty">加载中…</div>';
+  try {
+    const r = await fetch(url);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      els.dirList.innerHTML = `<div class="dir-empty">✗ ${escapeHtml(err.error || '加载失败')}</div>`;
+      return;
+    }
+    const data = await r.json();
+    pickerHomePath = data.home;
+    els.dirCurrent.value = data.path;
+    els.dirCurrent.dataset.path = data.path;
+    els.dirUp.disabled = !data.parent;
+    els.dirSelect.disabled = false;
+
+    if (data.entries.length === 0) {
+      els.dirList.innerHTML = '<div class="dir-empty">（此目录下没有子文件夹）</div>';
+      return;
+    }
+    els.dirList.innerHTML = '';
+    for (const entry of data.entries) {
+      const div = document.createElement('div');
+      div.className = 'dir-item';
+      div.dataset.path = entry.path;
+      div.innerHTML = `<span class="dir-icon">📁</span><span>${escapeHtml(entry.name)}</span>`;
+      div.addEventListener('click', () => loadDir(entry.path));
+      els.dirList.appendChild(div);
+    }
+  } catch (e) {
+    els.dirList.innerHTML = `<div class="dir-empty">✗ 网络错误：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+els.rootBrowseBtn.addEventListener('click', () => {
+  els.dirPicker.classList.remove('hidden');
+  // 初始路径：input 里如果已有，用它；否则 home
+  const seed = els.rootInput.value.trim();
+  loadDir(seed || null);
+});
+els.dirCancel.addEventListener('click', () => {
+  els.dirPicker.classList.add('hidden');
+});
+els.dirSelect.addEventListener('click', () => {
+  const p = els.dirCurrent.dataset.path || els.dirCurrent.value.trim();
+  if (p) {
+    els.rootInput.value = p;
+    els.dirPicker.classList.add('hidden');
+  }
+});
+els.dirUp.addEventListener('click', () => {
+  // 用当前路径计算父目录由后端处理：发当前路径的"父"作为 path
+  // 先拿当前显示路径，让后端 resolve
+  const cur = els.dirCurrent.dataset.path;
+  if (!cur) return;
+  // 简单本地处理父路径（兼容 win/posix）：取最后一个分隔符之前
+  const sep = cur.includes('\\') ? '\\' : '/';
+  const idx = cur.lastIndexOf(sep);
+  if (idx <= 0) return loadDir(sep);
+  loadDir(cur.slice(0, idx) || sep);
+});
+els.dirHome.addEventListener('click', () => {
+  loadDir(pickerHomePath || null);
+});
+// 在 dir-current 输入框直接回车 → 跳转到该路径
+els.dirCurrent.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const v = els.dirCurrent.value.trim();
+    if (v) loadDir(v);
   }
 });
 

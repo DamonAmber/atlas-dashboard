@@ -120,7 +120,7 @@ done
 
 **要求所有 spec 都"失败 0 项"**。任意一个失败必须先修才能发版。
 
-> 当前 spec 清单（15 个）：
+> 当前 spec 清单（16 个）：
 > - `inline-edit.spec.js` — 编辑文件名 / 备注（17 项）
 > - `sidebar.spec.js` — 侧边栏开关、宽度、动画（5 项）
 > - `sidebar-perf.spec.js` — 帧率门槛（p95 ≤ 25ms / max ≤ 50ms）
@@ -134,6 +134,7 @@ done
 > - `click-with-jitter.spec.js` — file 点击带抖动仍能打开（5 项）
 > - `folder-toggle-with-jitter.spec.js` — folder 头点击带抖动仍能折叠/展开（4 项）
 > - `search-cn-and-highlight.spec.js` — 中文单字搜索 + iframe 内高亮跳转（13 项）
+> - `dir-picker.spec.js` — 浏览器内目录选择器（14 项）
 > - `landing-demo.spec.js` — landing page demo 交互（27 项，file://，不依赖服务）
 > - `e2e-install.spec.js` — npm pack + 模拟陌生用户安装
 
@@ -402,6 +403,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.4.0** (2026-05-25) — 新功能：Dashboard 设置面板加"浏览…"目录选择器，**不用再手输扫描根的绝对路径**。后端新增 `GET /api/browse` 端点（按 OS 权限列出目录、`~` 自动展开 home），前端在 root-add 区下方展开 picker UI（面包屑路径 + ↑ 上级 + ⌂ 主目录 + 子目录列表 + 「选择此目录」），同步 `docs/index.html` 的"多扫描根"卡。新加 spec `dir-picker.spec.js`（14 项）。
 
 - **0.3.2** (2026-05-22) — 修复 folder header 点击有时不响应（要点 2-3 次才能折叠/展开）。和 0.3.0 file 那个 click bug 同源——SortableJS forceFallback 模式吞掉 click 事件。folder header 也改用 `pointerdown` 记位置 + `pointerup` 检查偏移触发 toggleFolder，绕开 click 事件链。新加 spec `folder-toggle-with-jitter.spec.js`（4 项）。
 

@@ -111,8 +111,24 @@
         <p class="muted">Atlas 会扫描以下所有目录中的 HTML 文件（按 <code>maxDepth</code> 限制深度）。</p>
         <ul class="root-list" id="root-list"></ul>
         <div class="root-add">
-          <input id="root-input" type="text" placeholder="/Users/xxx/Documents/AIProjects" />
-          <button id="root-add-btn">添加</button>
+          <input id="root-input" type="text" placeholder="点击右侧浏览，或粘贴绝对路径" />
+          <button id="root-browse-btn" type="button" title="浏览选择目录">📂 浏览…</button>
+          <button id="root-add-btn" type="button">添加</button>
+        </div>
+        <!-- 目录浏览器（默认隐藏，点"浏览..."后展开） -->
+        <div id="dir-picker" class="dir-picker hidden">
+          <div class="dir-picker-bar">
+            <button id="dir-up" type="button" title="上级目录">↑</button>
+            <button id="dir-home" type="button" title="主目录">⌂</button>
+            <input id="dir-current" type="text" class="dir-current" spellcheck="false" />
+          </div>
+          <div id="dir-list" class="dir-list">
+            <div class="dir-empty">加载中…</div>
+          </div>
+          <div class="dir-picker-footer">
+            <button id="dir-cancel" type="button">取消</button>
+            <button id="dir-select" type="button" class="primary">选择此目录</button>
+          </div>
         </div>
       </section>
       <section class="modal-section">
