@@ -374,8 +374,14 @@ body.resizing iframe { pointer-events: none; }
   background: var(--unread);
   flex: none;
 }
-.folder-actions { display: flex; gap: 1px; opacity: 0; transition: opacity .12s; flex: none; }
-.folder-header:hover .folder-actions { opacity: 1; }
+/* 同 file-actions：不 hover 时 width:0，让 count 贴最右；hover 时平滑展开 */
+.folder-actions {
+  display: flex; gap: 1px; flex: none;
+  width: 0; overflow: hidden;
+  opacity: 0;
+  transition: width .12s, opacity .12s;
+}
+.folder-header:hover .folder-actions { width: 58px; opacity: 1; }
 .folder-actions button {
   width: 18px; height: 18px;
   border: none;
@@ -436,8 +442,14 @@ body.resizing iframe { pointer-events: none; }
   flex: none;
 }
 .file:not(.unread) .unread-dot { visibility: hidden; }
-.file-actions { display: flex; gap: 1px; opacity: 0; transition: opacity .12s; flex: none; }
-.file:hover .file-actions { opacity: 1; }
+/* 默认 width:0 不占布局，让 mtime 贴最右；hover 时平滑展开 38px */
+.file-actions {
+  display: flex; gap: 1px; flex: none;
+  width: 0; overflow: hidden;
+  opacity: 0;
+  transition: width .12s, opacity .12s;
+}
+.file:hover .file-actions { width: 38px; opacity: 1; }
 .file-actions button {
   width: 18px; height: 18px;
   border: none;
@@ -811,6 +823,80 @@ kbd {
 .dir-picker-footer button.primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Toast 通知 */
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 200;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 11px 16px 11px 12px;
+  font-size: 13px;
+  color: var(--text);
+  max-width: 380px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.35), 0 2px 8px rgba(0,0,0,0.20);
+  animation: toast-in 220ms cubic-bezier(.32,.72,0,1);
+}
+.toast.fading {
+  animation: toast-out 220ms cubic-bezier(.32,.72,0,1) forwards;
+}
+.toast .toast-icon {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+}
+.toast.success .toast-icon { background: rgba(74,222,128,0.18); color: var(--ok); }
+.toast.error .toast-icon { background: rgba(255,91,107,0.18); color: var(--unread); }
+.toast.info .toast-icon { background: rgba(91,156,255,0.18); color: var(--accent); }
+.toast .toast-msg {
+  flex: 1;
+  line-height: 1.45;
+  word-break: break-all;
+}
+.toast .toast-msg strong { font-weight: 600; color: var(--text); }
+.toast .toast-msg .toast-secondary {
+  display: block;
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.toast .toast-close {
+  width: 18px; height: 18px;
+  background: transparent;
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  border-radius: 4px;
+  flex: none;
+}
+.toast .toast-close:hover { color: var(--text); background: var(--bg-hover); }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes toast-out {
+  to { opacity: 0; transform: translateX(20px); }
 }
 
 /* scrollbar */

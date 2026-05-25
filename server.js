@@ -123,7 +123,7 @@ async function walk(currentDir, scanRoot, depth, results, ignore, maxDepth) {
         const stat = await fsp.stat(full);
         const rel = path.relative(scanRoot, full);
         const segments = rel.split(path.sep);
-        const projectName = segments.length > 1 ? segments[0] : '_root';
+        const projectName = segments.length > 1 ? segments[0] : path.basename(scanRoot);
         results.push({
           path: full,
           relPath: rel,
@@ -170,7 +170,39 @@ function pruneMissing(nodes, scannedSet, seenPaths = new Set(), seenFolderIds = 
   return out;
 }
 
+// 0.4.1 迁移：旧版本中扫描根下散落的 HTML 会被归到一个叫 `_root` 的兜底分组；
+// 改成用 path.basename(scanRoot) 之后，已存在的 `_root` 文件夹按其第一个孩子推断 scanRoot 改名
+function migrateLegacyRootFolders(tree) {
+  const roots = getScanRoots();
+  const findScanRoot = (filePath) => roots.find(r => filePath === r || filePath.startsWith(r + path.sep)) || null;
+  const visit = (nodes) => {
+    for (const n of nodes) {
+      if (n.type === 'folder' && n.name === '_root') {
+        const firstFile = (n.children || []).find(c => c.type === 'file');
+        const scanRoot = firstFile && firstFile.path ? findScanRoot(firstFile.path) : null;
+        if (scanRoot) n.name = path.basename(scanRoot);
+      }
+      if (n.children) visit(n.children);
+    }
+  };
+  visit(tree);
+}
+
+// 自底向上递归丢弃 0 个 file 后代的虚拟文件夹——空壳没有展示价值
+function pruneEmptyFolders(nodes) {
+  const out = [];
+  for (const n of nodes) {
+    if (n.type === 'folder') {
+      n.children = pruneEmptyFolders(n.children || []);
+      if (n.children.length === 0) continue;
+    }
+    out.push(n);
+  }
+  return out;
+}
+
 function reconcile(store, scanned) {
+  migrateLegacyRootFolders(store.tree);
   const scannedSet = new Set(scanned.map(f => f.path));
   store.tree = pruneMissing(store.tree, scannedSet);
 
@@ -178,7 +210,6 @@ function reconcile(store, scanned) {
   collectFilePaths(store.tree, existing);
 
   const newFiles = scanned.filter(f => !existing.has(f.path));
-  if (newFiles.length === 0) return;
   newFiles.sort((a, b) => b.mtime - a.mtime);
 
   for (const file of newFiles) {
@@ -190,6 +221,8 @@ function reconcile(store, scanned) {
     }
     folder.children.unshift({ type: 'file', path: file.path });
   }
+
+  store.tree = pruneEmptyFolders(store.tree);
 
   store.tree.sort((a, b) => {
     if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
@@ -256,6 +289,8 @@ function startWatchers() {
     const base = path.basename(p);
     if (base.startsWith('.')) return true;
     if (ignore.has(base)) return true;
+    // 跳过明显不是 HTML 也不可能含 HTML 的特殊文件，避免 chokidar 试图监视它们时频繁 EUNKNOWN
+    if (base.endsWith('.sock') || base.endsWith('.lock') || base.endsWith('.pid')) return true;
     return false;
   };
 
@@ -275,7 +310,7 @@ function startWatchers() {
       try { mtime = (await fsp.stat(filePath)).mtimeMs; } catch {}
       const rel = path.relative(root, filePath);
       const segments = rel.split(path.sep);
-      const projectName = segments.length > 1 ? segments[0] : '_root';
+      const projectName = segments.length > 1 ? segments[0] : path.basename(root);
 
       const store = loadStore();
       if (kind === 'change') {
@@ -296,6 +331,11 @@ function startWatchers() {
     watcher.on('add', onEvent('add'));
     watcher.on('change', onEvent('change'));
     watcher.on('unlink', onEvent('unlink'));
+    // 必须监听 error 事件——否则 chokidar 遇到不可监视的文件（socket、deleted symlink 等）
+    // 会 emit 未处理的 error，Node 默认 crash 整个 server 进程
+    watcher.on('error', (err) => {
+      console.warn('  ! chokidar 忽略错误:', err && (err.code || err.message), err && err.path ? '@ ' + err.path : '');
+    });
     watchers.push(watcher);
   }
 }

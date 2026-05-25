@@ -93,6 +93,7 @@ jobs:
           node tests/drag-hover-expand.spec.js
           node tests/no-sortable-leak.spec.js
           node tests/v0.2-features.spec.js
+          node tests/toast.spec.js
 
       - name: Show atlas log on failure
         if: failure()

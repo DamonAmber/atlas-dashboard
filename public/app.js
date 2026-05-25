@@ -55,7 +55,42 @@ const els = {
   matchBadge: document.getElementById('match-badge'),
   matchPrev: document.getElementById('match-prev'),
   matchNext: document.getElementById('match-next'),
+  toastContainer: document.getElementById('toast-container'),
 };
+
+// ---------- Toast 通知 ----------
+// showToast({ kind: 'success'|'error'|'info', text: '主消息', secondary: '副消息可选', duration: 2800 })
+function showToast({ kind = 'info', text = '', secondary = '', duration = 2800 } = {}) {
+  if (!els.toastContainer) return;
+  const t = document.createElement('div');
+  t.className = `toast ${kind}`;
+  t.setAttribute('role', 'status');
+  const ico = kind === 'success' ? '✓' : kind === 'error' ? '✕' : 'i';
+  t.innerHTML = `
+    <span class="toast-icon">${ico}</span>
+    <div class="toast-msg"></div>
+    <button class="toast-close" aria-label="关闭">×</button>
+  `;
+  const msgEl = t.querySelector('.toast-msg');
+  msgEl.textContent = text;
+  if (secondary) {
+    const sec = document.createElement('span');
+    sec.className = 'toast-secondary';
+    sec.textContent = secondary;
+    msgEl.appendChild(sec);
+  }
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    t.classList.add('fading');
+    setTimeout(() => t.remove(), 250);
+  };
+  t.querySelector('.toast-close').addEventListener('click', close);
+  els.toastContainer.appendChild(t);
+  if (duration > 0) setTimeout(close, duration);
+  return close;
+}
 
 // ---------- 侧边栏宽度 / 收起 ----------
 const SIDEBAR_MIN = 220, SIDEBAR_MAX = 800;
@@ -1219,12 +1254,18 @@ function renderRootList(roots) {
     `;
     li.querySelector('[data-remove]').addEventListener('click', async () => {
       const next = roots.filter(x => x !== p);
-      if (next.length === 0) { alert('至少保留一个扫描根目录。'); return; }
+      if (next.length === 0) {
+        showToast({ kind: 'error', text: '至少保留一个扫描根目录' });
+        return;
+      }
       if (!confirm(`移除扫描根：\n${p}\n\n（不会删除磁盘上的任何文件）`)) return;
-      await updateConfig({ scanRoots: next });
-      const cfg = await (await fetch('/api/config')).json();
-      renderRootList(cfg.scanRoots);
-      fetchState();
+      const ok = await updateConfig({ scanRoots: next });
+      if (ok) {
+        const cfg = await (await fetch('/api/config')).json();
+        renderRootList(cfg.scanRoots);
+        fetchState();
+        showToast({ kind: 'success', text: '已移除扫描根', secondary: p });
+      }
     });
     els.rootList.appendChild(li);
   });
@@ -1234,6 +1275,12 @@ els.rootAddBtn.addEventListener('click', async () => {
   const v = els.rootInput.value.trim();
   if (!v) return;
   const cfg = await (await fetch('/api/config')).json();
+  // 已存在不重复加
+  if (cfg.scanRoots.some(p => p === v)) {
+    showToast({ kind: 'info', text: '该目录已经在扫描列表里', secondary: v });
+    els.rootInput.value = '';
+    return;
+  }
   const next = [...cfg.scanRoots, v];
   const ok = await updateConfig({ scanRoots: next });
   if (ok) {
@@ -1241,6 +1288,7 @@ els.rootAddBtn.addEventListener('click', async () => {
     const cfg2 = await (await fetch('/api/config')).json();
     renderRootList(cfg2.scanRoots);
     fetchState();
+    showToast({ kind: 'success', text: '已添加扫描根', secondary: v });
   }
 });
 
@@ -1339,7 +1387,7 @@ async function updateConfig(patch) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    alert('保存失败：' + (err.error || res.status));
+    showToast({ kind: 'error', text: '保存失败', secondary: err.error || ('HTTP ' + res.status), duration: 4500 });
     return false;
   }
   return true;

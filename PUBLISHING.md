@@ -404,6 +404,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
 
+- **0.4.1** (2026-05-25) — ① 新功能：增/删扫描根、保存失败时给右下角 toast 反馈（success / info / error 三类，~2.8s 自动消失，可手动关闭）。② 重要稳定性修复：当扫描根下存在 unix socket / 锁文件（如 `axon.sock`）时，chokidar 抛 UNKNOWN error 直接打挂 server。给 watcher 注册 error handler 并把 `.sock/.lock/.pid` 加入忽略列表。③ 命名优化：散落在扫描根直接根目录下的 HTML 之前会被归到一个叫 `_root` 的兜底虚拟文件夹，开发味儿太重；现在 fallback 改成 `path.basename(scanRoot)`（如 `OtherHTML`），并提供一次性自动迁移把已有 `_root` 改名。④ 0 个 HTML 后代的空虚拟文件夹自动从树里剔除，避免删 HTML 后留一堆空壳 noise。新加 spec `toast.spec.js`（11 项），并加入 npm test 与 CI workflow。
+
 - **0.4.0** (2026-05-25) — 新功能：Dashboard 设置面板加"浏览…"目录选择器，**不用再手输扫描根的绝对路径**。后端新增 `GET /api/browse` 端点（按 OS 权限列出目录、`~` 自动展开 home），前端在 root-add 区下方展开 picker UI（面包屑路径 + ↑ 上级 + ⌂ 主目录 + 子目录列表 + 「选择此目录」），同步 `docs/index.html` 的"多扫描根"卡。新加 spec `dir-picker.spec.js`（14 项）。
 
 - **0.3.2** (2026-05-22) — 修复 folder header 点击有时不响应（要点 2-3 次才能折叠/展开）。和 0.3.0 file 那个 click bug 同源——SortableJS forceFallback 模式吞掉 click 事件。folder header 也改用 `pointerdown` 记位置 + `pointerup` 检查偏移触发 toggleFolder，绕开 click 事件链。新加 spec `folder-toggle-with-jitter.spec.js`（4 项）。
