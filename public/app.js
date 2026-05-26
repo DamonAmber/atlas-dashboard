@@ -2263,6 +2263,17 @@ async function openShareModal(filePath) {
       body: JSON.stringify({ path: filePath }),
     });
     if (!r.ok) {
+      // 404 → 大概率是 server 进程是旧版（npm i -g 升级了文件但没 atlas restart）
+      // 旧 server.js 没注册 /api/share/* 路由，Express 默认返 404
+      if (r.status === 404) {
+        showToast({
+          kind: 'error',
+          text: '分享功能不可用',
+          secondary: 'Atlas 服务还在跑旧版本——请在终端运行 atlas restart 重启',
+          duration: 7000,
+        });
+        return;
+      }
       const err = await r.json().catch(() => ({}));
       showToast({ kind: 'error', text: '启动分享失败', secondary: err.error || ('HTTP ' + r.status) });
       return;
@@ -2317,4 +2328,26 @@ els.shareStopBtn.addEventListener('click', async () => {
 });
 
 // 启动时拉一次分享列表（让已分享角标第一时间出现）
-refreshSharesState();
+// 同时也作为"server 是否新版"的特征检测——/api/shares 是 0.4.4+ 引入
+// 如果 404，说明 daemon 进程跑的是 npm 升级前的旧 server.js
+(async () => {
+  try {
+    const r = await fetch('/api/shares', { cache: 'no-store' });
+    if (r.status === 404) {
+      showToast({
+        kind: 'info',
+        text: 'Atlas 服务是旧版本',
+        secondary: '部分新功能（分享 / 归档 / 导出 PDF）可能不可用——在终端运行 atlas restart 重启即可',
+        duration: 8000,
+      });
+      return;
+    }
+    if (r.ok) {
+      const data = await r.json();
+      state.sharesByPath = new Map();
+      for (const s of data.shares || []) state.sharesByPath.set(s.path, s);
+      state.lanIps = data.lanIps || [];
+      render();
+    }
+  } catch {}
+})();

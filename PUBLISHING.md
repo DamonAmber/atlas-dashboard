@@ -404,6 +404,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
 
+- **0.4.6** (2026-05-26) — UX 修复：用户 `npm i -g` 升级 atlas 但忘了 `atlas restart` 时，跑着的 daemon 还是旧版本 server.js（无 `/api/share/*` 路由）→ 点分享按钮报 `HTTP 404` 让人摸不着头脑。① 启动时探测 `/api/shares`（0.4.4+ 新加端点），404 就弹 info toast 提示"Atlas 服务是旧版本——在终端运行 atlas restart 重启即可"。② 点 share 按钮命中 404 时改文案："分享功能不可用 / Atlas 服务还在跑旧版本——请在终端运行 atlas restart 重启"。
+
 - **0.4.5** (2026-05-26) — ① 新功能：**Atlas favicon**——蓝紫渐变圆角方块 + 白色 line 风 A 字母，沿用 sidebar brand mark 视觉，SVG 矢量，128/48/32/16 全尺寸清晰。同时挂到 dashboard 和 landing page。② UX：顶栏右上角加**分享按钮** `#btn-share`——点击 = 对当前预览文件 openShareModal（已有 token 复用）。当前文件正在分享时按钮变 accent 蓝边框 + 蓝色 icon，一眼看出状态（不用 hover 文件行才看到角标）。③ UX：「在浏览器新标签打开」按钮 ⤴ emoji 容易和分享 icon 混淆，换成 lucide 风的 external-link line icon（方框 + 右上斜出箭头 + 内部小开口），和分享按钮的"三圆点连线"完全区分。
 
 - **0.4.4** (2026-05-26) — ① 新功能：**局域网分享 + 二维码**。文件 hover 出 🔗 按钮，弹 modal 含大二维码 + 三种 URL（多网卡 + 本机）+ 复制按钮 + 停止按钮。token 16 字符不可猜，store 持久化（atlas 重启不失效）。**安全**：Express 中间件按来源 IP 分流——localhost 全开 dashboard，LAN 访问 403，仅放行 `/share/<token>/*`，path traversal 严格防御（resolve 后必须仍在原 HTML 同目录子树）。② 新功能：归档项目分组——删除文件夹不再"删完自动回来"，而是进入归档列表，下次扫描跳过。磁盘文件不动，设置面板可恢复。③ 安全开关：设置面板加"停止全部分享"红色按钮（评审完一键关）。④ UX：设置 icon 从 ⚙ emoji（在 light 主题下渲染像眼睛）换成 SVG 齿轮 line icon，识别度高。⑤ 启动 banner 多打印一行 LAN IP 让用户知道"分享时同事会看到的 URL 是什么"。
