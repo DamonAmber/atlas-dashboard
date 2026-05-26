@@ -4,6 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Atlas — HTML 文档总览</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="apple-touch-icon" href="/favicon.svg" />
   <link rel="stylesheet" href="/styles.css" />
   <script>
     // 提前同步设置初始状态，避免首次加载看到收起动画
@@ -105,9 +107,24 @@
             <path fill="currentColor" d="M5 1.5h4.5L13 5v9.5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V2.5a1 1 0 0 1 1-1zm4 1H5v12h7V5.5H10a1 1 0 0 1-1-1V2.5zM6.5 7.5h3v1h-3v-1zm0 2h3v1h-3v-1zm0 2h2v1h-2v-1z"/>
           </svg>
         </button>
+        <button id="btn-share" disabled title="分享到局域网（生成可访问链接 + 二维码）" aria-label="分享到局域网">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="4" cy="8" r="2"/>
+            <circle cx="12" cy="4" r="2"/>
+            <circle cx="12" cy="12" r="2"/>
+            <path d="M5.7 7.1L10.3 4.9"/>
+            <path d="M5.7 8.9L10.3 11.1"/>
+          </svg>
+        </button>
         <button id="btn-mark-unread" disabled title="标为未读">未读</button>
         <button id="btn-reveal" disabled title="在访达中显示">📂</button>
-        <button id="btn-open-external" disabled title="在浏览器新标签打开">⤴</button>
+        <button id="btn-open-external" disabled title="在浏览器新标签打开" aria-label="在浏览器新标签打开">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 3h4v4"/>
+            <path d="M13 3L7.5 8.5"/>
+            <path d="M12 9v3.5a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-7a.5.5 0 0 1 .5-.5H8"/>
+          </svg>
+        </button>
         <button id="btn-copy-path" disabled title="复制文件路径">📋</button>
       </div>
     </header>

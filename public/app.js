@@ -37,6 +37,7 @@ const els = {
   btnOpenExternal: document.getElementById('btn-open-external'),
   btnReloadPreview: document.getElementById('btn-reload-preview'),
   btnExportPdf: document.getElementById('btn-export-pdf'),
+  btnShare: document.getElementById('btn-share'),
   btnCopyPath: document.getElementById('btn-copy-path'),
   // settings modal
   modal: document.getElementById('settings-modal'),
@@ -1049,6 +1050,9 @@ function setActiveFile(filePath, doNavigate) {
   els.btnCopyPath.disabled = false;
   els.btnReloadPreview.disabled = false;
   els.btnExportPdf.disabled = false;
+  els.btnShare.disabled = false;
+  // 已在分享中的文件，让顶栏 share 按钮高亮提示状态
+  els.btnShare.classList.toggle('shared', state.sharesByPath && state.sharesByPath.has(file.path));
 
   if (doNavigate) {
     els.preview.classList.remove('hidden');
@@ -1294,6 +1298,10 @@ els.btnOpenExternal.addEventListener('click', () => {
   if (!state.activeFilePath) return;
   const f = state.files[state.activeFilePath];
   if (f) window.open(f.url, '_blank');
+});
+els.btnShare.addEventListener('click', () => {
+  if (!state.activeFilePath) return;
+  openShareModal(state.activeFilePath);
 });
 // 刷新当前 iframe 内的文档（不刷整个 Dashboard，保留树展开状态、滚动、未读等）
 els.btnReloadPreview.addEventListener('click', () => {

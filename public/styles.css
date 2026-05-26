@@ -539,6 +539,12 @@ body.resizing iframe { pointer-events: none; }
 }
 .file.shared .share-badge { display: inline-flex; }
 
+/* 顶栏分享按钮：当前文件已在分享中时 → accent 色 */
+#btn-share.shared {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 /* ---------- 分享 modal ---------- */
 .share-panel {
   max-width: 520px;
