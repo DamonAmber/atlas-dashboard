@@ -9,6 +9,7 @@ const chokidar = require('chokidar');
 const { EventEmitter } = require('events');
 const userPaths = require('./lib/paths');
 const updateCheck = require('./lib/update-check');
+const pdfExport = require('./lib/pdf-export');
 const pkg = require('./package.json');
 
 // 路径注入：CLI（bin/atlas.js）通过环境变量传，开发模式落到默认 ~/.atlas/
@@ -570,6 +571,47 @@ app.post('/api/reveal', (req, res) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ ok: true });
   });
+});
+
+// 把 HTML 文件导出为 PDF——用本机 Chromium 系浏览器（Chrome / Edge / Brave / Arc / Chromium）
+// headless 模式渲染，保存到 ~/Downloads/。找不到 chromium 时返回 reason='no-chromium'，前端降级走 window.print()
+// SSE 流式：launching → rendering → writing → done | error
+app.post('/api/export-pdf', async (req, res) => {
+  const filePath = req.body && req.body.path;
+  const fileName = req.body && req.body.fileName;
+
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.flushHeaders?.();
+  const send = (payload) => { try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch {} };
+
+  if (!filePath || !isPathInScanRoots(filePath)) {
+    send({ phase: 'error', reason: 'invalid-path', message: '路径非法' });
+    return res.end();
+  }
+  if (!filePath.toLowerCase().endsWith('.html') && !filePath.toLowerCase().endsWith('.htm')) {
+    send({ phase: 'error', reason: 'unsupported', message: '只支持 HTML 文件' });
+    return res.end();
+  }
+  try {
+    const result = await pdfExport.exportPdf(
+      { htmlPath: filePath, fileName },
+      (phaseEvent) => send(phaseEvent),  // 把每个阶段事件转发为 SSE
+    );
+    if (result.ok) {
+      send({ phase: 'done', ...result });
+    } else {
+      send({ phase: 'error', ...result });
+    }
+    res.end();
+  } catch (err) {
+    send({ phase: 'error', reason: 'unexpected', message: err.message });
+    res.end();
+  }
 });
 
 // 升级信息：基于缓存返回，server 启动时已经在后台刷新缓存

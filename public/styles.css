@@ -169,9 +169,12 @@ body.resizing iframe { pointer-events: none; }
 .toggle-sidebar:active { transform: scale(0.95); }
 .main-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-.actions button.scanning svg {
+.actions button.scanning svg,
+.main-actions button.spinning svg {
   animation: spin 0.9s linear infinite;
 }
+
+/* sort 按钮已迁移到 .sort-bar 分段控件 */
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -195,13 +198,86 @@ body.resizing iframe { pointer-events: none; }
   min-width: 0;
 }
 .filter input[type="search"]:focus { border-color: var(--accent); }
-.only-unread {
-  display: flex; align-items: center; gap: 4px;
-  font-size: 11px; color: var(--text-dim); cursor: pointer;
+
+/* 排序 + 仅未读：紧贴搜索框下方一行
+ * 设计风格：IDE 工具栏 inline 风——无外框、无填充按钮，靠文字色 + 短下划线表态
+ * 不抢戏，密度紧凑（高度 28px 含 padding）
+ */
+.sort-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-faint);
   user-select: none;
+}
+.sort-bar-label {
+  flex: none;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-right: 4px;
+}
+.seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  flex: none;
+}
+.seg-btn {
+  position: relative;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  height: 24px;
+  padding: 0 9px;
+  cursor: pointer;
+  font-family: inherit;
+  border-radius: 4px;
   white-space: nowrap;
+  transition: color var(--dur-fast), background var(--dur-fast);
+}
+.seg-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.seg-btn[aria-checked="true"] {
+  color: var(--accent);
+  font-weight: 600;
+  background: transparent;
+}
+/* 选中态：靠底部 2px accent 下划线（短，仅在文字下方）+ accent 文字色——足够识别但不抢戏 */
+.seg-btn[aria-checked="true"]::after {
+  content: "";
+  position: absolute;
+  left: 9px; right: 9px; bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+}
+.seg-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(91, 156, 255, 0.25);
+}
+
+.only-unread {
+  margin-left: auto;        /* 推到最右，和 seg 拉开距离 */
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  flex: none;
 }
 .only-unread input { margin: 0; cursor: pointer; }
+.only-unread:hover { color: var(--text); }
 
 /* 最近打开 */
 .recent-bar {
@@ -1166,6 +1242,43 @@ kbd {
   margin-top: 3px;
   font-size: 11.5px;
   color: var(--text-faint);
+}
+.toast .toast-msg .toast-action {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11.5px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.toast .toast-msg .toast-action:hover { filter: brightness(1.15); }
+
+/* progress 模式的 toast：不自动消失，底部一条流动 indeterminate 条 */
+.toast.toast-progress {
+  padding-bottom: 14px;
+}
+.toast.toast-progress .toast-icon {
+  animation: spin 1.4s linear infinite;
+}
+.toast.toast-progress .toast-progress-bar {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 3px;
+  background: var(--bg-hover);
+  overflow: hidden;
+  border-radius: 0 0 8px 8px;
+}
+.toast.toast-progress .toast-progress-bar > div {
+  position: absolute;
+  top: 0; left: -35%; bottom: 0;
+  width: 35%;
+  background: var(--accent);
+  border-radius: 999px;
+  animation: ub-prog 1.6s cubic-bezier(.4,0,.2,1) infinite;
 }
 .toast .toast-close {
   width: 18px; height: 18px;

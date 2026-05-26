@@ -38,6 +38,14 @@
 
     <div class="filter">
       <input id="search" type="search" placeholder="搜索文件名 / 备注 / 路径 / 内容（按 / 聚焦）" />
+    </div>
+    <div class="sort-bar" role="group" aria-label="排序与筛选">
+      <span class="sort-bar-label">排序</span>
+      <div class="seg" role="radiogroup" aria-label="排序方式">
+        <button class="seg-btn" type="button" data-sort="name"   role="radio" aria-checked="true">名称</button>
+        <button class="seg-btn" type="button" data-sort="mtime"  role="radio" aria-checked="false">时间</button>
+        <button class="seg-btn" type="button" data-sort="custom" role="radio" aria-checked="false" title="拖动文件即自动切到此模式">自定义</button>
+      </div>
       <label class="only-unread">
         <input type="checkbox" id="only-unread" />
         <span>仅未读</span>
@@ -82,6 +90,16 @@
           <span class="dot"></span>
           <span class="text">新版可用</span>
         </a>
+        <button id="btn-reload-preview" disabled title="重新加载当前文档（不刷整个 Dashboard）" aria-label="刷新当前文档">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path fill="currentColor" d="M8 3a5 5 0 0 0-4.546 2.916.75.75 0 1 1-1.362-.633A6.5 6.5 0 0 1 14.5 7.75v.5l1.22-1.22a.75.75 0 1 1 1.06 1.06l-2.5 2.5a.75.75 0 0 1-1.06 0l-2.5-2.5a.75.75 0 1 1 1.06-1.06l1.22 1.22v-.5A5 5 0 0 0 8 3Zm0 10a5 5 0 0 0 4.546-2.916.75.75 0 1 1 1.362.633A6.5 6.5 0 0 1 1.5 8.25v-.5L.28 8.97a.75.75 0 0 1-1.06-1.06l2.5-2.5a.75.75 0 0 1 1.06 0l2.5 2.5a.75.75 0 0 1-1.06 1.06L3 7.75v.5A5 5 0 0 0 8 13Z"/>
+          </svg>
+        </button>
+        <button id="btn-export-pdf" disabled title="导出为 PDF 保存到 Downloads" aria-label="导出为 PDF">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path fill="currentColor" d="M5 1.5h4.5L13 5v9.5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V2.5a1 1 0 0 1 1-1zm4 1H5v12h7V5.5H10a1 1 0 0 1-1-1V2.5zM6.5 7.5h3v1h-3v-1zm0 2h3v1h-3v-1zm0 2h2v1h-2v-1z"/>
+          </svg>
+        </button>
         <button id="btn-mark-unread" disabled title="标为未读">未读</button>
         <button id="btn-reveal" disabled title="在访达中显示">📂</button>
         <button id="btn-open-external" disabled title="在浏览器新标签打开">⤴</button>

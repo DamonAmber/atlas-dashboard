@@ -9,6 +9,9 @@ const state = {
   collapsed: new Set(JSON.parse(localStorage.getItem('atlas:collapsed') || '[]')),
   recentCollapsed: localStorage.getItem('atlas:recentCollapsed') === '1',
   notifyEnabled: localStorage.getItem('atlas:notify') === '1',
+  // 'name' | 'mtime' | 'custom'：folder.children 排序模式
+  // 默认按名称——一系列文档（v1/v2/v3）会自动聚合在一起
+  sortMode: localStorage.getItem('atlas:sortMode') || 'name',
 };
 
 const els = {
@@ -30,6 +33,8 @@ const els = {
   btnMarkUnread: document.getElementById('btn-mark-unread'),
   btnReveal: document.getElementById('btn-reveal'),
   btnOpenExternal: document.getElementById('btn-open-external'),
+  btnReloadPreview: document.getElementById('btn-reload-preview'),
+  btnExportPdf: document.getElementById('btn-export-pdf'),
   btnCopyPath: document.getElementById('btn-copy-path'),
   // settings modal
   modal: document.getElementById('settings-modal'),
@@ -53,6 +58,7 @@ const els = {
   recentToggle: document.getElementById('recent-toggle'),
   updateBadge: document.getElementById('update-badge'),
   updateBanner: document.getElementById('update-banner'),
+  segButtons: document.querySelectorAll('.seg-btn[data-sort]'),
   matchBadge: document.getElementById('match-badge'),
   matchPrev: document.getElementById('match-prev'),
   matchNext: document.getElementById('match-next'),
@@ -60,25 +66,29 @@ const els = {
 };
 
 // ---------- Toast 通知 ----------
-// showToast({ kind: 'success'|'error'|'info', text: '主消息', secondary: '副消息可选', duration: 2800 })
-function showToast({ kind = 'info', text = '', secondary = '', duration = 2800 } = {}) {
-  if (!els.toastContainer) return;
+// showToast({ kind, text, secondary, duration, progress })
+//   - progress: true → 不自动消失（duration 被忽略）+ 内部 indeterminate 进度条
+//   - 返回 { close, setText, setSecondary }——progress 模式下需要外部更新阶段文字
+function showToast({ kind = 'info', text = '', secondary = '', duration = 2800, progress = false } = {}) {
+  if (!els.toastContainer) return { close: () => {}, setText: () => {}, setSecondary: () => {} };
   const t = document.createElement('div');
-  t.className = `toast ${kind}`;
+  t.className = `toast ${kind}` + (progress ? ' toast-progress' : '');
   t.setAttribute('role', 'status');
-  const ico = kind === 'success' ? '✓' : kind === 'error' ? '✕' : 'i';
+  const ico = progress ? '⟳' : (kind === 'success' ? '✓' : kind === 'error' ? '✕' : 'i');
   t.innerHTML = `
     <span class="toast-icon">${ico}</span>
     <div class="toast-msg"></div>
     <button class="toast-close" aria-label="关闭">×</button>
+    ${progress ? '<div class="toast-progress-bar"><div></div></div>' : ''}
   `;
   const msgEl = t.querySelector('.toast-msg');
-  msgEl.textContent = text;
+  const mainTextNode = document.createTextNode(text);
+  msgEl.appendChild(mainTextNode);
+  const secEl = document.createElement('span');
+  secEl.className = 'toast-secondary';
   if (secondary) {
-    const sec = document.createElement('span');
-    sec.className = 'toast-secondary';
-    sec.textContent = secondary;
-    msgEl.appendChild(sec);
+    secEl.textContent = secondary;
+    msgEl.appendChild(secEl);
   }
   let closed = false;
   const close = () => {
@@ -87,10 +97,19 @@ function showToast({ kind = 'info', text = '', secondary = '', duration = 2800 }
     t.classList.add('fading');
     setTimeout(() => t.remove(), 250);
   };
+  const setText = (s) => { mainTextNode.nodeValue = s || ''; };
+  const setSecondary = (s) => {
+    if (s) {
+      secEl.textContent = s;
+      if (!secEl.parentNode) msgEl.appendChild(secEl);
+    } else if (secEl.parentNode) {
+      secEl.remove();
+    }
+  };
   t.querySelector('.toast-close').addEventListener('click', close);
   els.toastContainer.appendChild(t);
-  if (duration > 0) setTimeout(close, duration);
-  return close;
+  if (!progress && duration > 0) setTimeout(close, duration);
+  return { close, setText, setSecondary, el: t };
 }
 
 // ---------- 侧边栏宽度 / 收起 ----------
@@ -342,6 +361,51 @@ function renderRecent() {
   }
 }
 
+// ---------- 排序 ----------
+// 三档：name（默认） / mtime / custom
+// folder 始终在 file 之前；folder 之间按 name 排（不受 mode 影响——避免顶层文件夹乱跳）
+// file 之间按 mode 排：custom 保持原顺序（不动）
+function sortChildren(children, mode) {
+  if (mode === 'custom') return children;
+  return [...children].sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+    if (a.type === 'folder') return (a.name || '').localeCompare(b.name || '', 'zh');
+    // file
+    const fa = state.files[a.path];
+    const fb = state.files[b.path];
+    if (!fa || !fb) return 0;
+    if (mode === 'mtime') return (fb.mtime || 0) - (fa.mtime || 0);
+    // name 模式：用 alias > basename，localeCompare zh + numeric（v2 < v10 这种正确）
+    const na = (fa.alias || fa.name || '').toLowerCase();
+    const nb = (fb.alias || fb.name || '').toLowerCase();
+    return na.localeCompare(nb, 'zh', { numeric: true });
+  });
+}
+
+function updateSortBar() {
+  const mode = state.sortMode;
+  els.segButtons.forEach(btn => {
+    const isActive = btn.dataset.sort === mode;
+    btn.setAttribute('aria-checked', String(isActive));
+  });
+}
+
+function setSortMode(mode, opts = {}) {
+  state.sortMode = mode;
+  localStorage.setItem('atlas:sortMode', mode);
+  updateSortBar();
+  if (!opts.noRender) render();
+}
+
+els.segButtons.forEach(btn => {
+  btn.addEventListener('click', () => {
+    const mode = btn.dataset.sort;
+    if (mode === state.sortMode) return;
+    setSortMode(mode);
+  });
+});
+updateSortBar();
+
 function renderNode(node) {
   if (node.type === 'folder') return renderFolder(node);
   if (node.type === 'file') return renderFile(state.files[node.path], node);
@@ -356,10 +420,10 @@ function renderFolder(folder) {
   folderEl.dataset.folderId = folder.id;
 
   const counts = countDescendants(folder);
-  const visibleChildren = folder.children.filter(c => {
+  const visibleChildren = sortChildren(folder.children.filter(c => {
     if (!state.search && !state.onlyUnread) return true;
     return nodeMatches(c);
-  });
+  }), state.sortMode);
 
   const header = document.createElement('div');
   header.className = 'folder-header';
@@ -744,6 +808,15 @@ function initSortables() {
         isDragging = false;
         clearDragHover();
         rebuildTreeFromDom();
+        // 在 name / mtime 模式下拖动 → 自动切到 custom：
+        // 当前 DOM 顺序就是用户拖完后的最终态，rebuildTreeFromDom 已写入 state.tree
+        // 不需要再 renderTree——custom 模式下渲染就按数据顺序，DOM 已正确
+        if (state.sortMode !== 'custom') {
+          state.sortMode = 'custom';
+          localStorage.setItem('atlas:sortMode', 'custom');
+          updateSortBar();
+          // 不发 toast——分段控件上的"自定义"按钮高亮变化本身就是反馈
+        }
       },
     }));
   }
@@ -910,6 +983,8 @@ function setActiveFile(filePath, doNavigate) {
   els.btnReveal.disabled = false;
   els.btnOpenExternal.disabled = false;
   els.btnCopyPath.disabled = false;
+  els.btnReloadPreview.disabled = false;
+  els.btnExportPdf.disabled = false;
 
   if (doNavigate) {
     els.preview.classList.remove('hidden');
@@ -1155,6 +1230,188 @@ els.btnOpenExternal.addEventListener('click', () => {
   if (!state.activeFilePath) return;
   const f = state.files[state.activeFilePath];
   if (f) window.open(f.url, '_blank');
+});
+// 刷新当前 iframe 内的文档（不刷整个 Dashboard，保留树展开状态、滚动、未读等）
+els.btnReloadPreview.addEventListener('click', () => {
+  if (!state.activeFilePath) return;
+  const ifr = els.preview;
+  if (!ifr || !ifr.src) return;
+  const filePath = state.activeFilePath;
+  els.btnReloadPreview.classList.add('spinning');
+  // 用 contentWindow.location.reload 而非 src 重赋值——保留 hash / location.search 不重置
+  try {
+    if (ifr.contentWindow && ifr.contentWindow.location) {
+      ifr.contentWindow.location.reload();
+    } else {
+      // 兜底：跨源等无法访问 contentWindow 时用 src 重赋值
+      const u = ifr.src;
+      ifr.src = 'about:blank';
+      requestAnimationFrame(() => { ifr.src = u; });
+    }
+  } catch {
+    const u = ifr.src;
+    ifr.src = 'about:blank';
+    requestAnimationFrame(() => { ifr.src = u; });
+  }
+  // load 事件 = 加载完成；超时 1.5s 兜底防止动画卡住
+  let cleared = false;
+  const stop = () => {
+    if (cleared) return;
+    cleared = true;
+    els.btnReloadPreview.classList.remove('spinning');
+  };
+  ifr.addEventListener('load', stop, { once: true });
+  setTimeout(stop, 1500);
+
+  // 文件外部更新时会被自动标回未读；reload 等同于"再次查看"，标为已读
+  const file = state.files[filePath];
+  if (file && file.unread) {
+    file.unread = false;
+    file.seenAt = Date.now();
+    fetch('/api/seen', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: filePath }),
+    }).catch(() => {});
+    updateUnreadDecorations();
+  }
+});
+
+// 导出 PDF：后端 SSE 流推 phase 事件，前端 progress toast 实时切换阶段文字
+// 找不到 chromium 时降级——调 iframe.contentWindow.print() 弹原生打印对话框
+els.btnExportPdf.addEventListener('click', async () => {
+  if (!state.activeFilePath) return;
+  const filePath = state.activeFilePath;
+  const file = state.files[filePath];
+  if (!file) return;
+
+  els.btnExportPdf.disabled = true;
+  els.btnExportPdf.classList.add('spinning');
+
+  const stem = (file.alias || file.name.replace(/\.html?$/i, '')).trim() || 'export';
+
+  // 进度 toast——不自动消失，阶段切换时更新文字
+  const prog = showToast({
+    kind: 'info',
+    progress: true,
+    text: '导出 PDF',
+    secondary: '准备启动浏览器…',
+  });
+
+  let resp;
+  try {
+    resp = await fetch('/api/export-pdf', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: filePath, fileName: stem }),
+    });
+  } catch (err) {
+    prog.close();
+    showToast({ kind: 'error', text: '导出失败', secondary: '网络错误：' + err.message, duration: 5000 });
+    els.btnExportPdf.classList.remove('spinning');
+    els.btnExportPdf.disabled = false;
+    return;
+  }
+
+  if (!resp.ok || !resp.body) {
+    prog.close();
+    showToast({ kind: 'error', text: '导出失败', secondary: 'HTTP ' + resp.status, duration: 5000 });
+    els.btnExportPdf.classList.remove('spinning');
+    els.btnExportPdf.disabled = false;
+    return;
+  }
+
+  // 流式读 SSE
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let lastResult = null;
+
+  while (true) {
+    let chunk;
+    try { chunk = await reader.read(); } catch { break; }
+    if (chunk.done) break;
+    buf += decoder.decode(chunk.value, { stream: true });
+    const events = buf.split('\n\n');
+    buf = events.pop() || '';
+    for (const ev of events) {
+      const m = ev.match(/^data:\s*(.+)$/m);
+      if (!m) continue;
+      let data; try { data = JSON.parse(m[1]); } catch { continue; }
+      lastResult = data;
+      // 把每个阶段事件反映到 toast 的副消息
+      switch (data.phase) {
+        case 'launching': prog.setSecondary(data.message || '启动浏览器…'); break;
+        case 'rendering': prog.setSecondary(data.message || '正在渲染页面…'); break;
+        case 'writing':   prog.setSecondary(data.message || '正在写入 PDF…'); break;
+        case 'retrying':  prog.setSecondary(data.message || '首次失败，重试中…'); break;
+        // done / error 在循环结束后统一处理
+      }
+    }
+  }
+
+  els.btnExportPdf.classList.remove('spinning');
+  els.btnExportPdf.disabled = false;
+  prog.close();
+
+  if (!lastResult) {
+    showToast({ kind: 'error', text: '导出失败', secondary: '没有收到响应', duration: 5000 });
+    return;
+  }
+
+  if (lastResult.phase === 'done' && lastResult.ok) {
+    const t = showToast({
+      kind: 'success',
+      text: '✓ 已保存到 Downloads',
+      secondary: lastResult.savedPath.replace(/^.*\/Downloads\//, 'Downloads/'),
+      duration: 6000,
+    });
+    // 在 toast msg 里追加"在访达中显示"按钮
+    const msgEl = t.el && t.el.querySelector('.toast-msg');
+    if (msgEl) {
+      const link = document.createElement('button');
+      link.className = 'toast-action';
+      link.textContent = '在访达中显示';
+      link.addEventListener('click', (e) => {
+        e.stopPropagation();
+        fetch('/api/reveal', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path: lastResult.savedPath }),
+        }).catch(() => {});
+      });
+      msgEl.appendChild(link);
+    }
+    return;
+  }
+
+  // 找不到 chromium → 降级走 A：iframe.contentWindow.print()
+  if (lastResult.reason === 'no-chromium') {
+    showToast({
+      kind: 'info',
+      text: '未检测到 Chrome / Edge / Brave，使用浏览器打印框导出',
+      secondary: '在弹出的对话框里"目标"选「另存为 PDF」',
+      duration: 4500,
+    });
+    setTimeout(() => {
+      try {
+        if (els.preview && els.preview.contentWindow) {
+          els.preview.contentWindow.focus();
+          els.preview.contentWindow.print();
+        }
+      } catch (err) {
+        showToast({ kind: 'error', text: '调起打印失败', secondary: err.message });
+      }
+    }, 600);
+    return;
+  }
+
+  showToast({
+    kind: 'error',
+    text: '导出 PDF 失败',
+    secondary: lastResult.message || lastResult.reason || '未知错误',
+    duration: 5000,
+  });
 });
 els.btnCopyPath.addEventListener('click', () => {
   if (!state.activeFilePath) return;
