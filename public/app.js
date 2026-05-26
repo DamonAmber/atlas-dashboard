@@ -12,6 +12,8 @@ const state = {
   // 'name' | 'mtime' | 'custom'：folder.children 排序模式
   // 默认按名称——一系列文档（v1/v2/v3）会自动聚合在一起
   sortMode: localStorage.getItem('atlas:sortMode') || 'name',
+  // path → { token, urls } —— 用于文件行渲染时判断是否已分享 + 状态角标
+  sharesByPath: new Map(),
 };
 
 const els = {
@@ -39,6 +41,15 @@ const els = {
   // settings modal
   modal: document.getElementById('settings-modal'),
   rootList: document.getElementById('root-list'),
+  archiveList: document.getElementById('archive-list'),
+  shareModal: document.getElementById('share-modal'),
+  shareFilename: document.getElementById('share-filename'),
+  shareQr: document.getElementById('share-qr'),
+  shareUrls: document.getElementById('share-urls'),
+  shareOpenBtn: document.getElementById('share-open-btn'),
+  shareStopBtn: document.getElementById('share-stop-btn'),
+  shareList: document.getElementById('share-list'),
+  shareStopAllBtn: document.getElementById('share-stop-all-btn'),
   rootInput: document.getElementById('root-input'),
   rootAddBtn: document.getElementById('root-add-btn'),
   rootBrowseBtn: document.getElementById('root-browse-btn'),
@@ -251,6 +262,7 @@ async function fetchState() {
     state.tree = data.tree;
     state.files = data.files;
     state.recent = Array.isArray(data.recent) ? data.recent : [];
+    state.archivedProjects = Array.isArray(data.archivedProjects) ? data.archivedProjects : [];
     const unread = Object.values(data.files).filter(f => f.unread).length;
     els.stats.textContent = `${Object.keys(data.files).length} 个文档 · ${unread} 未读`;
     setSaveStatus('idle');
@@ -536,12 +548,20 @@ function renderFile(file, node) {
   if (snippet) titleParts.push('🔍 ' + snippet);
   fileEl.title = titleParts.join('\n');
   const displayName = file.alias || file.name.replace(/\.html$/i, '');
+  const isShared = state.sharesByPath && state.sharesByPath.has(file.path);
+  if (isShared) fileEl.classList.add('shared');
   fileEl.innerHTML = `
     <span class="unread-dot"></span>
     <span class="folder-icon">📄</span>
     <span class="file-name" data-path="${escapeHtml(file.path)}">${escapeHtml(displayName)}</span>
+    <span class="share-badge" title="正在分享到局域网" aria-hidden="${isShared ? 'false' : 'true'}">
+      <svg viewBox="0 0 12 12" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7L7 5M4 8a2 2 0 0 1 0-3l1-1M8 4a2 2 0 0 1 0 3l-1 1"/></svg>
+    </span>
     <span class="file-mtime">${fmtMtime(file.mtime)}</span>
     <span class="file-actions">
+      <button data-act="share" title="分享到局域网（生成可访问链接 + 二维码）">
+        <svg viewBox="0 0 14 14" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8L9 5M5 8a2 2 0 0 1-2-2 2 2 0 0 1 4 0M9 5a2 2 0 0 1 2-2 2 2 0 0 1 0 4 2 2 0 0 1-2-2M5 8a2 2 0 0 0-2 2 2 2 0 0 0 4 0 2 2 0 0 0-2-2"/></svg>
+      </button>
       <button data-act="alias" title="备注名（不改源文件名）">✎</button>
       <button data-act="reveal" title="在访达中显示">📂</button>
     </span>
@@ -584,6 +604,10 @@ function renderFile(file, node) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: file.path }),
     });
+  });
+  fileEl.querySelector('[data-act="share"]').addEventListener('click', (e) => {
+    e.stopPropagation();
+    openShareModal(file.path);
   });
   return fileEl;
 }
@@ -737,7 +761,47 @@ function startEditAlias(file, nameEl) {
 }
 
 function deleteFolder(folder) {
+  // 判断这个 folder 是不是磁盘扫描自动建的"项目分组"（projectName 同名）：
+  // 如果是 → 走"归档"路径，下次扫描跳过同名 projectName，不再被自动重建
+  // 如果不是（用户自建子分组）→ 单纯删除，里面的文件下次扫描会回到所属项目分组
+  const projectNames = new Set();
+  Object.values(state.files).forEach(f => { if (f && f.projectName) projectNames.add(f.projectName); });
+  const isAutoProject = projectNames.has(folder.name);
+
   const counts = countDescendants(folder);
+
+  if (isAutoProject) {
+    // 归档对话——告诉用户这是隐藏，不是删除文件
+    const prompt = counts.files > 0
+      ? `归档分组「${folder.name}」？\n\n该分组下有 ${counts.files} 个文档（磁盘文件不会被删），归档后将不再扫描，可在 设置 → 已归档分组 中恢复。`
+      : `归档分组「${folder.name}」？归档后将不再扫描，可在 设置 → 已归档分组 中恢复。`;
+    if (!confirm(prompt)) return;
+
+    fetch('/api/archive', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: folder.name }),
+    }).then(async r => {
+      if (!r.ok) {
+        showToast({ kind: 'error', text: '归档失败', secondary: 'HTTP ' + r.status });
+        return;
+      }
+      removeFolderFromTree(state.tree, folder.id);
+      render();
+      fetchState();
+      showToast({
+        kind: 'success',
+        text: `已归档「${folder.name}」`,
+        secondary: '可在 设置 → 已归档分组 中恢复',
+        duration: 4500,
+      });
+    }).catch(err => {
+      showToast({ kind: 'error', text: '归档失败', secondary: err.message });
+    });
+    return;
+  }
+
+  // 自建分组 —— 原行为（删完文件下次扫描会回到所属项目分组）
   if (counts.files > 0) {
     if (!confirm(`分组「${folder.name}」中有 ${counts.files} 个文件（含子分组），删除后文件下次扫描会回到所属项目分组。继续？`)) return;
   }
@@ -1491,10 +1555,137 @@ async function openSettings() {
   const res = await fetch('/api/config');
   const cfg = await res.json();
   renderRootList(cfg.scanRoots);
+  // 已归档 + 已分享：拉最新
+  try {
+    const s = await (await fetch('/api/state')).json();
+    state.archivedProjects = Array.isArray(s.archivedProjects) ? s.archivedProjects : [];
+  } catch {}
+  await refreshSharesState();
+  renderArchiveList();
+  renderShareList();
   els.ignoreInput.value = (cfg.ignore || []).join(', ');
   els.notifyToggle.checked = state.notifyEnabled;
   updateNotifyHint();
   els.modal.classList.remove('hidden');
+}
+
+function renderShareList() {
+  if (!els.shareList) return;
+  const list = [...state.sharesByPath.values()];
+  els.shareList.innerHTML = '';
+  els.shareStopAllBtn.disabled = list.length === 0;
+  if (list.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'share-list-empty';
+    li.textContent = '当前没有正在分享的文件';
+    els.shareList.appendChild(li);
+    return;
+  }
+  // 按 sharedAt DESC
+  list.sort((a, b) => (b.sharedAt || 0) - (a.sharedAt || 0));
+  list.forEach(item => {
+    const li = document.createElement('li');
+    const file = state.files[item.path];
+    const display = (file && file.alias) || item.name || item.path;
+    const url = pickPreferredUrl(item.urls);
+    li.innerHTML = `
+      <span class="share-list-name"></span>
+      <span class="share-list-url"></span>
+      <button class="share-list-stop" type="button">停止</button>
+    `;
+    li.querySelector('.share-list-name').textContent = display;
+    li.querySelector('.share-list-url').textContent = url;
+    li.querySelector('.share-list-url').title = url;
+    li.querySelector('.share-list-stop').addEventListener('click', async () => {
+      try {
+        const r = await fetch('/api/share/stop', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token: item.token }),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        state.sharesByPath.delete(item.path);
+        renderShareList();
+        render();
+        showToast({ kind: 'success', text: '已停止分享', secondary: display });
+      } catch (err) {
+        showToast({ kind: 'error', text: '停止失败', secondary: err.message });
+      }
+    });
+    els.shareList.appendChild(li);
+  });
+}
+
+els.shareStopAllBtn.addEventListener('click', async () => {
+  const count = state.sharesByPath.size;
+  if (count === 0) return;
+  if (!confirm(`停止全部 ${count} 个分享？\n\n所有链接立即失效。`)) return;
+  try {
+    const r = await fetch('/api/share/stop-all', { method: 'POST' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    state.sharesByPath = new Map();
+    renderShareList();
+    render();
+    showToast({ kind: 'success', text: `✓ 已停止 ${data.count} 个分享` });
+  } catch (err) {
+    showToast({ kind: 'error', text: '停止失败', secondary: err.message });
+  }
+});
+
+function renderArchiveList() {
+  if (!els.archiveList) return;
+  const list = state.archivedProjects || [];
+  els.archiveList.innerHTML = '';
+  if (list.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'archive-empty';
+    li.textContent = '没有归档的分组';
+    els.archiveList.appendChild(li);
+    return;
+  }
+  list.forEach(item => {
+    // item 可能是 string（旧格式）或 { name, count }
+    const name = typeof item === 'string' ? item : item.name;
+    const count = typeof item === 'object' && item.count != null ? item.count : null;
+    const li = document.createElement('li');
+    const nameEl = document.createElement('span');
+    nameEl.className = 'archive-name';
+    nameEl.textContent = name;
+    li.appendChild(nameEl);
+    if (count != null) {
+      const c = document.createElement('span');
+      c.className = 'archive-count';
+      c.textContent = count > 0 ? `磁盘 ${count} 个 HTML` : '磁盘已无文件';
+      li.appendChild(c);
+    }
+    const btn = document.createElement('button');
+    btn.className = 'archive-restore';
+    btn.type = 'button';
+    btn.textContent = '恢复';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        const r = await fetch('/api/archive/restore', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        await r.json();
+        // 重新拉 state 让分组立即重新出现
+        await fetchState();
+        // 重新渲染 archive-list
+        renderArchiveList();
+        showToast({ kind: 'success', text: `已恢复「${name}」` });
+      } catch (err) {
+        btn.disabled = false;
+        showToast({ kind: 'error', text: '恢复失败', secondary: err.message });
+      }
+    });
+    li.appendChild(btn);
+    els.archiveList.appendChild(li);
+  });
 }
 function closeSettings() { els.modal.classList.add('hidden'); }
 els.btnSettings.addEventListener('click', openSettings);
@@ -1977,3 +2168,145 @@ setInterval(checkForUpdate, 60 * 60 * 1000);
 window.__handleUpdateSSE = (data) => {
   if (data && data.latest) showUpdateUI(data.current, data.latest);
 };
+
+// ---------- 局域网分享 ----------
+let shareCurrent = null; // { token, path, name, urls }
+
+async function refreshSharesState() {
+  try {
+    const r = await fetch('/api/shares');
+    if (!r.ok) return;
+    const data = await r.json();
+    state.sharesByPath = new Map();
+    for (const s of data.shares || []) {
+      state.sharesByPath.set(s.path, s);
+    }
+    state.lanIps = data.lanIps || [];
+    // 重新渲染让"已分享"角标更新
+    render();
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function pickPreferredUrl(urls) {
+  // 优先 LAN URL（同事用），fallback localhost
+  if (urls && urls.lan && urls.lan.length > 0) return urls.lan[0];
+  return urls && urls.localhost;
+}
+
+function renderShareUrls(container, urls) {
+  container.innerHTML = '';
+  const rows = [];
+  (urls.lan || []).forEach((u, i) => rows.push({ label: `局域网${urls.lan.length > 1 ? ' ' + (i + 1) : ''}`, url: u, primary: i === 0 }));
+  if (urls.localhost) rows.push({ label: '本机', url: urls.localhost, primary: false });
+  rows.forEach(({ label, url, primary }) => {
+    const row = document.createElement('div');
+    row.className = 'share-url-row';
+    row.innerHTML = `
+      <span class="share-url-label">${escapeHtml(label)}</span>
+      <span class="share-url-text"></span>
+      <button class="share-url-copy" type="button">复制</button>
+    `;
+    row.querySelector('.share-url-text').textContent = url;
+    const copyBtn = row.querySelector('.share-url-copy');
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(url);
+        copyBtn.classList.add('copied');
+        copyBtn.textContent = '已复制 ✓';
+        setTimeout(() => { copyBtn.classList.remove('copied'); copyBtn.textContent = '复制'; }, 1600);
+      } catch {
+        showToast({ kind: 'error', text: '复制失败' });
+      }
+    });
+    container.appendChild(row);
+  });
+}
+
+function renderQrCode(container, text) {
+  container.innerHTML = '';
+  if (typeof QRCode === 'undefined') {
+    container.textContent = '（QR 库未加载）';
+    return;
+  }
+  // davidshimjs/qrcodejs：自动检测 canvas 支持
+  // eslint-disable-next-line no-new
+  new QRCode(container, {
+    text,
+    width: 180,
+    height: 180,
+    colorDark: '#1d2230',
+    colorLight: '#ffffff',
+    correctLevel: QRCode.CorrectLevel.M,
+  });
+}
+
+async function openShareModal(filePath) {
+  const file = state.files[filePath];
+  if (!file) return;
+  // 调后端：已存在则复用 token，不存在则新建
+  let entry;
+  try {
+    const r = await fetch('/api/share/start', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: filePath }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      showToast({ kind: 'error', text: '启动分享失败', secondary: err.error || ('HTTP ' + r.status) });
+      return;
+    }
+    entry = await r.json();
+  } catch (err) {
+    showToast({ kind: 'error', text: '启动分享失败', secondary: err.message });
+    return;
+  }
+  shareCurrent = entry;
+
+  // 填 modal
+  els.shareFilename.textContent = file.alias ? `${file.alias}（${file.name}）` : file.name;
+  renderShareUrls(els.shareUrls, entry.urls);
+  renderQrCode(els.shareQr, pickPreferredUrl(entry.urls));
+  els.shareModal.classList.remove('hidden');
+
+  // 同步 sharesByPath 状态（角标 + 设置面板列表）
+  state.sharesByPath.set(filePath, entry);
+  render();
+}
+
+function closeShareModal() {
+  els.shareModal.classList.add('hidden');
+  shareCurrent = null;
+}
+
+els.shareModal.addEventListener('click', (e) => {
+  if (e.target.dataset.close !== undefined) closeShareModal();
+});
+els.shareOpenBtn.addEventListener('click', () => {
+  if (!shareCurrent) return;
+  window.open(pickPreferredUrl(shareCurrent.urls), '_blank');
+});
+els.shareStopBtn.addEventListener('click', async () => {
+  if (!shareCurrent) return;
+  if (!confirm(`停止分享「${shareCurrent.name}」？\n\n停止后链接立即失效，已经打开的页面刷新会 404。`)) return;
+  try {
+    const r = await fetch('/api/share/stop', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: shareCurrent.token }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    state.sharesByPath.delete(shareCurrent.path);
+    showToast({ kind: 'success', text: '已停止分享', secondary: shareCurrent.name });
+    closeShareModal();
+    render();
+  } catch (err) {
+    showToast({ kind: 'error', text: '停止失败', secondary: err.message });
+  }
+});
+
+// 启动时拉一次分享列表（让已分享角标第一时间出现）
+refreshSharesState();

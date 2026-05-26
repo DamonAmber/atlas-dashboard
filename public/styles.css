@@ -518,14 +518,134 @@ body.resizing iframe { pointer-events: none; }
   flex: none;
 }
 .file:not(.unread) .unread-dot { visibility: hidden; }
-/* 默认 width:0 不占布局，让 mtime 贴最右；hover 时平滑展开 38px */
+/* 默认 width:0 不占布局，让 mtime 贴最右；hover 时平滑展开（3 个按钮 = 57px） */
 .file-actions {
   display: flex; gap: 1px; flex: none;
   width: 0; overflow: hidden;
   opacity: 0;
   transition: width .12s, opacity .12s;
 }
-.file:hover .file-actions { width: 38px; opacity: 1; }
+.file:hover .file-actions { width: 57px; opacity: 1; }
+/* 分享态的 share button 用 accent 蓝标识（已分享中再点是再次打开 modal） */
+.file.shared .file-actions [data-act="share"] { color: var(--accent); }
+
+/* 已分享角标：常驻可见，绿色小链接 icon */
+.share-badge {
+  display: none;
+  align-items: center; justify-content: center;
+  width: 14px; height: 14px;
+  color: var(--ok);
+  flex: none;
+}
+.file.shared .share-badge { display: inline-flex; }
+
+/* ---------- 分享 modal ---------- */
+.share-panel {
+  max-width: 520px;
+  width: 92vw;
+}
+.share-body {
+  padding: 18px 22px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.share-meta { display: flex; flex-direction: column; gap: 4px; }
+.share-filename {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-all;
+}
+.share-hint { font-size: 12px; color: var(--text-dim); }
+
+.share-qr-wrap {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 8px;
+  padding: 14px;
+  background: #fff;     /* QR 必须白底（深色主题下也是） */
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.share-qr {
+  width: 180px; height: 180px;
+  display: flex; align-items: center; justify-content: center;
+}
+.share-qr canvas, .share-qr img { display: block; }
+.share-qr-caption { font-size: 11px; color: #666; }
+
+.share-urls { display: flex; flex-direction: column; gap: 6px; }
+.share-url-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 12px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.share-url-row .share-url-label {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  flex: none;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-right: 4px;
+}
+.share-url-row .share-url-text {
+  flex: 1;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: all;
+}
+.share-url-row .share-url-copy {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-dim);
+  border-radius: 4px;
+  cursor: pointer;
+  flex: none;
+  transition: border-color var(--dur-fast), color var(--dur-fast);
+}
+.share-url-row .share-url-copy:hover { border-color: var(--accent); color: var(--accent); }
+.share-url-row .share-url-copy.copied { color: var(--ok); border-color: var(--ok); }
+
+.share-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.share-btn-secondary {
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text);
+  border-radius: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast), background var(--dur-fast);
+}
+.share-btn-secondary:hover { border-color: var(--accent); background: var(--bg-hover); }
+.share-btn-danger {
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid var(--unread);
+  background: transparent;
+  color: var(--unread);
+  border-radius: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.share-btn-danger:hover { background: var(--unread); color: #fff; }
 .file-actions button {
   width: 18px; height: 18px;
   border: none;
@@ -1097,6 +1217,120 @@ kbd {
 }
 .root-add { display: flex; gap: 6px; flex-wrap: wrap; }
 .root-add input { flex: 1; min-width: 180px; }
+
+/* 已归档分组列表 */
+.archive-list { list-style: none; padding: 0; margin: 0; }
+.archive-list li {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-elev-2);
+  border-radius: 6px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.archive-list li.archive-empty {
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  padding: 4px 0;
+  font-style: italic;
+}
+.archive-list .archive-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.archive-list .archive-count {
+  flex: none;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.archive-list .archive-restore {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast), background var(--dur-fast), color var(--dur-fast);
+}
+.archive-list .archive-restore:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
+/* 已分享文件列表 */
+.modal-section .section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.modal-section .section-head h3 { margin: 0; }
+.share-stop-all-btn {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--unread);
+  background: transparent;
+  color: var(--unread);
+  border-radius: 5px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.share-stop-all-btn:hover { background: var(--unread); color: #fff; }
+.share-stop-all-btn:disabled { opacity: 0.4; cursor: default; }
+.share-list { list-style: none; padding: 0; margin: 0; }
+.share-list li {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-elev-2);
+  border-radius: 6px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.share-list li.share-list-empty {
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  padding: 4px 0;
+  font-style: italic;
+}
+.share-list .share-list-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.share-list .share-list-url {
+  flex: none;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-list .share-list-stop {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast), color var(--dur-fast);
+}
+.share-list .share-list-stop:hover { border-color: var(--unread); color: var(--unread); }
 
 /* 目录浏览器 */
 .dir-picker {

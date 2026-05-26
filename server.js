@@ -10,6 +10,7 @@ const { EventEmitter } = require('events');
 const userPaths = require('./lib/paths');
 const updateCheck = require('./lib/update-check');
 const pdfExport = require('./lib/pdf-export');
+const share = require('./lib/share');
 const pkg = require('./package.json');
 
 // 路径注入：CLI（bin/atlas.js）通过环境变量传，开发模式落到默认 ~/.atlas/
@@ -49,14 +50,18 @@ function getMaxDepth() {
   return config.maxDepth || 6;
 }
 
+function emptyStore() {
+  return { tree: [], seen: {}, aliases: {}, recent: [], archivedProjects: [], shares: {} };
+}
+
 function loadStore() {
-  if (!fs.existsSync(STORE_PATH)) return { tree: [], seen: {}, aliases: {} };
+  if (!fs.existsSync(STORE_PATH)) return emptyStore();
   try {
     const raw = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
     return migrateStore(raw);
   } catch (e) {
     console.error('store.json 损坏，使用空 store:', e.message);
-    return { tree: [], seen: {}, aliases: {} };
+    return emptyStore();
   }
 }
 
@@ -65,6 +70,8 @@ function migrateStore(raw) {
     raw.seen = raw.seen || {};
     raw.aliases = raw.aliases || {};
     raw.recent = Array.isArray(raw.recent) ? raw.recent : [];
+    raw.archivedProjects = Array.isArray(raw.archivedProjects) ? raw.archivedProjects : [];
+    raw.shares = (raw.shares && typeof raw.shares === 'object') ? raw.shares : {};
     return raw;
   }
   // 旧版 {folders: [{id,name,files:[]}], seen}
@@ -76,9 +83,9 @@ function migrateStore(raw) {
       collapsed: false,
       children: (f.files || []).map(p => ({ type: 'file', path: p })),
     }));
-    return { tree, seen: raw.seen || {}, aliases: raw.aliases || {}, recent: [] };
+    return { tree, seen: raw.seen || {}, aliases: raw.aliases || {}, recent: [], archivedProjects: [] };
   }
-  return { tree: [], seen: {}, aliases: {}, recent: [] };
+  return emptyStore();
 }
 
 const RECENT_MAX = 10;
@@ -204,13 +211,21 @@ function pruneEmptyFolders(nodes) {
 
 function reconcile(store, scanned) {
   migrateLegacyRootFolders(store.tree);
-  const scannedSet = new Set(scanned.map(f => f.path));
+
+  // 归档：projectName 在 store.archivedProjects 里的 file 跳过——
+  // 既不进 scannedSet（也就不会被 prune 留下来），也不会被 reconcile 重建出 folder
+  const archivedSet = new Set(store.archivedProjects || []);
+  const visibleScanned = archivedSet.size === 0
+    ? scanned
+    : scanned.filter(f => !archivedSet.has(f.projectName));
+
+  const scannedSet = new Set(visibleScanned.map(f => f.path));
   store.tree = pruneMissing(store.tree, scannedSet);
 
   const existing = new Set();
   collectFilePaths(store.tree, existing);
 
-  const newFiles = scanned.filter(f => !existing.has(f.path));
+  const newFiles = visibleScanned.filter(f => !existing.has(f.path));
   newFiles.sort((a, b) => b.mtime - a.mtime);
 
   for (const file of newFiles) {
@@ -229,6 +244,15 @@ function reconcile(store, scanned) {
     if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
     return (a.name || '').localeCompare(b.name || '', 'zh');
   });
+}
+
+// 统计每个 projectName 在磁盘上有多少个 HTML——给"已归档"列表显示用
+function countByProject(scanned) {
+  const map = new Map();
+  for (const f of scanned) {
+    map.set(f.projectName, (map.get(f.projectName) || 0) + 1);
+  }
+  return map;
 }
 
 function isPathInScanRoots(p) {
@@ -343,6 +367,28 @@ function startWatchers() {
 
 const app = express();
 app.use(express.json({ limit: '4mb' }));
+
+// 安全：Dashboard 仅在本机可用，LAN/外部访问只允许 /share/<token>/* 路径
+// （Node.js app.listen(PORT) 默认 dual-stack，LAN 内可访问；这里通过中间件兜底）
+const LOCAL_ADDRS = new Set([
+  '127.0.0.1',
+  '::1',
+  '::ffff:127.0.0.1',
+]);
+app.use((req, res, next) => {
+  const addr = (req.socket && req.socket.remoteAddress) || '';
+  if (LOCAL_ADDRS.has(addr)) return next();
+  // 非本机：只放行 /share/<token>/* 这一系列分享路径
+  if (req.path.startsWith('/share/')) return next();
+  res.status(403).type('html').send(
+    '<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>Atlas</title>' +
+    '<style>body{font-family:-apple-system,system-ui,"PingFang SC",sans-serif;color:#444;background:#f6f7f9;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:2rem;text-align:center;line-height:1.6}main{max-width:520px}h1{font-size:18px;margin:0 0 12px}p{font-size:14px;color:#666}code{background:#fff;padding:2px 6px;border-radius:4px;border:1px solid #e3e6ec}</style>' +
+    '</head><body><main><h1>Atlas Dashboard 仅在本机可用</h1>' +
+    '<p>这是文档作者本机的 Atlas 实例。如果他给你分享了 HTML 文档，链接里会带 <code>/share/&lt;token&gt;/...</code> 路径段。</p>' +
+    '</main></body></html>'
+  );
+});
+
 app.use(express.static(PUBLIC_DIR));
 
 let rawMounts = [];
@@ -450,12 +496,20 @@ app.get('/api/state', async (_req, res) => {
       }
     }
 
+    // 归档列表：给每个归档的 projectName 附带磁盘上的实际文件数（让用户决定要不要恢复）
+    const projCounts = countByProject(scanned);
+    const archivedProjects = (store.archivedProjects || []).map(name => ({
+      name,
+      count: projCounts.get(name) || 0,
+    }));
+
     res.json({
       tree: store.tree,
       files: fileMap,
       recent: store.recent || [],
       scanRoots: getScanRoots(),
       scannedCount: scanned.length,
+      archivedProjects,
     });
   } catch (e) {
     console.error(e);
@@ -472,6 +526,156 @@ app.put('/api/tree', (req, res) => {
   store.tree = body.tree;
   saveStore(store);
   res.json({ ok: true });
+});
+
+// ---------- 分享：把单个 HTML 暂时发布到局域网 ----------
+// 给每个被分享文件生成一个不可猜的 token；外部访问 /share/:token/<原名>
+// 持久化到 store.shares = { [token]: { path, sharedAt } }
+// 重启 atlas token 仍有效（用户可以"一键停止全部"主动撤销）
+
+function buildShareUrls(token, htmlPath) {
+  const fileName = encodeURIComponent(path.basename(htmlPath));
+  const lanIps = share.getLanIPs();
+  return {
+    localhost: `http://localhost:${PORT}/share/${token}/${fileName}`,
+    lan: lanIps.map(ip => `http://${ip}:${PORT}/share/${token}/${fileName}`),
+  };
+}
+
+function shareEntryPublic(token, entry) {
+  return {
+    token,
+    path: entry.path,
+    name: path.basename(entry.path),
+    sharedAt: entry.sharedAt,
+    urls: buildShareUrls(token, entry.path),
+  };
+}
+
+// 启动分享：返回该文件已有 token 或新建一个
+app.post('/api/share/start', (req, res) => {
+  const filePath = req.body && req.body.path;
+  if (!filePath || !isPathInScanRoots(filePath)) {
+    return res.status(400).json({ error: '路径非法' });
+  }
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: '文件不存在' });
+  }
+  const store = loadStore();
+  // 同一个文件如果已经在分享，复用旧 token（避免每次按按钮都换 URL）
+  const existing = Object.entries(store.shares || {}).find(([, v]) => v && v.path === filePath);
+  let token;
+  if (existing) {
+    token = existing[0];
+  } else {
+    token = share.genToken();
+    store.shares[token] = { path: filePath, sharedAt: Date.now() };
+    saveStore(store);
+  }
+  res.json(shareEntryPublic(token, store.shares[token]));
+});
+
+app.post('/api/share/stop', (req, res) => {
+  const token = req.body && req.body.token;
+  if (!token || typeof token !== 'string') {
+    return res.status(400).json({ error: 'token 必填' });
+  }
+  const store = loadStore();
+  if (!store.shares || !store.shares[token]) {
+    return res.json({ ok: true, alreadyStopped: true });
+  }
+  delete store.shares[token];
+  saveStore(store);
+  res.json({ ok: true });
+});
+
+// 一键停止全部分享——给"评审完了赶紧关掉"的安全开关
+app.post('/api/share/stop-all', (_req, res) => {
+  const store = loadStore();
+  const count = Object.keys(store.shares || {}).length;
+  store.shares = {};
+  saveStore(store);
+  res.json({ ok: true, count });
+});
+
+app.get('/api/shares', (_req, res) => {
+  const store = loadStore();
+  const list = Object.entries(store.shares || {})
+    .filter(([, v]) => v && v.path && fs.existsSync(v.path))
+    .sort((a, b) => (b[1].sharedAt || 0) - (a[1].sharedAt || 0))
+    .map(([token, v]) => shareEntryPublic(token, v));
+  res.json({ shares: list, lanIps: share.getLanIPs(), port: PORT });
+});
+
+// 公开访问入口：/share/:token → 重定向到 /share/:token/<原文件名>
+// 这样 HTML 里的相对资源（./style.css）浏览器会自动拼成 /share/:token/style.css，命中下面的资源 handler
+app.get('/share/:token', (req, res) => {
+  const store = loadStore();
+  const entry = store.shares && store.shares[req.params.token];
+  if (!entry) return res.status(404).type('html').send('<h1>404 — 链接已失效</h1><p>这个分享链接已被作者停止。</p>');
+  if (!fs.existsSync(entry.path)) return res.status(404).type('html').send('<h1>404 — 文件已不存在</h1>');
+  return res.redirect(302, `/share/${req.params.token}/${encodeURIComponent(path.basename(entry.path))}`);
+});
+
+// 资源服务：/share/:token/<相对路径> → 服务 HTML 同目录子树
+// 严格防 path traversal——只能访问 baseDir 及其子目录
+app.get('/share/:token/*', (req, res) => {
+  const token = req.params.token;
+  const store = loadStore();
+  const entry = store.shares && store.shares[token];
+  if (!entry) return res.status(404).type('html').send('<h1>404 — 链接已失效</h1>');
+  if (!fs.existsSync(entry.path)) return res.status(404).type('html').send('<h1>404 — 文件已不存在</h1>');
+
+  const baseDir = path.dirname(entry.path);
+  let relPath;
+  try {
+    relPath = decodeURIComponent(req.params[0] || '');
+  } catch {
+    return res.status(400).send('Bad path encoding');
+  }
+
+  const resolved = share.resolveSharedPath(baseDir, relPath);
+  if (!resolved.ok) {
+    return res.status(403).type('html').send('<h1>403 — 路径越界</h1>');
+  }
+  if (!fs.existsSync(resolved.abs)) {
+    return res.status(404).type('html').send('<h1>404 — 资源不存在</h1>');
+  }
+  // 不允许访问目录本身（必须是文件）
+  try {
+    if (fs.statSync(resolved.abs).isDirectory()) {
+      return res.status(403).type('html').send('<h1>403 — 禁止列目录</h1>');
+    }
+  } catch {}
+  // 用 sendFile 让 express 自己设 Content-Type / 范围请求
+  res.sendFile(resolved.abs, { headers: { 'Cache-Control': 'no-store' } });
+});
+
+// 归档一个 projectName——下次扫描时会跳过同名分组（不会再被自动重建出来）
+// 也立即从 store.tree 里把同名顶层分组拿掉
+app.post('/api/archive', (req, res) => {
+  const name = req.body && req.body.name;
+  if (!name || typeof name !== 'string') {
+    return res.status(400).json({ error: 'name 必填' });
+  }
+  const store = loadStore();
+  store.archivedProjects = Array.from(new Set([...(store.archivedProjects || []), name]));
+  // 同步把 store.tree 里的同名顶层 folder 立即拿掉，UI 不用等下次扫描
+  store.tree = (store.tree || []).filter(n => !(n.type === 'folder' && n.name === name));
+  saveStore(store);
+  res.json({ ok: true, archivedProjects: store.archivedProjects });
+});
+
+// 取消归档——把 name 从列表移除，下次 /api/state 时 reconcile 会把对应分组重新建出来
+app.post('/api/archive/restore', (req, res) => {
+  const name = req.body && req.body.name;
+  if (!name || typeof name !== 'string') {
+    return res.status(400).json({ error: 'name 必填' });
+  }
+  const store = loadStore();
+  store.archivedProjects = (store.archivedProjects || []).filter(n => n !== name);
+  saveStore(store);
+  res.json({ ok: true, archivedProjects: store.archivedProjects });
 });
 
 app.post('/api/folders/new', (req, res) => {
@@ -820,9 +1024,23 @@ app.get('/api/events', (req, res) => {
   });
 });
 
-const httpServer = app.listen(PORT, () => {
+const httpServer = app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n  Atlas dashboard 运行中`);
   console.log(`  → http://localhost:${PORT}`);
+  // 列出 LAN IP，方便用户知道分享链接里会用什么地址
+  const lanIps = (() => {
+    const ifs = os.networkInterfaces();
+    const out = [];
+    for (const name of Object.keys(ifs)) {
+      for (const i of ifs[name] || []) {
+        if (i.family === 'IPv4' && !i.internal) out.push(i.address);
+      }
+    }
+    return out;
+  })();
+  if (lanIps.length > 0) {
+    console.log(`  局域网: ${lanIps.map(ip => `http://${ip}:${PORT}`).join(', ')}`);
+  }
   console.log(`  配置: ${CONFIG_PATH}`);
   console.log(`  扫描根: ${getScanRoots().join(', ')}\n`);
   startWatchers();

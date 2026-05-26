@@ -32,7 +32,12 @@
         </button>
         <button id="btn-new-folder" title="新建顶层分组">＋</button>
         <button id="btn-mark-all" title="全部标为已读">✓</button>
-        <button id="btn-settings" title="设置">⚙</button>
+        <button id="btn-settings" title="设置" aria-label="设置">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="8" cy="8" r="2"/>
+            <path d="M13.4 9.7l1.3.8-1.5 2.6-1.5-.5a5 5 0 0 1-1.5.9l-.3 1.5h-3l-.3-1.5a5 5 0 0 1-1.5-.9l-1.5.5-1.5-2.6 1.3-.8a5 5 0 0 1 0-1.4l-1.3-.8 1.5-2.6 1.5.5a5 5 0 0 1 1.5-.9l.3-1.5h3l.3 1.5a5 5 0 0 1 1.5.9l1.5-.5 1.5 2.6-1.3.8a5 5 0 0 1 0 1.4z"/>
+          </svg>
+        </button>
       </div>
     </header>
 
@@ -216,6 +221,23 @@
         <p class="muted" id="notify-hint">需要浏览器允许通知权限。</p>
       </section>
       <section class="modal-section">
+        <div class="section-head">
+          <h3>已分享文件（局域网可访问）</h3>
+          <button id="share-stop-all-btn" class="share-stop-all-btn" type="button">停止全部分享</button>
+        </div>
+        <p class="muted">点击"停止"让对应链接立即失效。一键停止全部 = 评审完赶紧关掉，避免链接长期暴露。</p>
+        <ul class="share-list" id="share-list">
+          <li class="share-list-empty">当前没有正在分享的文件</li>
+        </ul>
+      </section>
+      <section class="modal-section">
+        <h3>已归档分组</h3>
+        <p class="muted">归档的项目分组不再扫描显示——磁盘上的 HTML 文件不会被删，只是从树里隐藏。点"恢复"让它重新出现。</p>
+        <ul class="archive-list" id="archive-list">
+          <li class="archive-empty">没有归档的分组</li>
+        </ul>
+      </section>
+      <section class="modal-section">
         <h3>已忽略目录名（黑名单）</h3>
         <p class="muted">扫描时会跳过同名目录。逗号分隔。</p>
         <input id="ignore-input" type="text" />
@@ -226,10 +248,42 @@
     </div>
   </div>
 
+  <!-- 分享 modal：单文件 LAN 分享 URL + 二维码 -->
+  <div class="modal hidden" id="share-modal">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel share-panel">
+      <header class="modal-header">
+        <h2>分享到局域网</h2>
+        <button class="modal-close" data-close aria-label="关闭">✕</button>
+      </header>
+      <section class="share-body">
+        <div class="share-meta">
+          <div class="share-filename" id="share-filename">—</div>
+          <div class="share-hint">同事在同一网络下用浏览器打开任一链接，或扫码用手机看：</div>
+        </div>
+
+        <div class="share-qr-wrap">
+          <div id="share-qr" class="share-qr"></div>
+          <div class="share-qr-caption">扫码（手机需在同一 Wi-Fi）</div>
+        </div>
+
+        <div class="share-urls" id="share-urls">
+          <!-- URL 行由 JS 渲染 -->
+        </div>
+
+        <div class="share-actions">
+          <button id="share-open-btn" type="button" class="share-btn-secondary">在浏览器打开</button>
+          <button id="share-stop-btn" type="button" class="share-btn-danger">停止分享</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
   <!-- Toast 通知容器：fixed 浮在右下角，aria-live=polite 不打断屏幕阅读器 -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
   <script src="/vendor/Sortable.min.js"></script>
+  <script src="/vendor/qrcode.min.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
