@@ -22,19 +22,30 @@ function check(name, ok, detail = '') {
     return d.tree;
   });
 
-  // 选倒数第二个 folder 作为折叠目标（避开第一个，因为拖动源在那里）
+  // 侧栏滚到顶，选一个 header 在视口内、且外部有可见文件可当拖动源的 folder 作为目标
+  // （大树里目标 folder 可能被滚出视口，而拖拽 hover 需要目标 header 真实可见）
+  await page.evaluate(() => { const t = document.getElementById('tree'); if (t) t.scrollTop = 0; });
+  await page.waitForTimeout(150);
   const targetInfo = await page.evaluate(() => {
+    const inView = (el) => { const r = el.getBoundingClientRect(); return r.top >= 8 && r.bottom <= 840; };
     const folders = [...document.querySelectorAll('.folder')];
-    const target = folders[folders.length - 2] || folders[1];
-    if (!target) return null;
-    return {
-      id: target.dataset.folderId,
-      name: target.querySelector('.folder-name').textContent,
-      collapsed: target.classList.contains('collapsed'),
-    };
+    const files = [...document.querySelectorAll('.file')];
+    for (const target of folders) {
+      const head = target.querySelector('.folder-header');
+      if (!head || !inView(head)) continue;
+      const tid = target.dataset.folderId;
+      const hasOutsideSource = files.some(f => !f.closest(`.folder[data-folder-id="${tid}"]`) && inView(f));
+      if (!hasOutsideSource) continue;
+      return {
+        id: tid,
+        name: target.querySelector('.folder-name').textContent,
+        collapsed: target.classList.contains('collapsed'),
+      };
+    }
+    return null;
   });
   console.log('\n目标 folder:', targetInfo);
-  if (!targetInfo) { console.error('找不到第二个 folder'); process.exit(1); }
+  if (!targetInfo) { console.error('找不到视口内可用的 folder'); process.exit(1); }
 
   // 确保它是折叠状态（如果展开就先折叠）
   // folder-header 现在用 pointer events 监听点击，所以必须用 Playwright 真实点击
@@ -58,12 +69,13 @@ function check(name, ok, detail = '') {
   // ----- 开始拖拽 -----
   // 找一个不在该 folder 内的 file 当拖动源
   const sourceBox = await page.evaluate((targetId) => {
+    const inView = (el) => { const r = el.getBoundingClientRect(); return r.top >= 8 && r.bottom <= 840; };
     const files = [...document.querySelectorAll('.file')];
     for (const f of files) {
-      if (!f.closest(`.folder[data-folder-id="${targetId}"]`)) {
-        const r = f.getBoundingClientRect();
-        return { x: r.x + 30, y: r.y + r.height / 2, path: f.dataset.path };
-      }
+      if (f.closest(`.folder[data-folder-id="${targetId}"]`)) continue;
+      if (!inView(f)) continue;
+      const r = f.getBoundingClientRect();
+      return { x: r.x + 30, y: r.y + r.height / 2, path: f.dataset.path };
     }
     return null;
   }, targetInfo.id);

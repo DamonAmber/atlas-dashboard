@@ -127,12 +127,18 @@ function check(name, ok, detail = '') {
   // 给 iframe 派发 wheel 事件，看 iframe 内 scroll 是否变化
   const scrolled = await page.evaluate(async () => {
     const ifr = document.getElementById('preview');
-    if (!ifr.contentDocument) return { ok: false, reason: 'no contentDocument' };
-    const before = ifr.contentDocument.documentElement.scrollTop;
-    // 直接在 contentWindow 上设置 scrollTop（绕过 pointer-events 检查 iframe 自身可滚动性）
-    ifr.contentDocument.documentElement.scrollTop = 200;
-    await new Promise(r => requestAnimationFrame(r));
-    const after = ifr.contentDocument.documentElement.scrollTop;
+    const d = ifr.contentDocument;
+    if (!d) return { ok: false, reason: 'no contentDocument' };
+    const de = d.scrollingElement || d.documentElement;
+    const maxScroll = de.scrollHeight - de.clientHeight;
+    if (maxScroll <= 1) return { ok: true, noRoom: true };   // 内容不足一屏，无可滚空间
+    // 强制 scroll-behavior:auto，避免页面的 smooth 让 scrollTop 赋值变成动画（读到中间值 0）
+    const prev = de.style.scrollBehavior;
+    de.style.scrollBehavior = 'auto';
+    const before = de.scrollTop;
+    de.scrollTop = 200;
+    const after = de.scrollTop;
+    de.style.scrollBehavior = prev || '';
     return { ok: after > before, before, after };
   });
   console.log('  scroll：', scrolled);

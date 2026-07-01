@@ -43,13 +43,18 @@ function check(name, ok, detail = '') {
     await page.evaluate(() => fetchState());
     await page.waitForTimeout(120);
   }
-  const stats = await page.evaluate(() => ({ c: window.__created, d: window.__destroyed }));
-  console.log('  创建:', stats.c, '销毁:', stats.d);
-  // 容差：第一次 render 没有上次实例可销毁（差 ~7 个容器数），加上加载时序可能多 1 次 render
-  // 真正的"累积"是 c - d 随 render 次数线性增长——8 次 render 差只有个位数说明没泄漏
+  const stats = await page.evaluate(() => ({
+    c: window.__created,
+    d: window.__destroyed,
+    // initSortables 给根 tree + 每个 folder 的 children 容器各建一个 sortable
+    containers: document.querySelectorAll('.folder-children').length + 1,
+  }));
+  console.log('  创建:', stats.c, '销毁:', stats.d, '活跃容器:', stats.containers);
+  // 无泄漏的判据：created - destroyed 不随 render 次数线性增长，而是稳定 ≈ 一次 render
+  // 的容器数（当前活跃集，上一轮已全部销毁）。用活跃容器数作容差，适配任意规模的树。
   check('Sortable 实例数没有累积（每次 render 都销毁旧的）',
-    stats.d >= stats.c - 10,
-    `created=${stats.c}, destroyed=${stats.d}`);
+    stats.c - stats.d <= stats.containers + 2,
+    `created=${stats.c}, destroyed=${stats.d}, 活跃容器=${stats.containers}`);
 
   // ========== 2. 后端拒绝重复 file path ==========
   console.log('\n[2] 后端拒绝包含重复 file 的 tree');
