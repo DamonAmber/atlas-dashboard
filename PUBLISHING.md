@@ -120,7 +120,7 @@ done
 
 **要求所有 spec 都"失败 0 项"**。任意一个失败必须先修才能发版。
 
-> 当前 spec 清单（16 个）：
+> 当前 spec 清单（17 个）：
 > - `inline-edit.spec.js` — 编辑文件名 / 备注（17 项）
 > - `sidebar.spec.js` — 侧边栏开关、宽度、动画（5 项）
 > - `sidebar-perf.spec.js` — 帧率门槛（p95 ≤ 25ms / max ≤ 50ms）
@@ -136,6 +136,7 @@ done
 > - `search-cn-and-highlight.spec.js` — 中文单字搜索 + iframe 内高亮跳转（13 项）
 > - `dir-picker.spec.js` — 浏览器内目录选择器（14 项）
 > - `landing-demo.spec.js` — landing page demo 交互（27 项，file://，不依赖服务）
+> - `preview-live-edit.spec.js` — 预览区轻量编辑：edit-doc 标注 / 进入编辑 / 文案改+保存 / 列表重排 / 取消恢复 / 冲突 / 安全（20 项，**自起隔离实例**，不依赖 :4321）
 > - `e2e-install.spec.js` — npm pack + 模拟陌生用户安装
 
 ### 步骤 1：更新 PUBLISHING.md
@@ -254,7 +255,7 @@ atlas restart      # 让本机服务也用新版
 
 | 触发 | Workflow | 做什么 |
 |---|---|---|
-| `git push` 到 main | `.github/workflows/test.yml` | CLI smoke + landing demo + e2e install + 6 个服务依赖 spec（用 fixture HTML） |
+| `git push` 到 main | `.github/workflows/test.yml` | CLI smoke + landing demo + preview-live-edit（自起隔离实例）+ e2e install + 6 个服务依赖 spec（用 fixture HTML） |
 | `git push origin v*` (tag) | `.github/workflows/release.yml` | 抽取 PUBLISHING.md 该版本段落 → 创建 GitHub Release |
 | 任何 push 到 main | GitHub Pages（仓库设置） | 自动重新部署 `docs/` 到 https://damonamber.github.io/atlas-dashboard/ |
 | `npm publish` | npm registry | 包上架 + CDN 同步（约 1-2 分钟） |
@@ -403,6 +404,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.5.0** (2026-06-30) — 新功能：**预览区轻量所见即所得编辑**。进入编辑模式后可在预览里直接改文案、拖动列表项 / 表格行 / 同类卡片组排序、以及编辑超链接地址，保存写回磁盘原文件。① 架构「源码锚点」：新增 `lib/editable.js`（parse5 解析源文件、确定性遍历分配 eid、判定可编辑角色 text/list/list-item + 排除 script/style/svg/canvas/pre/code 等风险标签）、`lib/edit-apply.js`（按 eid 精确区间替换文本节点 / 子树重写重排容器，只动改过的字节、其余原样，不序列化运行时 DOM → 图表不被烤坏）、`lib/edit-backup.js`（写盘前备份到 `~/.atlas/backups/`，每文件留 20 份）。新增依赖 `parse5`。② 后端新增 `GET /api/edit-doc`（返回带 `data-atlas-eid`/`role` 标注 + 包裹 span 的编辑文档，注入 base href 与 baseHash）与 `POST /api/save-edits`（baseHash 冲突检测 409、路径/扩展名/体积校验、原子写、自我写入抑制避免误标未读）。③ 前端：工具栏「编辑/保存/取消」按钮 + 编辑态视觉标识；文本节点 contentEditable（混排 `<p>前<b>中</b>后</p>` 的每段独立可编辑）；列表用注入到 iframe 内的 Sortable 拖动重排（`forceFallback`，从文字上按下不误触）；链接内文字聚焦浮出 href 编辑条；编辑态拦截 `<a>` 跳转 / 表单提交避免误导航；进入编辑与保存都瞬间保持滚动锚点（强制 `scroll-behavior:auto` 避免平滑滚动动画）。④ 卡片重排保守识别：仅「同标签+同 class、≥3 个、连续」的同构卡片组可拖，异质子元素（标题/底部）排除。新增 spec `preview-live-edit.spec.js`（32 项，自起隔离实例），已加入 npm test / CI / 本文档 spec 清单，并同步 `docs/index.html` 特性卡与 README。
 
 - **0.4.6** (2026-05-26) — UX 修复：用户 `npm i -g` 升级 atlas 但忘了 `atlas restart` 时，跑着的 daemon 还是旧版本 server.js（无 `/api/share/*` 路由）→ 点分享按钮报 `HTTP 404` 让人摸不着头脑。① 启动时探测 `/api/shares`（0.4.4+ 新加端点），404 就弹 info toast 提示"Atlas 服务是旧版本——在终端运行 atlas restart 重启即可"。② 点 share 按钮命中 404 时改文案："分享功能不可用 / Atlas 服务还在跑旧版本——请在终端运行 atlas restart 重启"。
 

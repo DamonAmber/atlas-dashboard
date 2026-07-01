@@ -35,6 +35,10 @@ jobs:
       - name: Landing demo
         run: node tests/landing-demo.spec.js
 
+      # 2.5 预览区轻量编辑（自起隔离实例 + 临时 fixture，不依赖 :4321）
+      - name: Preview live-edit spec
+        run: node tests/preview-live-edit.spec.js
+
       # 3. 端到端：模拟全新机器 npx 安装 + 首次引导 + 启动
       - name: End-to-end install
         run: |

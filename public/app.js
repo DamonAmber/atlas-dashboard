@@ -16,6 +16,18 @@ const state = {
   sharesByPath: new Map(),
 };
 
+// 预览区轻量编辑模式状态
+const editState = {
+  active: false,      // 是否处于编辑模式
+  path: null,         // 正在编辑的文件路径
+  rawUrl: null,       // 进入编辑前的 /raw/ 预览 url（取消时恢复）
+  baseHash: null,     // 进入编辑时源文件哈希（保存时冲突检测）
+  dirty: false,       // 有无未保存改动
+  ops: new Map(),     // eid → op（setText / reorder，覆盖式）
+  sortables: [],      // 已创建的 Sortable 实例（退出时销毁）
+  saving: false,      // 保存请求进行中
+};
+
 const els = {
   sidebar: document.getElementById('sidebar'),
   resizer: document.getElementById('resizer'),
@@ -38,6 +50,9 @@ const els = {
   btnReloadPreview: document.getElementById('btn-reload-preview'),
   btnExportPdf: document.getElementById('btn-export-pdf'),
   btnShare: document.getElementById('btn-share'),
+  btnEdit: document.getElementById('btn-edit'),
+  btnEditSave: document.getElementById('btn-edit-save'),
+  btnEditCancel: document.getElementById('btn-edit-cancel'),
   btnCopyPath: document.getElementById('btn-copy-path'),
   // settings modal
   modal: document.getElementById('settings-modal'),
@@ -1026,6 +1041,11 @@ function updateUnreadDecorations() {
 }
 
 function setActiveFile(filePath, doNavigate) {
+  // 编辑模式下切换到别的文件：先确认丢弃改动并退出编辑
+  if (doNavigate && editState.active && editState.path && editState.path !== filePath) {
+    if (!confirmDiscardIfDirty()) return;
+    exitEditMode({ restore: false });
+  }
   state.activeFilePath = filePath;
   els.tree.querySelectorAll('.file.active').forEach(e => e.classList.remove('active'));
   // 切换 active 时清除键盘焦点态，避免"两个被选中"的视觉异常
@@ -1051,6 +1071,7 @@ function setActiveFile(filePath, doNavigate) {
   els.btnReloadPreview.disabled = false;
   els.btnExportPdf.disabled = false;
   els.btnShare.disabled = false;
+  els.btnEdit.disabled = false;
   // 已在分享中的文件，让顶栏 share 按钮高亮提示状态
   els.btnShare.classList.toggle('shared', state.sharesByPath && state.sharesByPath.has(file.path));
 
@@ -1069,10 +1090,417 @@ function setActiveFile(filePath, doNavigate) {
 }
 
 els.preview.addEventListener('load', () => {
+  if (editState.active) {
+    // 编辑文档加载完成 → 绑定可编辑区域，并恢复进入编辑前的滚动位置
+    bindEditableDoc();
+    applyPendingScroll(pendingEditScroll);
+    pendingEditScroll = null;
+  } else {
+    // 退出编辑后重载 /raw/：恢复之前的滚动锚点
+    applyPendingScroll(pendingPreviewScroll);
+    pendingPreviewScroll = null;
+    updateIframeHighlight();
+  }
+  // 滚动就位后再淡入，避免看到从顶部滚动的过程
   els.preview.classList.remove('loading');
-  // iframe 加载完成 → 注入搜索词高亮
-  updateIframeHighlight();
 });
+
+// ==================== 预览区轻量编辑 ====================
+const EDIT_STYLE_ATTR = 'data-atlas-edit-style';
+
+// 退出编辑重载 /raw/、或进入编辑切到编辑文档时，用于保持滚动锚点不跳变
+let pendingPreviewScroll = null;
+let pendingEditScroll = null;
+
+// 在 iframe 仍处于淡入前（.loading opacity:0）时恢复滚动。
+// 强制 scroll-behavior:auto 覆盖页面可能的 smooth，避免出现「从顶部滚下来」的动画。
+function applyPendingScroll(target) {
+  if (!target) return;
+  const doScroll = () => {
+    try {
+      const w = els.preview.contentWindow;
+      const doc = w.document;
+      const root = doc.scrollingElement || doc.documentElement;
+      const prevRoot = root && root.style.scrollBehavior;
+      const prevBody = doc.body && doc.body.style.scrollBehavior;
+      if (root) root.style.scrollBehavior = 'auto';
+      if (doc.body) doc.body.style.scrollBehavior = 'auto';
+      w.scrollTo(target.x, target.y);
+      if (root) root.scrollTop = target.y, root.scrollLeft = target.x;
+      if (root) root.style.scrollBehavior = prevRoot || '';
+      if (doc.body) doc.body.style.scrollBehavior = prevBody || '';
+    } catch {}
+  };
+  doScroll();
+  requestAnimationFrame(doScroll);
+}
+
+function confirmDiscardIfDirty() {
+  if (!editState.active || !editState.dirty) return true;
+  return window.confirm('当前有未保存的编辑改动，确定要放弃吗？');
+}
+
+// 进入编辑模式：把 iframe 切到带锚点的编辑文档
+function enterEditMode() {
+  const filePath = state.activeFilePath;
+  const file = filePath && state.files[filePath];
+  if (!file || editState.active) return;
+
+  editState.active = true;
+  editState.path = filePath;
+  editState.rawUrl = file.url;       // 取消时恢复到只读预览
+  editState.baseHash = null;
+  editState.dirty = false;
+  editState.ops = new Map();
+  editState.sortables = [];
+  editState.saving = false;
+
+  updateEditToolbar();
+  els.preview.classList.remove('hidden');
+  els.emptyState.classList.add('hidden');
+  // 记录当前滚动位置，编辑文档加载后恢复，避免跳到顶部
+  try {
+    const w = els.preview.contentWindow;
+    pendingEditScroll = { x: w.scrollX || 0, y: w.scrollY || 0 };
+  } catch { pendingEditScroll = null; }
+  els.preview.classList.add('loading');
+  els.preview.src = '/api/edit-doc?path=' + encodeURIComponent(filePath);
+}
+
+// iframe 编辑文档加载完成后调用：注入样式 + 绑定 contentEditable / Sortable
+function bindEditableDoc() {
+  const doc = (() => { try { return els.preview.contentDocument; } catch { return null; } })();
+  if (!doc || !doc.body) return;
+
+  // 读 baseHash
+  const meta = doc.querySelector('meta[name="atlas-base-hash"]');
+  editState.baseHash = meta ? meta.getAttribute('content') : null;
+
+  injectEditStyle(doc);
+
+  // 编辑模式下拦截链接跳转 / 表单提交：可编辑文字常位于 <a> 内，点击编辑
+  // 不应让 iframe 导航走掉（否则整页跳到 base href 目录，报 Cannot GET）
+  doc.addEventListener('click', (e) => {
+    const t = e.target;
+    if (t && t.closest && t.closest('a, area')) {
+      e.preventDefault();
+    }
+  }, true);
+  doc.addEventListener('submit', (e) => { e.preventDefault(); }, true);
+
+  // 文本节点：可就地编辑
+  const textEls = doc.querySelectorAll('span[data-atlas-role="text"][data-atlas-eid]');
+  textEls.forEach((el) => {
+    el.setAttribute('contenteditable', 'true');
+    el.setAttribute('spellcheck', 'false');
+    el.addEventListener('input', () => {
+      const eid = parseInt(el.getAttribute('data-atlas-eid'), 10);
+      editState.ops.set(eid, { eid, type: 'setText', text: el.textContent });
+      markDirty();
+    });
+    // 编辑时回车不插入换行（保持单段文本）
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+    });
+  });
+
+  // 列表容器：拖动重排（仅同容器内）。SortableJS 需在 iframe 内运行，
+  // 否则跨文档事件绑定不可靠 → 把 vendor 脚本注入 iframe 后再绑定。
+  const lists = doc.querySelectorAll('[data-atlas-role="list"][data-atlas-eid]');
+  if (lists.length > 0) {
+    ensureSortableInIframe(doc, els.preview.contentWindow, (SortableCtor) => {
+      if (!SortableCtor) return;
+      let groupSeq = 0;
+      lists.forEach((container) => {
+        const containerEid = parseInt(container.getAttribute('data-atlas-eid'), 10);
+        const itemSelector = '[data-atlas-role="list-item"][data-atlas-eid]';
+        const s = SortableCtor.create(container, {
+          group: 'atlas-edit-' + (groupSeq++),   // 唯一 group：禁止跨容器
+          draggable: itemSelector,
+          animation: 150,
+          forceFallback: true,                    // 走统一 mouse 事件路径（更稳、可测）
+          // 从可编辑文本上按下不触发拖拽（卡片含标题/正文时可正常选词编辑）
+          filter: '[data-atlas-role="text"], [contenteditable="true"]',
+          preventOnFilter: false,
+          ghostClass: 'atlas-edit-ghost',
+          onSort: () => {
+            const order = Array.from(container.children)
+              .filter((c) => c.matches(itemSelector))
+              .map((c) => parseInt(c.getAttribute('data-atlas-eid'), 10));
+            editState.ops.set(containerEid, { eid: containerEid, type: 'reorder', order });
+            markDirty();
+          },
+        });
+        editState.sortables.push(s);
+      });
+    });
+  }
+
+  // 链接编辑：点入 <a> 内文字时浮出小编辑条，可改 href
+  setupLinkEditing(doc);
+
+  if (textEls.length === 0 && lists.length === 0) {
+    showToast({ kind: 'info', text: '此文档没有可编辑的文案或列表' });
+  }
+}
+
+// 在编辑文档里挂一个浮动「链接编辑条」：当焦点进入某个 <a> 内的可编辑文字时，
+// 浮出输入框显示/修改该链接的 href。改动记为 setAttr op，保存时写回。
+function setupLinkEditing(doc) {
+  let bar = null, input = null, currentAnchor = null, hideTimer = null;
+  const win = doc.defaultView;
+
+  function ensureBar() {
+    if (bar) return;
+    bar = doc.createElement('div');
+    bar.setAttribute('data-atlas-linkbar', '1');
+    bar.hidden = true;
+    const ico = doc.createElement('span');
+    ico.className = 'lk-ico';
+    ico.textContent = '🔗';
+    input = doc.createElement('input');
+    input.type = 'text';
+    input.placeholder = '链接地址 (href)';
+    bar.appendChild(ico);
+    bar.appendChild(input);
+    doc.body.appendChild(bar);
+
+    input.addEventListener('input', () => {
+      if (!currentAnchor) return;
+      const eid = parseInt(currentAnchor.getAttribute('data-atlas-eid'), 10);
+      const v = input.value;
+      editState.ops.set(eid, { eid, type: 'setAttr', name: 'href', value: v });
+      currentAnchor.setAttribute('data-atlas-href', v);
+      currentAnchor.setAttribute('href', v);
+      markDirty();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); input.blur(); }
+    });
+  }
+
+  function showFor(anchor, span) {
+    ensureBar();
+    currentAnchor = anchor;
+    const cur = anchor.getAttribute('data-atlas-href');
+    input.value = cur != null ? cur : (anchor.getAttribute('href') || '');
+    bar.hidden = false;
+    const r = span.getBoundingClientRect();
+    const top = r.top + (win.scrollY || 0) - 40;
+    const left = r.left + (win.scrollX || 0);
+    bar.style.top = Math.max(2, top) + 'px';
+    bar.style.left = Math.max(2, left) + 'px';
+  }
+
+  function scheduleHide() {
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      const ae = doc.activeElement;
+      if (bar && bar.contains(ae)) return;
+      if (ae && ae.matches && ae.matches('span[data-atlas-role="text"]') && ae.closest('[data-atlas-link]')) return;
+      if (bar) bar.hidden = true;
+      currentAnchor = null;
+    }, 140);
+  }
+
+  doc.addEventListener('focusin', (e) => {
+    const t = e.target;
+    if (t && t.matches && t.matches('span[data-atlas-role="text"]')) {
+      const anchor = t.closest('[data-atlas-link][data-atlas-eid]');
+      if (anchor) showFor(anchor, t);
+    }
+  }, true);
+  doc.addEventListener('focusout', scheduleHide, true);
+}
+
+// 把 SortableJS 注入到 iframe 内（同源），确保拖拽事件在 iframe 文档内绑定
+function ensureSortableInIframe(doc, win, cb) {
+  if (win && win.Sortable) return cb(win.Sortable);
+  const existing = doc.querySelector('script[data-atlas-sortable]');
+  if (existing) {
+    existing.addEventListener('load', () => cb(win.Sortable || null));
+    return;
+  }
+  const s = doc.createElement('script');
+  s.src = '/vendor/Sortable.min.js';   // 绝对路径，绕过 base href
+  s.setAttribute('data-atlas-sortable', '1');
+  s.onload = () => cb(win.Sortable || null);
+  s.onerror = () => cb(null);
+  (doc.head || doc.documentElement).appendChild(s);
+}
+
+function injectEditStyle(doc) {
+  if (doc.querySelector(`style[${EDIT_STYLE_ATTR}]`)) return;
+  const style = doc.createElement('style');
+  style.setAttribute(EDIT_STYLE_ATTR, '1');
+  style.textContent = `
+    [data-atlas-role="text"] {
+      outline: 1px dashed rgba(91,156,255,.55);
+      outline-offset: 2px;
+      border-radius: 3px;
+      cursor: text;
+      transition: background .12s ease, outline-color .12s ease;
+    }
+    [data-atlas-role="text"]:hover {
+      outline-color: rgba(91,156,255,.95);
+      background: rgba(91,156,255,.10);
+    }
+    [data-atlas-role="text"]:focus {
+      outline: 2px solid #5b9cff;
+      background: rgba(91,156,255,.14);
+    }
+    [data-atlas-role="list-item"] {
+      cursor: grab;
+      position: relative;
+    }
+    [data-atlas-role="list-item"]:hover {
+      outline: 1px dashed rgba(91,156,255,.45);
+      outline-offset: 2px;
+      border-radius: 3px;
+    }
+    .atlas-edit-ghost {
+      opacity: .5;
+      background: rgba(91,156,255,.18) !important;
+      outline: 2px solid #5b9cff;
+    }
+    [data-atlas-linkbar] {
+      position: absolute; z-index: 2147483600;
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 7px; border-radius: 8px;
+      background: #1d222b; color: #e6e8ec;
+      border: 1px solid #5b9cff;
+      box-shadow: 0 6px 22px rgba(0,0,0,.38);
+      font: 12px/1.4 -apple-system, system-ui, sans-serif;
+    }
+    [data-atlas-linkbar][hidden] { display: none; }
+    [data-atlas-linkbar] .lk-ico { flex: none; }
+    [data-atlas-linkbar] input {
+      width: 280px; max-width: 52vw;
+      border: 1px solid #3a4150; border-radius: 5px;
+      background: #0f1217; color: #e6e8ec;
+      padding: 3px 7px; font: inherit; outline: none;
+    }
+    [data-atlas-linkbar] input:focus { border-color: #5b9cff; }
+  `;
+  (doc.head || doc.documentElement).appendChild(style);
+}
+
+function markDirty() {
+  if (!editState.dirty) {
+    editState.dirty = true;
+    updateEditToolbar();
+  }
+}
+
+// 退出编辑模式（清理 Sortable / 状态）；restore=true 时把预览切回只读 /raw/
+function exitEditMode({ restore } = { restore: true }) {
+  for (const s of editState.sortables) {
+    try { s.destroy(); } catch {}
+  }
+  const rawUrl = editState.rawUrl;
+  editState.active = false;
+  editState.path = null;
+  editState.baseHash = null;
+  editState.dirty = false;
+  editState.ops = new Map();
+  editState.sortables = [];
+  editState.saving = false;
+  updateEditToolbar();
+  if (restore && rawUrl) {
+    // 记录当前滚动位置，重载后恢复，避免保存/取消后跳回顶部
+    try {
+      const w = els.preview.contentWindow;
+      pendingPreviewScroll = { x: w.scrollX || 0, y: w.scrollY || 0 };
+    } catch { pendingPreviewScroll = null; }
+    els.preview.classList.add('loading');
+    els.preview.src = rawUrl;
+  }
+}
+
+function cancelEdit() {
+  if (!editState.active) return;
+  if (!confirmDiscardIfDirty()) return;
+  exitEditMode({ restore: true });
+}
+
+async function saveEdit() {
+  if (!editState.active || editState.saving) return;
+  const ops = Array.from(editState.ops.values());
+  if (ops.length === 0 || !editState.dirty) {
+    showToast({ kind: 'info', text: '没有改动' });
+    exitEditMode({ restore: true });
+    return;
+  }
+  editState.saving = true;
+  updateEditToolbar();
+  try {
+    const resp = await fetch('/api/save-edits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: editState.path, baseHash: editState.baseHash, ops }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok && data.ok) {
+      const savedPath = editState.path;
+      showToast({ kind: 'success', text: '已保存到文件' });
+      // 标已读（防止自我写入红点）
+      if (state.files[savedPath]) {
+        state.files[savedPath].unread = false;
+        state.files[savedPath].seenAt = Date.now();
+      }
+      exitEditMode({ restore: true });   // 切回 /raw/ 展示已保存结果
+    } else if (resp.status === 409) {
+      editState.saving = false;
+      updateEditToolbar();
+      showToast({ kind: 'error', text: '文件已被外部修改，请取消后重新打开再编辑' });
+    } else {
+      editState.saving = false;
+      updateEditToolbar();
+      showToast({ kind: 'error', text: '保存失败：' + (data.error || resp.status) });
+    }
+  } catch (e) {
+    editState.saving = false;
+    updateEditToolbar();
+    showToast({ kind: 'error', text: '保存失败：' + e.message });
+  }
+}
+
+// 切换工具栏到编辑态 / 常规态
+function updateEditToolbar() {
+  const editing = editState.active;
+  els.btnEdit.classList.toggle('hidden', editing);
+  els.btnEditSave.classList.toggle('hidden', !editing);
+  els.btnEditCancel.classList.toggle('hidden', !editing);
+  els.btnEditSave.disabled = editState.saving;
+  els.btnEditSave.textContent = editState.saving ? '保存中…' : '保存';
+  els.btnEditCancel.disabled = editState.saving;
+  // 编辑态下禁用会冲突的操作
+  [els.btnExportPdf, els.btnShare, els.btnReloadPreview, els.btnMarkUnread].forEach((b) => {
+    if (b) b.disabled = editing ? true : b.disabled;
+  });
+  if (!editing && state.activeFilePath) {
+    // 退出编辑后恢复这些按钮可用
+    els.btnExportPdf.disabled = false;
+    els.btnShare.disabled = false;
+    els.btnReloadPreview.disabled = false;
+    els.btnMarkUnread.disabled = false;
+  }
+  // 编辑态给主区域一个视觉标识
+  document.body.classList.toggle('editing-mode', editing);
+}
+
+els.btnEdit.addEventListener('click', () => { if (!els.btnEdit.disabled) enterEditMode(); });
+els.btnEditSave.addEventListener('click', () => saveEdit());
+els.btnEditCancel.addEventListener('click', () => cancelEdit());
+
+// 有未保存改动时离开页面拦截
+window.addEventListener('beforeunload', (e) => {
+  if (editState.active && editState.dirty) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
 
 // ---------- iframe 内高亮搜索命中 ----------
 // 同源（都是 localhost:4321），可直接操作 contentDocument

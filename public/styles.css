@@ -1549,3 +1549,36 @@ kbd {
 .modal-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 .tree::-webkit-scrollbar-thumb:hover,
 .modal-panel::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+
+/* ---------- 预览区轻量编辑 ---------- */
+/* 保存/取消按钮默认隐藏：需覆盖 .main-actions button 的 display（优先级更高） */
+.main-actions button.hidden { display: none; }
+/* 编辑态：标题栏左侧一条 accent 竖条 + 编辑按钮高亮，提示当前可编辑 */
+#btn-edit.active,
+.editing-mode #btn-edit {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.main-actions button.edit-save {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.main-actions button.edit-save:hover:not(:disabled) {
+  background: #4a8bf0;
+  border-color: #4a8bf0;
+}
+.main-actions button.edit-save:disabled {
+  opacity: 0.6;
+}
+.main-actions button.edit-cancel {
+  color: var(--text-dim);
+}
+.editing-mode .main-header {
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+.editing-mode .preview {
+  outline: 2px solid rgba(91, 156, 255, 0.35);
+  outline-offset: -2px;
+}

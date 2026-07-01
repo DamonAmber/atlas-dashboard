@@ -11,6 +11,9 @@ const userPaths = require('./lib/paths');
 const updateCheck = require('./lib/update-check');
 const pdfExport = require('./lib/pdf-export');
 const share = require('./lib/share');
+const editable = require('./lib/editable');
+const editApply = require('./lib/edit-apply');
+const editBackup = require('./lib/edit-backup');
 const pkg = require('./package.json');
 
 // 路径注入：CLI（bin/atlas.js）通过环境变量传，开发模式落到默认 ~/.atlas/
@@ -304,6 +307,25 @@ function validateTree(rootNodes) {
 const events = new EventEmitter();
 events.setMaxListeners(50);
 
+// 自我写入抑制：/api/save-edits 写盘后登记 path→mtime，chokidar change 命中则
+// 不把文件标未读（避免用户刚保存就看到自己的红点）。10s 后自动过期。
+const selfWrites = new Map();
+function markSelfWrite(filePath, mtimeMs) {
+  selfWrites.set(filePath, mtimeMs);
+  setTimeout(() => {
+    if (selfWrites.get(filePath) === mtimeMs) selfWrites.delete(filePath);
+  }, 10_000).unref();
+}
+function isSelfWrite(filePath, mtimeMs) {
+  const v = selfWrites.get(filePath);
+  if (v === undefined) return false;
+  if (Math.abs((mtimeMs || 0) - v) < 2000) {
+    selfWrites.delete(filePath);
+    return true;
+  }
+  return false;
+}
+
 let watchers = [];
 function startWatchers() {
   for (const w of watchers) w.close().catch(() => {});
@@ -339,8 +361,11 @@ function startWatchers() {
 
       const store = loadStore();
       if (kind === 'change') {
-        delete store.seen[filePath];
-        saveStore(store);
+        // 自我写入（编辑保存触发）不标未读
+        if (!isSelfWrite(filePath, mtime)) {
+          delete store.seen[filePath];
+          saveStore(store);
+        }
       }
 
       events.emit('fs', {
@@ -815,6 +840,112 @@ app.post('/api/export-pdf', async (req, res) => {
   } catch (err) {
     send({ phase: 'error', reason: 'unexpected', message: err.message });
     res.end();
+  }
+});
+
+// ---------- 预览区轻量编辑：编辑文档注入 + 保存 ----------
+// GET /api/edit-doc?path=<abs>：返回带锚点标注（data-atlas-eid/role + 包裹 span）的
+// 编辑专用文档。该文档只用于 iframe 编辑显示，绝不写盘。
+app.get('/api/edit-doc', async (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath || typeof filePath !== 'string' || !isPathInScanRoots(filePath)) {
+    return res.status(400).type('text/plain').send('路径非法');
+  }
+  const lower = filePath.toLowerCase();
+  if (!lower.endsWith('.html') && !lower.endsWith('.htm')) {
+    return res.status(400).type('text/plain').send('只支持 HTML 文件');
+  }
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).type('text/plain').send('文件不存在');
+  }
+  try {
+    const raw = await fsp.readFile(filePath, 'utf8');
+    // base href：让相对资源仍按 /raw/<idx>/<dir>/ 解析
+    const fileUrl = buildFileUrl(filePath);
+    const baseHref = fileUrl ? fileUrl.slice(0, fileUrl.lastIndexOf('/') + 1) : null;
+    const { html } = await editable.buildAnnotatedDoc(raw, { baseHref });
+    res.set('Cache-Control', 'no-store');
+    res.type('html').send(html);
+  } catch (e) {
+    console.error('edit-doc 失败:', e);
+    res.status(500).type('text/plain').send('解析失败: ' + (e && e.message || e));
+  }
+});
+
+// POST /api/save-edits：把编辑操作写回磁盘原文件（精确区间替换 / 子树重写）
+// 写前 baseHash 冲突检测 + 备份；标记自我写入避免误标未读。
+app.post('/api/save-edits', async (req, res) => {
+  const body = req.body || {};
+  const filePath = body.path;
+  if (!filePath || typeof filePath !== 'string' || !isPathInScanRoots(filePath)) {
+    return res.status(400).json({ error: '路径非法' });
+  }
+  const lower = filePath.toLowerCase();
+  if (!lower.endsWith('.html') && !lower.endsWith('.htm')) {
+    return res.status(400).json({ error: '只支持 HTML 文件' });
+  }
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: '文件不存在' });
+  }
+  const ops = body.ops;
+  if (!Array.isArray(ops)) return res.status(400).json({ error: 'ops 必须是数组' });
+  if (ops.length > 5000) return res.status(400).json({ error: 'ops 过多' });
+  for (const op of ops) {
+    if (op && op.type === 'setText' && typeof op.text === 'string' && op.text.length > 100_000) {
+      return res.status(400).json({ error: '单条文本过长' });
+    }
+    if (op && op.type === 'setAttr' && typeof op.value === 'string' && op.value.length > 8192) {
+      return res.status(400).json({ error: '链接地址过长' });
+    }
+  }
+
+  try {
+    const raw = await fsp.readFile(filePath, 'utf8');
+    const currentHash = editable.sha1(raw);
+    if (body.baseHash && body.baseHash !== currentHash) {
+      return res.status(409).json({ error: 'conflict', message: '文件已被外部修改，请刷新后重试' });
+    }
+    if (ops.length === 0) {
+      return res.json({ ok: true, unchanged: true });
+    }
+
+    const p = await editable.loadParse5();
+    const doc = p.parse(raw, { sourceCodeLocationInfo: true });
+    const analysis = editable.analyzeDocument(doc);
+
+    let next;
+    try {
+      next = editApply.applyOps(raw, doc, analysis, ops, p);
+    } catch (e) {
+      if (e.code === 'INVALID_OPS') return res.status(400).json({ error: e.message });
+      throw e;
+    }
+
+    if (next === raw) {
+      return res.json({ ok: true, unchanged: true });
+    }
+
+    // 备份（失败不阻断保存，仅告警）
+    try { editBackup.backup(filePath); } catch (e) {
+      console.warn('  ! 编辑备份失败（继续保存）:', e && e.message);
+    }
+
+    // 原子写回
+    const tmp = filePath + '.atlas-tmp';
+    await fsp.writeFile(tmp, next, 'utf8');
+    await fsp.rename(tmp, filePath);
+    const stat = await fsp.stat(filePath);
+    markSelfWrite(filePath, stat.mtimeMs);
+
+    // 标记已读，避免自我写入被标未读
+    const store = loadStore();
+    store.seen[filePath] = Date.now();
+    saveStore(store);
+
+    res.json({ ok: true, mtime: stat.mtimeMs });
+  } catch (e) {
+    console.error('save-edits 失败:', e);
+    res.status(500).json({ error: e && e.message || String(e) });
   }
 });
 
