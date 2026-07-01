@@ -1155,7 +1155,9 @@ app.get('/api/events', (req, res) => {
   });
 });
 
-const httpServer = app.listen(PORT, '0.0.0.0', () => {
+// 不指定 host → Node 绑定 :: 双栈（同时接受 IPv6 ::1 与 IPv4 127.0.0.1 及 LAN）。
+// 之前显式传 '0.0.0.0' 只绑 IPv4，导致 localhost 优先解析到 ::1 的机器上打不开。
+const httpServer = app.listen(PORT, () => {
   console.log(`\n  Atlas dashboard 运行中`);
   console.log(`  → http://localhost:${PORT}`);
   // 列出 LAN IP，方便用户知道分享链接里会用什么地址
