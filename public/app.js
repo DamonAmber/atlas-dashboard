@@ -1141,6 +1141,11 @@ els.preview.addEventListener('load', () => {
     bindEditableDoc();
     applyPendingScroll(pendingEditScroll);
     pendingEditScroll = null;
+  } else if (pendingPreviewScrollPct != null) {
+    // 退出 Markdown 编辑后重载渲染预览：按百分比恢复浏览位置（扣除底部留白）
+    applyPendingScrollPct(pendingPreviewScrollPct);
+    pendingPreviewScrollPct = null;
+    updateIframeHighlight();
   } else {
     // 退出编辑后重载 /raw/：恢复之前的滚动锚点
     applyPendingScroll(pendingPreviewScroll);
@@ -1157,6 +1162,35 @@ const EDIT_STYLE_ATTR = 'data-atlas-edit-style';
 // 退出编辑重载 /raw/、或进入编辑切到编辑文档时，用于保持滚动锚点不跳变
 let pendingPreviewScroll = null;
 let pendingEditScroll = null;
+// 退出 Markdown 编辑时，按百分比恢复只读预览的滚动位置（编辑器与 iframe 布局/尺寸不同，
+// 无法用绝对像素；且 iframe 末尾有一段占位留白，需要从可滚动高度里扣掉）
+let pendingPreviewScrollPct = null;
+
+function applyPendingScrollPct(pct) {
+  if (pct == null) return;
+  const doScroll = () => {
+    try {
+      const w = els.preview.contentWindow;
+      const doc = w.document;
+      const root = doc.scrollingElement || doc.documentElement;
+      const spacer = doc.querySelector('.md-tail-space');
+      const spacerH = spacer ? spacer.offsetHeight : 0;
+      const fullMax = root.scrollHeight - root.clientHeight;
+      const realMax = Math.max(0, fullMax - spacerH);
+      const y = Math.round(pct * realMax);
+      const prevRoot = root && root.style.scrollBehavior;
+      const prevBody = doc.body && doc.body.style.scrollBehavior;
+      if (root) root.style.scrollBehavior = 'auto';
+      if (doc.body) doc.body.style.scrollBehavior = 'auto';
+      w.scrollTo(0, y);
+      if (root) root.scrollTop = y;
+      if (root) root.style.scrollBehavior = prevRoot || '';
+      if (doc.body) doc.body.style.scrollBehavior = prevBody || '';
+    } catch {}
+  };
+  doScroll();
+  requestAnimationFrame(doScroll);
+}
 
 // 在 iframe 仍处于淡入前（.loading opacity:0）时恢复滚动。
 // 强制 scroll-behavior:auto 覆盖页面可能的 smooth，避免出现「从顶部滚下来」的动画。
@@ -1632,6 +1666,14 @@ function exitEditMode({ restore } = { restore: true }) {
   updateEditToolbar();
 
   if (wasMd) {
+    // 退出前记录编辑器预览面板的滚动百分比，重载 iframe 后按同比例恢复，避免跳回顶部
+    if (restore && rawUrl) {
+      try {
+        const pv = els.mdPreview;
+        const max = pv.scrollHeight - pv.clientHeight;
+        pendingPreviewScrollPct = max > 0 ? pv.scrollTop / max : 0;
+      } catch { pendingPreviewScrollPct = null; }
+    }
     // Markdown：隐藏分栏编辑器，恢复 iframe 只读预览
     els.mdPreview.removeAttribute('contenteditable');
     els.mdEditor.classList.add('hidden');

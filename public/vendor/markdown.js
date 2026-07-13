@@ -384,17 +384,168 @@
     return md.replace(/\n{3,}/g, '\n\n').replace(/[ \t]+\n/g, '\n').trim() + '\n';
   }
 
+  // ---------- 目录（TOC）：从渲染后的 HTML 抽取标题，生成锚点导航 ----------
+  function stripTags(html) {
+    return String(html == null ? '' : html).replace(/<[^>]+>/g, '');
+  }
+
+  // 生成锚点 slug：保留字母数字、中日韩、连字符；重复时追加序号去重
+  function slugify(text, used) {
+    var base = stripTags(text).trim().toLowerCase()
+      .replace(/[^\w\u4e00-\u9fff\- ]+/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    if (!base) base = 'section';
+    var slug = base, k = 1;
+    while (used[slug]) slug = base + '-' + (k++);
+    used[slug] = true;
+    return slug;
+  }
+
+  // 给渲染后的 HTML 里的标题注入 id，并收集目录项
+  function extractHeadings(html) {
+    var used = {};
+    var items = [];
+    var out = String(html).replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, function (m, lvl, inner) {
+      var text = stripTags(inner).trim();
+      if (!text) return m;
+      var id = slugify(text, used);
+      items.push({ level: +lvl, id: id, text: text });
+      return '<h' + lvl + ' id="' + id + '">' + inner + '</h' + lvl + '>';
+    });
+    return { html: out, items: items };
+  }
+
+  // 把扁平的标题数组按 level 组织成嵌套树，供折叠使用
+  function buildTocTree(items) {
+    var root = { children: [] };
+    var stack = [{ node: root, level: 0 }];
+    items.forEach(function (it) {
+      while (stack.length > 1 && stack[stack.length - 1].level >= it.level) stack.pop();
+      var node = { item: it, children: [] };
+      stack[stack.length - 1].node.children.push(node);
+      stack.push({ node: node, level: it.level });
+    });
+    return root.children;
+  }
+
+  function tocTreeHtml(nodes) {
+    if (!nodes.length) return '';
+    var lis = nodes.map(function (n) {
+      var hasKids = n.children.length > 0;
+      var caret = hasKids
+        ? '<button class="toc-caret" type="button" aria-label="折叠 / 展开"></button>'
+        : '<span class="toc-caret toc-caret-leaf"></span>';
+      return '<li class="toc-li' + (hasKids ? ' has-children' : '') + '">'
+        + '<div class="toc-row">' + caret
+        + '<a href="#' + n.item.id + '" data-target="' + n.item.id + '" title="' + escapeHtml(n.item.text) + '">'
+        + escapeHtml(n.item.text) + '</a></div>'
+        + (hasKids ? tocTreeHtml(n.children) : '')
+        + '</li>';
+    }).join('');
+    return '<ul class="toc-ul">' + lis + '</ul>';
+  }
+
+  function tocListHtml(items) {
+    if (!items.length) return '';
+    return tocTreeHtml(buildTocTree(items));
+  }
+
+  // 只读预览页里 TOC 侧栏的样式（不影响编辑器分栏预览面板）——克制、极简
+  var tocCss = [
+    'html,body{margin:0;background:#fff;}',
+    '*{scroll-behavior:smooth;}',
+    '.md-toc{position:fixed;top:0;left:0;width:250px;height:100vh;box-sizing:border-box;overflow-y:auto;',
+    'padding:46px 10px 32px 14px;border-right:1px solid #f0f1f3;background:#fff;z-index:5;transition:transform .2s ease;',
+    'font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}',
+    '.md-toc-title{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#a0a6b0;font-weight:600;padding:0 8px 10px;}',
+    '.toc-ul{list-style:none;margin:0;padding:0;}',
+    '.toc-ul .toc-ul{padding-left:13px;}',
+    '.toc-row{display:flex;align-items:center;}',
+    '.toc-row a{flex:1;min-width:0;display:block;padding:4px 6px;color:#697280;text-decoration:none;',
+    'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:5px;transition:color .12s,background .12s;}',
+    '.toc-row a:hover{color:#1f2328;background:#f6f7f9;}',
+    '.toc-row a.active{color:#0969da;font-weight:500;}',
+    // caret：极简三角，仅有子项时可点
+    '.toc-caret{flex:0 0 16px;width:16px;height:20px;padding:0;border:0;background:none;cursor:pointer;',
+    'display:inline-flex;align-items:center;justify-content:center;color:#c2c7d0;}',
+    '.toc-caret::before{content:"";width:0;height:0;border-left:4px solid currentColor;',
+    'border-top:3.5px solid transparent;border-bottom:3.5px solid transparent;transition:transform .15s ease;}',
+    '.toc-li.has-children:not(.collapsed)>.toc-row>.toc-caret::before{transform:rotate(90deg);}',
+    '.toc-caret:hover{color:#697280;}',
+    '.toc-caret-leaf{cursor:default;}.toc-caret-leaf::before{display:none;}',
+    '.toc-li.collapsed>.toc-ul{display:none;}',
+    // 收起 / 展开按钮：无边框图标
+    '.md-toc-toggle{position:fixed;top:9px;left:9px;z-index:6;width:30px;height:30px;padding:0;',
+    'display:flex;align-items:center;justify-content:center;border:0;border-radius:7px;background:transparent;',
+    'color:#9aa1ac;cursor:pointer;transition:background .12s,color .12s;}',
+    '.md-toc-toggle:hover{background:#f2f3f5;color:#4b5563;}',
+    '.md-toc-toggle svg{width:17px;height:17px;}',
+    '.md-content{margin-left:250px;transition:margin-left .2s ease;}',
+    '.md-content .md-inner{max-width:860px;margin:0 auto;padding:32px 44px;box-sizing:border-box;}',
+    // 底部留白：保证最后几个标题也能滚到视口顶部（锚点跳转不失效）
+    '.md-tail-space{height:70vh;}',
+    '.md-body h1,.md-body h2,.md-body h3,.md-body h4,.md-body h5,.md-body h6{scroll-margin-top:20px;}',
+    'body.toc-collapsed .md-toc{transform:translateX(-100%);}',
+    'body.toc-collapsed .md-content{margin-left:0;}',
+    '@media (max-width:900px){.md-content{margin-left:0;}.md-toc{box-shadow:2px 0 14px rgba(0,0,0,.1);}}',
+  ].join('');
+
+  // TOC 交互脚本：收起持久化、层级折叠、平滑滚动、滚动高亮当前章节
+  var tocScript = '(function(){'
+    + 'var KEY="atlas:mdTocCollapsed";var toc=document.getElementById("mdToc");var tg=document.getElementById("mdTocToggle");'
+    + 'try{if(localStorage.getItem(KEY)==="1")document.body.classList.add("toc-collapsed");}catch(e){}'
+    + 'if(tg)tg.addEventListener("click",function(){var c=document.body.classList.toggle("toc-collapsed");try{localStorage.setItem(KEY,c?"1":"0");}catch(e){}});'
+    + 'if(toc)toc.addEventListener("click",function(e){'
+    + 'var caret=e.target.closest?e.target.closest(".toc-caret"):null;'
+    + 'if(caret&&caret.tagName==="BUTTON"){var li=caret.closest(".toc-li");if(li)li.classList.toggle("collapsed");return;}'
+    + 'var a=e.target.closest?e.target.closest("a[data-target]"):null;if(!a)return;e.preventDefault();'
+    + 'var el=document.getElementById(a.getAttribute("data-target"));if(el){el.scrollIntoView({behavior:"smooth",block:"start"});try{history.replaceState(null,"","#"+a.getAttribute("data-target"));}catch(_){}}'
+    + 'if(window.matchMedia&&window.matchMedia("(max-width:900px)").matches)document.body.classList.add("toc-collapsed");});'
+    + 'var links={};Array.prototype.forEach.call(document.querySelectorAll(".toc-ul a[data-target]"),function(a){links[a.getAttribute("data-target")]=a;});'
+    + 'function expandTo(a){var li=a.closest(".toc-li");while(li){if(li.classList.contains("has-children"))li.classList.remove("collapsed");li=li.parentElement?li.parentElement.closest(".toc-li"):null;}}'
+    + 'var heads=Array.prototype.slice.call(document.querySelectorAll(".md-body h1[id],.md-body h2[id],.md-body h3[id],.md-body h4[id],.md-body h5[id],.md-body h6[id]"));'
+    + 'var cur=null;function setActive(id){if(cur===id)return;if(cur&&links[cur])links[cur].classList.remove("active");cur=id;if(id&&links[id]){var a=links[id];a.classList.add("active");expandTo(a);'
+    + 'var pr=toc.getBoundingClientRect(),ar=a.getBoundingClientRect();if(ar.top<pr.top||ar.bottom>pr.bottom)a.scrollIntoView({block:"nearest"});}}'
+    + 'if("IntersectionObserver" in window&&heads.length){var vis={};var io=new IntersectionObserver(function(es){es.forEach(function(en){vis[en.target.id]=en.isIntersecting;});'
+    + 'var chosen=null;for(var i=0;i<heads.length;i++){if(vis[heads[i].id]){chosen=heads[i].id;break;}}'
+    + 'if(!chosen){for(var j=heads.length-1;j>=0;j--){if(heads[j].getBoundingClientRect().top<80){chosen=heads[j].id;break;}}}'
+    + 'if(!chosen&&heads.length)chosen=heads[0].id;setActive(chosen);},{rootMargin:"0px 0px -70% 0px",threshold:0});'
+    + 'heads.forEach(function(h){io.observe(h);});}'
+    + '})();';
+
   // 组装完整 HTML 预览页（供服务端 /api/render-md 使用）
   function renderPage(src, opts) {
     opts = opts || {};
     var title = escapeHtml(opts.title || 'Markdown');
-    var body = render(src);
+    var extracted = extractHeadings(render(src));
+    var body = extracted.html;
+    var items = extracted.items;
+    var hasToc = items.length >= 2; // 至少两个标题才值得显示导航
+
+    if (!hasToc) {
+      return '<!doctype html><html lang="zh"><head><meta charset="utf-8" />'
+        + '<meta name="viewport" content="width=device-width,initial-scale=1" />'
+        + '<title>' + title + '</title>'
+        + '<style>html,body{margin:0;background:#fff;}body{padding:32px 40px;max-width:900px;margin:0 auto;}'
+        + markdownCss + '</style></head>'
+        + '<body class="md-body">' + body + '</body></html>';
+    }
+
+    var toggleSvg = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" '
+      + 'stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg>';
+
     return '<!doctype html><html lang="zh"><head><meta charset="utf-8" />'
       + '<meta name="viewport" content="width=device-width,initial-scale=1" />'
       + '<title>' + title + '</title>'
-      + '<style>html,body{margin:0;background:#fff;}body{padding:32px 40px;max-width:900px;margin:0 auto;}'
-      + markdownCss + '</style></head>'
-      + '<body class="md-body">' + body + '</body></html>';
+      + '<style>' + tocCss + markdownCss + '</style></head>'
+      + '<body>'
+      + '<button class="md-toc-toggle" id="mdTocToggle" type="button" title="展开 / 收起目录" aria-label="展开或收起目录">' + toggleSvg + '</button>'
+      + '<nav class="md-toc" id="mdToc" aria-label="文档目录"><div class="md-toc-title">目录</div>' + tocListHtml(items) + '</nav>'
+      + '<div class="md-content"><div class="md-inner md-body">' + body + '<div class="md-tail-space" aria-hidden="true"></div></div></div>'
+      + '<script>' + tocScript + '</script>'
+      + '</body></html>';
   }
 
   return {
