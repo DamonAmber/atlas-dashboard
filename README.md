@@ -6,9 +6,9 @@
 [![node](https://img.shields.io/node/v/atlas-dashboard?color=8b95a7&style=flat-square)](https://nodejs.org/)
 [![website](https://img.shields.io/badge/website-damonamber.github.io-5b9cff?style=flat-square)](https://damonamber.github.io/atlas-dashboard/)
 
-> 本地 HTML 文档统一浏览/管理 dashboard。
-> 扫描你指定的目录里的所有 `.html` 文件，提供：
-> 目录树（嵌套分组、拖拽重排）· 备注名 · 未读红点 · 桌面通知 · 在访达打开 · ⌘B 收侧栏 · iframe 平滑预览。
+> 本地 HTML / Markdown 文档统一浏览/管理 dashboard。
+> 扫描你指定的目录里的所有 `.html` 与 `.md` 文件，提供：
+> 目录树（嵌套分组、拖拽重排）· 备注名 · 未读红点 · 桌面通知 · 在访达打开 · ⌘B 收侧栏 · iframe 平滑预览 · Markdown 实时预览与编辑。
 
 适合的场景：你让 AI 在不同项目里到处生成 HTML 报告/原型/总结，浏览器 Tab 越积越多——Atlas 把它们汇聚在一处，AI 更新过的文档会标红，看完即清。
 
@@ -131,6 +131,7 @@ atlas
 
 ## Dashboard 功能
 
+- **HTML + Markdown 双模**：在 ⚙ 设置里勾选要扫描的文档类型，HTML（`.html`/`.htm`）与 Markdown（`.md`/`.markdown`）**可同时启用共存**。目录树里用不同图标 + 彩色角标（`HTML` / `MD`）一眼区分。Markdown 文件内建渲染预览；点「编辑」进入**源码 / 预览分栏编辑器**：左侧写源码右侧实时渲染、两侧滚动百分比同步、进入编辑保持之前的浏览位置；**预览区也支持直接所见即所得编辑**（改文字/标题/列表），编辑即反解析回 Markdown。保存写回原文件，带内容哈希冲突检测与自动备份（存 `~/.atlas/backups/`）。
 - **目录树**：按你扫描根下的一级目录自动归类。可拖拽重排、新建嵌套分组、双击重命名分组。
 - **预览区轻量编辑**：点工具栏「编辑」可在预览里直接改文案、拖动 `ul/ol` 列表项、表格行、以及同类卡片组（同标签+同 class、≥3 个、连续）排序，所见即所得。点入链接文字还会浮出小编辑条，可顺便改超链接地址。hover 高亮提示可编辑处；脚本/图表/代码块等风险内容自动不可编辑。保存只改你碰过的源码、其余字节不动（不会破坏图表与格式），写前自动备份（存 `~/.atlas/backups/`），取消即还原。
 - **拖拽**：文件拖到任意分组（含根级别），分组拖到分组内（嵌套）。folder 不会被拖进自己内部（系统会拦截）。**拖文件悬停在折叠 folder 头上 600ms 自动展开**——直接拖进去。

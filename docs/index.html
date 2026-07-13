@@ -1043,11 +1043,11 @@
   <div class="wrap">
     <div class="eyebrow">
       <span class="pulse"></span>
-      <span>v<span id="cur-version">0.5.1</span> · 已上架 npm</span>
+      <span>v<span id="cur-version">0.6.0</span> · 已上架 npm</span>
     </div>
-    <h1>你让 AI 写了 30 份 HTML 报告——<br/><span class="grad">它们现在在哪？</span></h1>
+    <h1>你让 AI 写了 30 份 HTML / Markdown 报告——<br/><span class="grad">它们现在在哪？</span></h1>
     <p class="lede">
-      <strong>Atlas</strong> 扫你硬盘上指定的目录，把所有 <code>.html</code> 收进一棵本地目录树。更新过的标红点，看完即清。
+      <strong>Atlas</strong> 扫你硬盘上指定的目录，把所有 <code>.html</code> 与 <code>.md</code> 收进一棵本地目录树。更新过的标红点，看完即清。
     </p>
     <p class="lede">
       <strong>一个浏览器 Tab 替代之前的 30 个。</strong>
@@ -1184,8 +1184,21 @@
 <section id="features" class="reveal">
   <div class="wrap">
     <h2>它能做什么</h2>
-    <p class="sec-lede">围绕"看 HTML 文档"做到底。每一个细节都为减少打扰服务。</p>
+    <p class="sec-lede">围绕"看 HTML / Markdown 文档"做到底。每一个细节都为减少打扰服务。</p>
     <div class="features">
+      <div class="feat">
+        <h3>
+          <span class="feat-ico">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 2.5h5.5L13 6v7.5a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5z"/>
+              <path d="M9 2.5V6h4"/>
+              <path d="M5.5 8.5h5M5.5 10.5h5"/>
+            </svg>
+          </span>
+          HTML + Markdown 双模
+        </h3>
+        <p>不止 HTML——设置里勾选文档类型，<strong>HTML 与 Markdown 可同时扫描共存</strong>，目录树里用不同图标 + 彩色角标一眼区分。Markdown 内建渲染预览，还带一个<strong>源码 / 预览分栏编辑器</strong>：左边写源码右边实时渲染、两侧滚动同步，<strong>预览区还能直接所见即所得地改</strong>，编辑即反解析回 Markdown，保存写回原文件（含冲突检测与自动备份）。</p>
+      </div>
       <div class="feat">
         <h3>
           <span class="feat-ico">

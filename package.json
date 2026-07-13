@@ -1,9 +1,11 @@
 {
   "name": "atlas-dashboard",
-  "version": "0.5.1",
-  "description": "本地 HTML 文档统一浏览/管理 dashboard：扫描你指定的目录，提供统一目录树、未读红点、桌面通知。",
+  "version": "0.6.0",
+  "description": "本地 HTML / Markdown 文档统一浏览/管理 dashboard：扫描你指定的目录，提供统一目录树、未读红点、桌面通知、Markdown 实时预览与编辑。",
   "keywords": [
     "html",
+    "markdown",
+    "md",
     "dashboard",
     "preview",
     "viewer",

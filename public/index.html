@@ -85,7 +85,7 @@
         </svg>
       </button>
       <div class="crumbs" id="crumbs">
-        <span class="placeholder">从左侧选择一个 HTML 开始预览</span>
+        <span class="placeholder">从左侧选择一个文档开始预览</span>
       </div>
       <div class="main-actions">
         <div id="match-badge" class="match-badge hidden" title="搜索命中导航">
@@ -196,9 +196,21 @@
 
     <div class="preview">
       <iframe id="preview" title="预览"></iframe>
+      <!-- Markdown 编辑器：源码 + 实时预览分栏（默认隐藏，编辑 md 文件时显示） -->
+      <div class="md-editor hidden" id="md-editor">
+        <div class="md-editor-pane">
+          <div class="md-pane-label">Markdown 源码</div>
+          <textarea id="md-source" class="md-source" spellcheck="false" placeholder="在此编辑 Markdown…"></textarea>
+        </div>
+        <div class="md-editor-split" aria-hidden="true"></div>
+        <div class="md-preview-pane-wrap">
+          <div class="md-pane-label">预览（可直接编辑）</div>
+          <div id="md-preview" class="md-body md-preview-pane"></div>
+        </div>
+      </div>
       <div class="empty" id="empty-state">
         <div class="empty-art">📄</div>
-        <div>选中左侧目录中的任意 HTML 文件即可预览</div>
+        <div>选中左侧目录中的任意文档即可预览</div>
         <div class="empty-tip">提示：按 <kbd>/</kbd> 聚焦搜索框，hover 文件可编辑备注名</div>
       </div>
     </div>
@@ -235,6 +247,20 @@
             <button id="dir-cancel" type="button">取消</button>
             <button id="dir-select" type="button" class="primary">选择此目录</button>
           </div>
+        </div>
+      </section>
+      <section class="modal-section">
+        <h3>文档类型</h3>
+        <p class="muted">勾选 Atlas 要扫描并预览的文档类型，两种可同时启用。至少保留一项。</p>
+        <div class="doctype-choice" role="group" aria-label="文档类型">
+          <label class="doctype-option">
+            <input type="checkbox" name="doctype" value="html" />
+            <span class="doctype-label"><strong>HTML</strong><span class="muted">扫描 .html / .htm 文件</span></span>
+          </label>
+          <label class="doctype-option">
+            <input type="checkbox" name="doctype" value="md" />
+            <span class="doctype-label"><strong>Markdown</strong><span class="muted">扫描 .md / .markdown 文件，支持实时预览与编辑</span></span>
+          </label>
         </div>
       </section>
       <section class="modal-section">
@@ -309,6 +335,7 @@
 
   <script src="/vendor/Sortable.min.js"></script>
   <script src="/vendor/qrcode.min.js"></script>
+  <script src="/vendor/markdown.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

@@ -1582,3 +1582,119 @@ kbd {
   outline: 2px solid rgba(91, 156, 255, 0.35);
   outline-offset: -2px;
 }
+
+/* ==================== Markdown 编辑器（源码 + 实时预览分栏） ==================== */
+.md-editor {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  background: var(--bg);
+  z-index: 2;
+}
+.md-editor.hidden { display: none; }
+.md-editor-pane,
+.md-preview-pane-wrap {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.md-editor-split {
+  flex: 0 0 1px;
+  background: var(--border);
+}
+.md-pane-label {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  user-select: none;
+}
+.md-source {
+  flex: 1 1 auto;
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  outline: none;
+  resize: none;
+  padding: 16px 18px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font: 13px/1.65 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  tab-size: 2;
+}
+.md-source::placeholder { color: var(--text-faint); }
+/* 预览面板始终白底，与只读 iframe 渲染效果一致 */
+.md-preview-pane-wrap { background: #fff; }
+.md-preview-pane {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 24px 28px;
+  background: #fff;
+}
+.editing-mode .md-editor { outline: 2px solid rgba(91, 156, 255, 0.35); outline-offset: -2px; }
+
+/* ==================== 设置：文档类型选择 ==================== */
+.doctype-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.doctype-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) ease, background var(--dur-fast) ease;
+}
+.doctype-option:hover { background: var(--bg-hover); }
+.doctype-option input { margin-top: 3px; accent-color: var(--accent); }
+.doctype-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--bg-active);
+}
+.doctype-label { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.doctype-label .muted { font-size: 12px; }
+
+/* ==================== 文档类型区分（HTML / Markdown）==================== */
+.file-type-badge {
+  flex: none;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  text-transform: uppercase;
+  user-select: none;
+}
+.file-type-badge.type-md {
+  color: #2f9e6b;
+  background: rgba(74, 222, 128, 0.14);
+  border-color: rgba(74, 222, 128, 0.32);
+}
+.file-type-badge.type-html {
+  color: var(--accent);
+  background: rgba(91, 156, 255, 0.14);
+  border-color: rgba(91, 156, 255, 0.32);
+}
+/* 树里的角标：默认淡一点，hover/选中该行时更明显 */
+.tree .file .file-type-badge { opacity: 0.75; transition: opacity var(--dur-fast) ease; }
+.tree .file:hover .file-type-badge,
+.tree .file.active .file-type-badge { opacity: 1; }
+/* 面包屑里的角标略大，作为当前文档类型标识 */
+.crumbs .file-type-badge { font-size: 10px; margin-right: 2px; }
+
+/* 预览区可编辑态：文本光标 + 去掉默认 focus 描边（改用容器高亮） */
+.md-preview-pane[contenteditable="true"] { cursor: text; outline: none; }
+.md-preview-pane[contenteditable="true"]:focus { outline: none; }
+.editing-mode .md-preview-pane-wrap:focus-within { box-shadow: inset 0 0 0 2px rgba(91, 156, 255, 0.35); }

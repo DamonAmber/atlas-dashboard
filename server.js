@@ -14,6 +14,7 @@ const share = require('./lib/share');
 const editable = require('./lib/editable');
 const editApply = require('./lib/edit-apply');
 const editBackup = require('./lib/edit-backup');
+const markdown = require('./public/vendor/markdown.js');
 const pkg = require('./package.json');
 
 // 路径注入：CLI（bin/atlas.js）通过环境变量传，开发模式落到默认 ~/.atlas/
@@ -51,6 +52,42 @@ function getIgnoreSet() {
 }
 function getMaxDepth() {
   return config.maxDepth || 6;
+}
+
+// 文档类型：HTML 与 Markdown 可共存。config.docTypes 是启用类型的数组，
+// 例如 ['html','md']（默认两者都扫）。决定扫描哪些文件、如何预览/编辑。
+const DOC_EXTENSIONS = {
+  html: ['.html', '.htm'],
+  md: ['.md', '.markdown'],
+};
+const ALL_DOC_TYPES = ['html', 'md'];
+// 返回当前启用的类型数组（含旧配置兼容：单选 docType → 数组）
+function getEnabledDocTypes() {
+  if (Array.isArray(config.docTypes)) {
+    const list = config.docTypes.filter(t => ALL_DOC_TYPES.includes(t));
+    return list.length ? list : ['html'];
+  }
+  // 旧版单选字段兼容
+  if (config.docType === 'md') return ['md'];
+  if (config.docType === 'html') return ['html'];
+  // 全新默认：两种都扫（共存）
+  return ['html', 'md'];
+}
+// 当前启用类型对应的所有扩展名
+function currentExtensions() {
+  const types = getEnabledDocTypes();
+  return types.reduce((acc, t) => acc.concat(DOC_EXTENSIONS[t] || []), []);
+}
+// 判断某个文件名是否属于当前启用的类型（大小写不敏感）
+function matchesDocType(name) {
+  const lower = name.toLowerCase();
+  return currentExtensions().some(ext => lower.endsWith(ext));
+}
+// 单个文件的文档类型（按扩展名判断，与启用配置无关）——用于逐文件标注
+function docTypeOfPath(p) {
+  const lower = String(p).toLowerCase();
+  if (DOC_EXTENSIONS.md.some(ext => lower.endsWith(ext))) return 'md';
+  return 'html';
 }
 
 function emptyStore() {
@@ -104,7 +141,7 @@ function saveStore(store) {
   fs.renameSync(tmp, STORE_PATH);
 }
 
-async function scanHtmlFiles() {
+async function scanDocFiles() {
   const results = [];
   const ignore = getIgnoreSet();
   const maxDepth = getMaxDepth();
@@ -114,6 +151,8 @@ async function scanHtmlFiles() {
   }
   return results;
 }
+// 兼容旧调用名
+const scanHtmlFiles = scanDocFiles;
 
 async function walk(currentDir, scanRoot, depth, results, ignore, maxDepth) {
   if (depth > maxDepth) return;
@@ -129,7 +168,7 @@ async function walk(currentDir, scanRoot, depth, results, ignore, maxDepth) {
     const full = path.join(currentDir, entry.name);
     if (entry.isDirectory()) {
       await walk(full, scanRoot, depth + 1, results, ignore, maxDepth);
-    } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.html')) {
+    } else if (entry.isFile() && matchesDocType(entry.name)) {
       try {
         const stat = await fsp.stat(full);
         const rel = path.relative(scanRoot, full);
@@ -143,6 +182,7 @@ async function walk(currentDir, scanRoot, depth, results, ignore, maxDepth) {
           projectName,
           mtime: stat.mtimeMs,
           size: stat.size,
+          docType: docTypeOfPath(entry.name),
         });
       } catch {}
     }
@@ -352,7 +392,7 @@ function startWatchers() {
     });
 
     const onEvent = (kind) => async (filePath) => {
-      if (!filePath.toLowerCase().endsWith('.html')) return;
+      if (!matchesDocType(path.basename(filePath))) return;
       let mtime = 0;
       try { mtime = (await fsp.stat(filePath)).mtimeMs; } catch {}
       const rel = path.relative(root, filePath);
@@ -440,16 +480,22 @@ async function getFileText(filePath, mtime) {
   if (cached && cached.mtime === mtime) return cached.text;
   try {
     const raw = await fsp.readFile(filePath, 'utf8');
-    const text = raw
-      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/\s+/g, ' ')
-      .toLowerCase();
+    let text;
+    if (docTypeOfPath(filePath) === 'md') {
+      // Markdown 基本就是纯文本，直接归一化空白即可
+      text = raw.replace(/\s+/g, ' ').toLowerCase();
+    } else {
+      text = raw
+        .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/\s+/g, ' ')
+        .toLowerCase();
+    }
     contentCache.set(filePath, { mtime, text });
     return text;
   } catch {
@@ -505,6 +551,7 @@ app.get('/api/state', async (_req, res) => {
         projectName: f.projectName,
         mtime: f.mtime,
         url: buildFileUrl(f.path),
+        docType: f.docType || docTypeOfPath(f.path),
         seenAt: store.seen[f.path] || 0,
         unread: (store.seen[f.path] || 0) < f.mtime,
         alias: store.aliases[f.path] || null,
@@ -534,6 +581,7 @@ app.get('/api/state', async (_req, res) => {
       recent: store.recent || [],
       scanRoots: getScanRoots(),
       scannedCount: scanned.length,
+      docTypes: getEnabledDocTypes(),
       archivedProjects,
     });
   } catch (e) {
@@ -949,6 +997,111 @@ app.post('/api/save-edits', async (req, res) => {
   }
 });
 
+// ---------- Markdown 预览 / 编辑 ----------
+function isMarkdownPath(p) {
+  return DOC_EXTENSIONS.md.some(ext => String(p).toLowerCase().endsWith(ext));
+}
+
+// GET /api/render-md?path=<abs>：把 .md 渲染成完整 HTML 页面，用于 iframe 只读预览
+app.get('/api/render-md', async (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath || typeof filePath !== 'string' || !isPathInScanRoots(filePath)) {
+    return res.status(400).type('text/plain').send('路径非法');
+  }
+  if (!isMarkdownPath(filePath)) {
+    return res.status(400).type('text/plain').send('只支持 Markdown 文件');
+  }
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).type('text/plain').send('文件不存在');
+  }
+  try {
+    const raw = await fsp.readFile(filePath, 'utf8');
+    const html = markdown.renderPage(raw, { title: path.basename(filePath) });
+    res.set('Cache-Control', 'no-store');
+    res.type('html').send(html);
+  } catch (e) {
+    console.error('render-md 失败:', e);
+    res.status(500).type('text/plain').send('渲染失败: ' + (e && e.message || e));
+  }
+});
+
+// GET /api/md-source?path=<abs>：返回原始 Markdown 文本 + 内容哈希（供编辑器加载与冲突检测）
+app.get('/api/md-source', async (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath || typeof filePath !== 'string' || !isPathInScanRoots(filePath)) {
+    return res.status(400).json({ error: '路径非法' });
+  }
+  if (!isMarkdownPath(filePath)) {
+    return res.status(400).json({ error: '只支持 Markdown 文件' });
+  }
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: '文件不存在' });
+  }
+  try {
+    const raw = await fsp.readFile(filePath, 'utf8');
+    res.set('Cache-Control', 'no-store');
+    res.json({ content: raw, hash: editable.sha1(raw) });
+  } catch (e) {
+    console.error('md-source 失败:', e);
+    res.status(500).json({ error: e && e.message || String(e) });
+  }
+});
+
+// POST /api/save-md：把编辑后的 Markdown 全文写回磁盘。
+// baseHash 冲突检测 + 备份 + 自我写入标记（避免误标未读）。
+app.post('/api/save-md', async (req, res) => {
+  const body = req.body || {};
+  const filePath = body.path;
+  if (!filePath || typeof filePath !== 'string' || !isPathInScanRoots(filePath)) {
+    return res.status(400).json({ error: '路径非法' });
+  }
+  if (!isMarkdownPath(filePath)) {
+    return res.status(400).json({ error: '只支持 Markdown 文件' });
+  }
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: '文件不存在' });
+  }
+  if (typeof body.content !== 'string') {
+    return res.status(400).json({ error: 'content 必须是字符串' });
+  }
+  if (body.content.length > 5_000_000) {
+    return res.status(400).json({ error: '内容过大' });
+  }
+  try {
+    const raw = await fsp.readFile(filePath, 'utf8');
+    const currentHash = editable.sha1(raw);
+    if (body.baseHash && body.baseHash !== currentHash) {
+      return res.status(409).json({ error: 'conflict', message: '文件已被外部修改，请刷新后重试' });
+    }
+    const next = body.content;
+    if (next === raw) {
+      return res.json({ ok: true, unchanged: true, hash: currentHash });
+    }
+
+    // 备份（失败不阻断保存，仅告警）
+    try { editBackup.backup(filePath); } catch (e) {
+      console.warn('  ! Markdown 备份失败（继续保存）:', e && e.message);
+    }
+
+    // 原子写回
+    const tmp = filePath + '.atlas-tmp';
+    await fsp.writeFile(tmp, next, 'utf8');
+    await fsp.rename(tmp, filePath);
+    const stat = await fsp.stat(filePath);
+    markSelfWrite(filePath, stat.mtimeMs);
+
+    // 标记已读，避免自我写入被标未读
+    const store = loadStore();
+    store.seen[filePath] = Date.now();
+    saveStore(store);
+
+    res.json({ ok: true, mtime: stat.mtimeMs, hash: editable.sha1(next) });
+  } catch (e) {
+    console.error('save-md 失败:', e);
+    res.status(500).json({ error: e && e.message || String(e) });
+  }
+});
+
 // 升级信息：基于缓存返回，server 启动时已经在后台刷新缓存
 app.get('/api/update-info', (_req, res) => {
   const result = updateCheck.getCachedResult(pkg.version);
@@ -1102,12 +1255,15 @@ app.get('/api/config', (_req, res) => {
     ignore: config.ignore || [],
     port: config.port,
     maxDepth: config.maxDepth,
+    docTypes: getEnabledDocTypes(),
   });
 });
 
 app.put('/api/config', (req, res) => {
   const body = req.body || {};
   const next = { ...config };
+  let rootsChanged = false;
+  let watchDepsChanged = false; // scanRoots / ignore / maxDepth 变化才需要重启 watcher
   if (Array.isArray(body.scanRoots)) {
     const cleaned = [...new Set(body.scanRoots.map(p => path.resolve(String(p).trim())).filter(Boolean))];
     for (const p of cleaned) {
@@ -1115,13 +1271,33 @@ app.put('/api/config', (req, res) => {
       const stat = fs.statSync(p);
       if (!stat.isDirectory()) return res.status(400).json({ error: `不是目录：${p}` });
     }
+    if (JSON.stringify(cleaned) !== JSON.stringify(config.scanRoots || [])) {
+      rootsChanged = true;
+      watchDepsChanged = true;
+    }
     next.scanRoots = cleaned;
   }
-  if (Array.isArray(body.ignore)) next.ignore = body.ignore.map(String);
-  if (typeof body.maxDepth === 'number') next.maxDepth = Math.min(20, Math.max(1, body.maxDepth));
+  if (Array.isArray(body.ignore)) {
+    next.ignore = body.ignore.map(String);
+    if (JSON.stringify(next.ignore) !== JSON.stringify(config.ignore || [])) watchDepsChanged = true;
+  }
+  if (typeof body.maxDepth === 'number') {
+    next.maxDepth = Math.min(20, Math.max(1, body.maxDepth));
+    if (next.maxDepth !== config.maxDepth) watchDepsChanged = true;
+  }
+  if (Array.isArray(body.docTypes)) {
+    const cleaned = [...new Set(body.docTypes.filter(t => ALL_DOC_TYPES.includes(t)))];
+    if (cleaned.length === 0) {
+      return res.status(400).json({ error: '至少启用一种文档类型' });
+    }
+    next.docTypes = cleaned;
+    delete next.docType; // 清掉旧单选字段，避免歧义
+    // docTypes 变化无需重启 watcher：事件回调按 matchesDocType 实时过滤
+  }
   saveConfig(next);
-  mountRawRoutes();
-  startWatchers();
+  // 仅在真正影响到的时候才做重活，避免切换文档类型时无谓地重挂路由 / 重启 watcher（卡顿源头）
+  if (rootsChanged) mountRawRoutes();
+  if (watchDepsChanged) startWatchers();
   res.json({ ok: true, config: next });
 });
 

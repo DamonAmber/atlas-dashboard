@@ -19,6 +19,7 @@ const state = {
 // 预览区轻量编辑模式状态
 const editState = {
   active: false,      // 是否处于编辑模式
+  kind: 'html',       // 'html'（iframe 内联编辑）| 'md'（源码 + 实时预览分栏）
   path: null,         // 正在编辑的文件路径
   rawUrl: null,       // 进入编辑前的 /raw/ 预览 url（取消时恢复）
   baseHash: null,     // 进入编辑时源文件哈希（保存时冲突检测）
@@ -90,7 +91,41 @@ const els = {
   matchPrev: document.getElementById('match-prev'),
   matchNext: document.getElementById('match-next'),
   toastContainer: document.getElementById('toast-container'),
+  // Markdown 编辑器
+  mdEditor: document.getElementById('md-editor'),
+  mdSource: document.getElementById('md-source'),
+  mdPreview: document.getElementById('md-preview'),
+  // 设置：文档类型单选
+  doctypeRadios: document.querySelectorAll('input[name="doctype"]'),
 };
+
+// 注入 Markdown 预览基础样式到主文档（供编辑器右侧实时预览面板使用）
+(function injectMarkdownCss() {
+  try {
+    if (window.AtlasMarkdown && !document.getElementById('atlas-md-css')) {
+      const st = document.createElement('style');
+      st.id = 'atlas-md-css';
+      st.textContent = window.AtlasMarkdown.markdownCss;
+      document.head.appendChild(st);
+    }
+  } catch (e) {}
+})();
+
+// 文档扩展名工具：显示名去扩展名 / 预览 URL 路由
+function stripDocExt(name) {
+  return String(name || '').replace(/\.(html?|md|markdown)$/i, '');
+}
+function isMdFile(file) {
+  if (!file) return false;
+  if (file.docType) return file.docType === 'md';
+  return /\.(md|markdown)$/i.test(file.name || '');
+}
+// iframe 预览地址：md 走服务端渲染，html 用原始 /raw/ 地址
+function previewUrlFor(file) {
+  if (!file) return '';
+  if (isMdFile(file)) return '/api/render-md?path=' + encodeURIComponent(file.path);
+  return file.url;
+}
 
 // ---------- Toast 通知 ----------
 // showToast({ kind, text, secondary, duration, progress })
@@ -379,9 +414,10 @@ function renderRecent() {
       + (p === state.activeFilePath ? ' active' : '');
     div.dataset.path = p;
     div.title = file.alias ? `${file.alias}\n${file.relPath}` : file.relPath;
+    const rIcon = isMdFile(file) ? '📝' : '🌐';
     div.innerHTML = `
-      <span class="recent-icon">📄</span>
-      <span class="recent-name">${escapeHtml(file.alias || file.name.replace(/\.html$/i, ''))}</span>
+      <span class="recent-icon">${rIcon}</span>
+      <span class="recent-name">${escapeHtml(file.alias || stripDocExt(file.name))}</span>
       <span class="recent-project">${escapeHtml(file.projectName)}</span>
     `;
     div.addEventListener('click', () => openFile(p));
@@ -549,13 +585,16 @@ function renderFile(file, node) {
     || (file.alias && file.alias.toLowerCase().includes(q))
   );
   const contentOnly = !!snippet && !isNameMatch;
+  const dtype = isMdFile(file) ? 'md' : 'html';
   fileEl.className = 'file'
+    + ' doctype-' + dtype
     + (file.unread ? ' unread' : '')
     + (file.alias ? ' has-alias' : '')
     + (file.path === state.activeFilePath ? ' active' : '')
     + (contentOnly ? ' content-match' : '');
   fileEl.dataset.nodeType = 'file';
   fileEl.dataset.path = file.path;
+  fileEl.dataset.doctype = dtype;
   fileEl.tabIndex = -1;  // 可被 JS focus，但不出现在 Tab 序列中
   let titleParts = [];
   if (file.alias) titleParts.push(file.alias);
@@ -563,13 +602,15 @@ function renderFile(file, node) {
   titleParts.push(file.relPath);
   if (snippet) titleParts.push('🔍 ' + snippet);
   fileEl.title = titleParts.join('\n');
-  const displayName = file.alias || file.name.replace(/\.html$/i, '');
+  const displayName = file.alias || stripDocExt(file.name);
   const isShared = state.sharesByPath && state.sharesByPath.has(file.path);
   if (isShared) fileEl.classList.add('shared');
+  const typeIcon = dtype === 'md' ? '📝' : '🌐';
   fileEl.innerHTML = `
     <span class="unread-dot"></span>
-    <span class="folder-icon">📄</span>
+    <span class="folder-icon file-type-icon">${typeIcon}</span>
     <span class="file-name" data-path="${escapeHtml(file.path)}">${escapeHtml(displayName)}</span>
+    <span class="file-type-badge type-${dtype}">${dtype === 'md' ? 'MD' : 'HTML'}</span>
     <span class="share-badge" title="正在分享到局域网" aria-hidden="${isShared ? 'false' : 'true'}">
       <svg viewBox="0 0 12 12" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7L7 5M4 8a2 2 0 0 1 0-3l1-1M8 4a2 2 0 0 1 0 3l-1 1"/></svg>
     </span>
@@ -750,7 +791,7 @@ function startRenameFolder(folder, nameEl) {
 }
 
 function startEditAlias(file, nameEl) {
-  const baseName = file.name.replace(/\.html$/i, '');
+  const baseName = stripDocExt(file.name);
   const original = file.alias || baseName;
   startInlineEdit(nameEl, original, async (next) => {
     if (next === original) {
@@ -1058,7 +1099,9 @@ function setActiveFile(filePath, doNavigate) {
   const aliasPart = file.alias
     ? `<span class="crumb-alias">${escapeHtml(file.alias)}</span><span class="crumb-original">（${escapeHtml(file.name)}）</span>`
     : `<span class="crumb-name">${escapeHtml(file.name)}</span>`;
+  const dtype = isMdFile(file) ? 'md' : 'html';
   els.crumbs.innerHTML = `
+    <span class="file-type-badge type-${dtype}">${dtype === 'md' ? 'MD' : 'HTML'}</span>
     <span class="crumb-project">${escapeHtml(file.projectName)}</span>
     <span class="crumb-sep">›</span>
     ${aliasPart}
@@ -1069,7 +1112,9 @@ function setActiveFile(filePath, doNavigate) {
   els.btnOpenExternal.disabled = false;
   els.btnCopyPath.disabled = false;
   els.btnReloadPreview.disabled = false;
-  els.btnExportPdf.disabled = false;
+  // PDF 导出目前仅支持 HTML；md 文件禁用该按钮
+  els.btnExportPdf.disabled = isMdFile(file);
+  els.btnExportPdf.title = isMdFile(file) ? 'PDF 导出暂仅支持 HTML 文档' : '导出为 PDF 保存到 Downloads';
   els.btnShare.disabled = false;
   els.btnEdit.disabled = false;
   // 已在分享中的文件，让顶栏 share 按钮高亮提示状态
@@ -1079,10 +1124,11 @@ function setActiveFile(filePath, doNavigate) {
     els.preview.classList.remove('hidden');
     els.emptyState.classList.add('hidden');
     // 切换前淡出，加载完成后淡入；同 url 直接显示不闪烁
-    const targetUrl = new URL(file.url, location.href).href;
+    const previewUrl = previewUrlFor(file);
+    const targetUrl = new URL(previewUrl, location.href).href;
     if (els.preview.src !== targetUrl) {
       els.preview.classList.add('loading');
-      els.preview.src = file.url;
+      els.preview.src = previewUrl;
     } else {
       els.preview.classList.remove('loading');
     }
@@ -1090,7 +1136,7 @@ function setActiveFile(filePath, doNavigate) {
 }
 
 els.preview.addEventListener('load', () => {
-  if (editState.active) {
+  if (editState.active && editState.kind === 'html') {
     // 编辑文档加载完成 → 绑定可编辑区域，并恢复进入编辑前的滚动位置
     bindEditableDoc();
     applyPendingScroll(pendingEditScroll);
@@ -1147,6 +1193,7 @@ function enterEditMode() {
   if (!file || editState.active) return;
 
   editState.active = true;
+  editState.kind = 'html';
   editState.path = filePath;
   editState.rawUrl = file.url;       // 取消时恢复到只读预览
   editState.baseHash = null;
@@ -1165,6 +1212,181 @@ function enterEditMode() {
   } catch { pendingEditScroll = null; }
   els.preview.classList.add('loading');
   els.preview.src = '/api/edit-doc?path=' + encodeURIComponent(filePath);
+}
+
+// ==================== Markdown 编辑：源码 + 实时预览 ====================
+let mdRenderScheduled = false;
+
+function renderMdPreview() {
+  if (!els.mdPreview || !window.AtlasMarkdown) return;
+  els.mdPreview.innerHTML = window.AtlasMarkdown.render(els.mdSource.value);
+}
+// 每帧渲染：合并连续输入，视觉上即时更新，不卡输入
+function scheduleMdRender() {
+  if (mdRenderScheduled) return;
+  mdRenderScheduled = true;
+  requestAnimationFrame(() => {
+    mdRenderScheduled = false;
+    renderMdPreview();
+  });
+}
+
+// 进入 Markdown 编辑模式：拉取源码 → 填入 textarea → 渲染预览 → 显示分栏编辑器
+async function enterMdEditMode() {
+  const filePath = state.activeFilePath;
+  const file = filePath && state.files[filePath];
+  if (!file || editState.active) return;
+
+  let data;
+  try {
+    const r = await fetch('/api/md-source?path=' + encodeURIComponent(filePath));
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    data = await r.json();
+  } catch (e) {
+    showToast({ kind: 'error', text: '无法加载 Markdown 源码：' + e.message });
+    return;
+  }
+
+  editState.active = true;
+  editState.kind = 'md';
+  editState.path = filePath;
+  editState.rawUrl = previewUrlFor(file);   // 取消/保存后恢复只读预览
+  editState.baseHash = data.hash || null;
+  editState.dirty = false;
+  editState.ops = new Map();
+  editState.sortables = [];
+  editState.saving = false;
+
+  // 记录进入编辑前只读预览（iframe）的滚动百分比，编辑器按同比例定位，
+  // 避免跳到文档末尾
+  let enterPct = 0;
+  try {
+    const w = els.preview.contentWindow;
+    const el = w.document.scrollingElement || w.document.documentElement;
+    const max = el.scrollHeight - el.clientHeight;
+    enterPct = max > 0 ? el.scrollTop / max : 0;
+  } catch { enterPct = 0; }
+
+  els.mdSource.value = data.content || '';
+  renderMdPreview();
+
+  updateEditToolbar();
+  els.emptyState.classList.add('hidden');
+  els.preview.classList.add('hidden');   // 隐藏 iframe，显示分栏编辑器
+  els.mdEditor.classList.remove('hidden');
+  // 预览区可直接编辑（所见即所得），编辑后实时同步回源码
+  els.mdPreview.setAttribute('contenteditable', 'true');
+  els.mdPreview.setAttribute('spellcheck', 'false');
+
+  // 光标置顶，避免 focus 把 textarea 滚到末尾
+  els.mdSource.focus();
+  try { els.mdSource.setSelectionRange(0, 0); } catch {}
+
+  // 下一帧（布局就绪后）按之前浏览位置的百分比同步定位源码区与预览区
+  requestAnimationFrame(() => {
+    const sMax = els.mdSource.scrollHeight - els.mdSource.clientHeight;
+    const pMax = els.mdPreview.scrollHeight - els.mdPreview.clientHeight;
+    els.mdSource.scrollTop = enterPct * sMax;
+    els.mdPreview.scrollTop = enterPct * pMax;
+  });
+}
+
+// textarea 输入 → 每帧刷新预览 + 标脏（实时）
+if (els.mdSource) {
+  els.mdSource.addEventListener('input', () => {
+    if (editState.active && editState.kind === 'md') markDirty();
+    scheduleMdRender();
+  });
+  // Tab 键插入缩进而非切换焦点
+  els.mdSource.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const s = els.mdSource.selectionStart, en = els.mdSource.selectionEnd;
+      const v = els.mdSource.value;
+      els.mdSource.value = v.slice(0, s) + '  ' + v.slice(en);
+      els.mdSource.selectionStart = els.mdSource.selectionEnd = s + 2;
+      if (editState.active && editState.kind === 'md') markDirty();
+      scheduleMdRender();
+    }
+  });
+
+  // 编辑区 / 预览区滚动同步（按百分比双向联动，rAF 防抖避免回环）
+  let mdSyncing = false;
+  const syncScroll = (fromEl, toEl) => {
+    if (mdSyncing) return;
+    mdSyncing = true;
+    const sMax = fromEl.scrollHeight - fromEl.clientHeight;
+    const tMax = toEl.scrollHeight - toEl.clientHeight;
+    const pct = sMax > 0 ? fromEl.scrollTop / sMax : 0;
+    toEl.scrollTop = pct * tMax;
+    requestAnimationFrame(() => { mdSyncing = false; });
+  };
+  els.mdSource.addEventListener('scroll', () => syncScroll(els.mdSource, els.mdPreview), { passive: true });
+  els.mdPreview.addEventListener('scroll', () => syncScroll(els.mdPreview, els.mdSource), { passive: true });
+
+  // 预览区（所见即所得）编辑 → 每帧反向序列化回源码 textarea（不回写预览，避免打断输入/光标）
+  let mdSerializeScheduled = false;
+  const scheduleMdSerialize = () => {
+    if (mdSerializeScheduled) return;
+    mdSerializeScheduled = true;
+    requestAnimationFrame(() => {
+      mdSerializeScheduled = false;
+      if (!window.AtlasMarkdown || !window.AtlasMarkdown.htmlToMarkdown) return;
+      els.mdSource.value = window.AtlasMarkdown.htmlToMarkdown(els.mdPreview);
+    });
+  };
+  els.mdPreview.addEventListener('input', () => {
+    if (!(editState.active && editState.kind === 'md')) return;
+    markDirty();
+    scheduleMdSerialize();
+  });
+  // 编辑态下预览区里的链接不跳转（否则点链接会导航走掉）
+  els.mdPreview.addEventListener('click', (e) => {
+    if (!els.mdPreview.isContentEditable) return;
+    const a = e.target.closest && e.target.closest('a');
+    if (a) e.preventDefault();
+  });
+}
+
+// 保存 Markdown：把 textarea 全文写回文件
+async function saveMdEdit() {
+  if (!editState.active || editState.saving) return;
+  if (!editState.dirty) {
+    showToast({ kind: 'info', text: '没有改动' });
+    exitEditMode({ restore: true });
+    return;
+  }
+  editState.saving = true;
+  updateEditToolbar();
+  try {
+    const resp = await fetch('/api/save-md', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: editState.path, baseHash: editState.baseHash, content: els.mdSource.value }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok && data.ok) {
+      const savedPath = editState.path;
+      showToast({ kind: 'success', text: '已保存到文件' });
+      if (state.files[savedPath]) {
+        state.files[savedPath].unread = false;
+        state.files[savedPath].seenAt = Date.now();
+      }
+      exitEditMode({ restore: true });
+    } else if (resp.status === 409) {
+      editState.saving = false;
+      updateEditToolbar();
+      showToast({ kind: 'error', text: '文件已被外部修改，请取消后重新打开再编辑' });
+    } else {
+      editState.saving = false;
+      updateEditToolbar();
+      showToast({ kind: 'error', text: '保存失败：' + (data.error || resp.status) });
+    }
+  } catch (e) {
+    editState.saving = false;
+    updateEditToolbar();
+    showToast({ kind: 'error', text: '保存失败：' + e.message });
+  }
 }
 
 // iframe 编辑文档加载完成后调用：注入样式 + 绑定 contentEditable / Sortable
@@ -1392,13 +1614,15 @@ function markDirty() {
   }
 }
 
-// 退出编辑模式（清理 Sortable / 状态）；restore=true 时把预览切回只读 /raw/
+// 退出编辑模式（清理 Sortable / 状态）；restore=true 时把预览切回只读预览
 function exitEditMode({ restore } = { restore: true }) {
   for (const s of editState.sortables) {
     try { s.destroy(); } catch {}
   }
+  const wasMd = editState.kind === 'md';
   const rawUrl = editState.rawUrl;
   editState.active = false;
+  editState.kind = 'html';
   editState.path = null;
   editState.baseHash = null;
   editState.dirty = false;
@@ -1406,6 +1630,24 @@ function exitEditMode({ restore } = { restore: true }) {
   editState.sortables = [];
   editState.saving = false;
   updateEditToolbar();
+
+  if (wasMd) {
+    // Markdown：隐藏分栏编辑器，恢复 iframe 只读预览
+    els.mdPreview.removeAttribute('contenteditable');
+    els.mdEditor.classList.add('hidden');
+    els.preview.classList.remove('hidden');
+    if (restore && rawUrl) {
+      els.preview.classList.add('loading');
+      // 强制重载（源可能未变，用 reload 保证刷新渲染结果）
+      if (els.preview.src === new URL(rawUrl, location.href).href && els.preview.contentWindow) {
+        try { els.preview.contentWindow.location.reload(); } catch { els.preview.src = rawUrl; }
+      } else {
+        els.preview.src = rawUrl;
+      }
+    }
+    return;
+  }
+
   if (restore && rawUrl) {
     // 记录当前滚动位置，重载后恢复，避免保存/取消后跳回顶部
     try {
@@ -1425,6 +1667,7 @@ function cancelEdit() {
 
 async function saveEdit() {
   if (!editState.active || editState.saving) return;
+  if (editState.kind === 'md') return saveMdEdit();
   const ops = Array.from(editState.ops.values());
   if (ops.length === 0 || !editState.dirty) {
     showToast({ kind: 'info', text: '没有改动' });
@@ -1480,7 +1723,8 @@ function updateEditToolbar() {
   });
   if (!editing && state.activeFilePath) {
     // 退出编辑后恢复这些按钮可用
-    els.btnExportPdf.disabled = false;
+    const activeFile = state.files[state.activeFilePath];
+    els.btnExportPdf.disabled = isMdFile(activeFile);
     els.btnShare.disabled = false;
     els.btnReloadPreview.disabled = false;
     els.btnMarkUnread.disabled = false;
@@ -1489,7 +1733,12 @@ function updateEditToolbar() {
   document.body.classList.toggle('editing-mode', editing);
 }
 
-els.btnEdit.addEventListener('click', () => { if (!els.btnEdit.disabled) enterEditMode(); });
+els.btnEdit.addEventListener('click', () => {
+  if (els.btnEdit.disabled) return;
+  const file = state.activeFilePath && state.files[state.activeFilePath];
+  if (isMdFile(file)) enterMdEditMode();
+  else enterEditMode();
+});
 els.btnEditSave.addEventListener('click', () => saveEdit());
 els.btnEditCancel.addEventListener('click', () => cancelEdit());
 
@@ -1725,7 +1974,7 @@ els.btnReveal.addEventListener('click', async () => {
 els.btnOpenExternal.addEventListener('click', () => {
   if (!state.activeFilePath) return;
   const f = state.files[state.activeFilePath];
-  if (f) window.open(f.url, '_blank');
+  if (f) window.open(previewUrlFor(f), '_blank');
 });
 els.btnShare.addEventListener('click', () => {
   if (!state.activeFilePath) return;
@@ -2002,8 +2251,60 @@ async function openSettings() {
   els.ignoreInput.value = (cfg.ignore || []).join(', ');
   els.notifyToggle.checked = state.notifyEnabled;
   updateNotifyHint();
+  // 文档类型多选：反映当前启用的类型（数组，可共存）
+  const enabled = Array.isArray(cfg.docTypes) && cfg.docTypes.length ? cfg.docTypes : ['html'];
+  els.doctypeRadios.forEach(cb => { cb.checked = enabled.includes(cb.value); });
+  lastDocTypes = enabled.slice();
   els.modal.classList.remove('hidden');
 }
+
+// 记录上一次的勾选，用于失败/非法回滚
+let lastDocTypes = null;
+// 切换启用的文档类型（html / md 可共存）：写配置 → 平滑刷新
+els.doctypeRadios.forEach(cb => {
+  cb.addEventListener('change', async () => {
+    const checked = [...els.doctypeRadios].filter(x => x.checked).map(x => x.value);
+    // 至少保留一项
+    if (checked.length === 0) {
+      cb.checked = true;
+      showToast({ kind: 'info', text: '至少保留一种文档类型' });
+      return;
+    }
+    const prev = lastDocTypes || [...els.doctypeRadios].map(x => x.value); // 兜底
+    lastDocTypes = checked.slice();
+
+    // 立即给反馈：扫描指示 + 轻量 toast
+    setScanning(true);
+    const t = showToast({ kind: 'info', text: '正在应用文档类型…', progress: true });
+    const ok = await updateConfig({ docTypes: checked });
+    if (!ok) {
+      // 回滚勾选
+      els.doctypeRadios.forEach(x => { x.checked = prev.includes(x.value); });
+      lastDocTypes = prev;
+      setScanning(false);
+      t.close();
+      return;
+    }
+
+    // 平滑刷新：只在当前预览文件失效时才重置预览，否则保持不动
+    const prevActive = state.activeFilePath;
+    await fetchState();
+    if (prevActive && !state.files[prevActive]) {
+      if (editState.active) exitEditMode({ restore: false });
+      state.activeFilePath = null;
+      els.preview.src = 'about:blank';
+      els.preview.classList.add('hidden');
+      els.mdEditor.classList.add('hidden');
+      els.emptyState.classList.remove('hidden');
+      els.crumbs.innerHTML = '<span class="placeholder">从左侧选择一个文档开始预览</span>';
+    }
+    setScanning(false);
+    t.close();
+    const hasHtml = checked.includes('html'), hasMd = checked.includes('md');
+    const label = hasHtml && hasMd ? 'HTML + Markdown' : hasMd ? 'Markdown' : 'HTML';
+    showToast({ kind: 'success', text: '已更新扫描类型', secondary: label });
+  });
+});
 
 function renderShareList() {
   if (!els.shareList) return;
@@ -2092,7 +2393,7 @@ function renderArchiveList() {
     if (count != null) {
       const c = document.createElement('span');
       c.className = 'archive-count';
-      c.textContent = count > 0 ? `磁盘 ${count} 个 HTML` : '磁盘已无文件';
+      c.textContent = count > 0 ? `磁盘 ${count} 个文档` : '磁盘已无文件';
       li.appendChild(c);
     }
     const btn = document.createElement('button');
@@ -2339,9 +2640,9 @@ function connectSSE() {
 
     // 文件系统事件（旧 fs 流，兼容没 channel 的旧 payload）
     if (data.kind === 'add') {
-      notify('📄 新 HTML 文档', `${data.projectName} / ${data.name}`);
+      notify('📄 新文档', `${data.projectName} / ${data.name}`);
     } else if (data.kind === 'change') {
-      notify('✏️ HTML 已更新', `${data.projectName} / ${data.name}`);
+      notify('✏️ 文档已更新', `${data.projectName} / ${data.name}`);
     }
     if (pendingRefresh) clearTimeout(pendingRefresh);
     pendingRefresh = setTimeout(() => { pendingRefresh = null; fetchState(); }, 400);
