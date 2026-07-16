@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Atlas — 本地 HTML 文档统一浏览/管理 dashboard</title>
+  <title>Atlas — 本地 HTML / Markdown 文档统一浏览/管理 dashboard</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="apple-touch-icon" href="favicon.svg" />
-  <meta name="description" content="你让 AI 写了一堆 HTML 报告——它们现在在哪？Atlas 扫你硬盘上指定的目录，把所有 .html 收进一棵本地目录树，更新过的标红点，看完即清。一个浏览器 Tab 替代之前的几十个。" />
-  <meta property="og:title" content="Atlas — 你让 AI 写的那些 HTML，现在在哪？" />
-  <meta property="og:description" content="一棵本地目录树看完所有项目里的 HTML，更新过的标红点。" />
+  <meta name="description" content="Atlas 扫描你指定的本地目录，把 HTML 与 Markdown 文档集中到一棵目录树中，提供渲染预览、未读提醒、编辑与局域网分享。一个浏览器 Tab 替代之前的几十个。" />
+  <meta property="og:title" content="Atlas — 统一浏览 HTML / Markdown 文档" />
+  <meta property="og:description" content="一棵本地目录树集中管理 HTML 与 Markdown，支持渲染预览、未读提醒、编辑与局域网分享。" />
   <meta property="og:type" content="website" />
   <meta name="theme-color" content="#0a0c10" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%235b9cff'/%3E%3Ctext x='50%25' y='53%25' dominant-baseline='middle' text-anchor='middle' fill='white' font-family='-apple-system,system-ui' font-size='18' font-weight='700'%3EA%3C/text%3E%3C/svg%3E" />
@@ -1043,7 +1043,7 @@
   <div class="wrap">
     <div class="eyebrow">
       <span class="pulse"></span>
-      <span>v<span id="cur-version">0.6.0</span> · 已上架 npm</span>
+      <span>v<span id="cur-version">0.7.1</span> · 已上架 npm</span>
     </div>
     <h1>你让 AI 写了 30 份 HTML / Markdown 报告——<br/><span class="grad">它们现在在哪？</span></h1>
     <p class="lede">
@@ -1197,7 +1197,7 @@
           </span>
           HTML + Markdown 双模
         </h3>
-        <p>不止 HTML——设置里勾选文档类型，<strong>HTML 与 Markdown 可同时扫描共存</strong>，目录树里用不同图标 + 彩色角标一眼区分。Markdown 内建渲染预览，长文档自动带一个<strong>可折叠的侧边目录</strong>：按标题层级折叠展开、点击平滑跳转、滚动高亮当前章节。还带一个<strong>源码 / 预览分栏编辑器</strong>：左边写源码右边实时渲染、两侧滚动同步，<strong>预览区还能直接所见即所得地改</strong>，编辑即反解析回 Markdown，保存写回原文件（含冲突检测与自动备份）；退出编辑会停在你刚才浏览的位置，不跳回顶部。</p>
+        <p>不止 HTML——设置里勾选文档类型，<strong>HTML 与 Markdown 可同时扫描共存</strong>，目录树用紧凑的类型 icon 区分并把更多空间留给标题。Markdown 内建渲染预览，长文档自动带一个<strong>可折叠的侧边目录</strong>：按标题层级折叠展开、点击平滑跳转、滚动高亮当前章节。还带一个<strong>源码 / 预览分栏编辑器</strong>：左边写源码右边实时渲染、两侧滚动同步，<strong>预览区还能直接所见即所得地改</strong>，编辑即反解析回 Markdown，保存写回原文件（含冲突检测与自动备份）；退出编辑会停在你刚才浏览的位置，不跳回顶部。</p>
       </div>
       <div class="feat">
         <h3>
@@ -1384,7 +1384,7 @@
           </span>
           局域网分享 + 二维码
         </h3>
-        <p>评审现场要让同事看一份 HTML？文件行 hover 出 🔗 按钮——一键生成不可猜的 token URL，弹出大二维码同事手机扫码即看（同 Wi-Fi 即可），顶栏 dashboard 仅本机访问、其他人只能通过分享链接访问被分享的文件。可标记多个文件，<strong>一键停止全部</strong>评审完即关。Atlas 重启 token 不失效。</p>
+        <p>评审现场要让同事看一份 HTML / Markdown 文档？文件行 hover 出 🔗 按钮——一键生成不可猜的 token URL，弹出大二维码同事手机扫码即看（同 Wi-Fi 即可）。<strong>Markdown 分享链接会直接展示渲染后的预览页面，而不是 Markdown 原文</strong>；顶栏 dashboard 仅本机访问，其他人只能通过分享链接访问被分享的文件。可标记多个文件，<strong>一键停止全部</strong>，评审完即关。Atlas 重启 token 不失效。</p>
       </div>
       <div class="feat">
         <h3>

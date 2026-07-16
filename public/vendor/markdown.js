@@ -18,6 +18,19 @@
     });
   }
 
+  // Markdown URL 白名单：相对路径 / 锚点默认允许；显式 scheme 只开放常见安全协议。
+  // 图片额外允许常见位图 data URL，但拒绝 SVG 与任意可执行 / 主动内容协议。
+  function safeUrl(url, forImage) {
+    var value = String(url == null ? '' : url).replace(/[\u0000-\u001f\u007f]/g, '').trim();
+    var match = /^([a-z][a-z0-9+.-]*):/i.exec(value);
+    if (!match) return value;
+    var scheme = match[1].toLowerCase();
+    if (scheme === 'http' || scheme === 'https') return value;
+    if (!forImage && (scheme === 'mailto' || scheme === 'tel')) return value;
+    if (forImage && /^data:image\/(?:png|gif|jpe?g|webp);base64,/i.test(value)) return value;
+    return '#';
+  }
+
   function indentOf(line) {
     var m = line.match(/^(\s*)/);
     return m ? m[1].length : 0;
@@ -57,14 +70,14 @@
     text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;([^)]*?)&quot;)?\)/g,
       function (m, alt, url, title) {
         var t = title ? ' title="' + title + '"' : '';
-        return '<img src="' + url + '" alt="' + alt + '"' + t + ' />';
+        return '<img src="' + safeUrl(url, true) + '" alt="' + alt + '"' + t + ' />';
       });
 
     // 4) 链接 [text](url "title")
     text = text.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+&quot;([^)]*?)&quot;)?\)/g,
       function (m, label, url, title) {
         var t = title ? ' title="' + title + '"' : '';
-        return '<a href="' + url + '"' + t + ' target="_blank" rel="noopener noreferrer">' + label + '</a>';
+        return '<a href="' + safeUrl(url, false) + '"' + t + ' target="_blank" rel="noopener noreferrer">' + label + '</a>';
       });
 
     // 5) 自动链接 <http...>（转义后为 &lt;http...&gt;）

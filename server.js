@@ -692,7 +692,7 @@ app.get('/share/:token', (req, res) => {
 
 // 资源服务：/share/:token/<相对路径> → 服务 HTML 同目录子树
 // 严格防 path traversal——只能访问 baseDir 及其子目录
-app.get('/share/:token/*', (req, res) => {
+app.get('/share/:token/*', async (req, res) => {
   const token = req.params.token;
   const store = loadStore();
   const entry = store.shares && store.shares[token];
@@ -720,7 +720,19 @@ app.get('/share/:token/*', (req, res) => {
       return res.status(403).type('html').send('<h1>403 — 禁止列目录</h1>');
     }
   } catch {}
-  // 用 sendFile 让 express 自己设 Content-Type / 范围请求
+  // Markdown 文件：渲染成完整 HTML 页面再返回，让局域网访客看到预览样式而不是 md 原文
+  if (isMarkdownPath(resolved.abs)) {
+    try {
+      const raw = await fsp.readFile(resolved.abs, 'utf8');
+      const html = markdown.renderPage(raw, { title: path.basename(resolved.abs) });
+      res.set('Cache-Control', 'no-store');
+      return res.type('html').send(html);
+    } catch (e) {
+      console.error('share render-md 失败:', e);
+      return res.status(500).type('html').send('<h1>500 — 渲染失败</h1>');
+    }
+  }
+  // 其余资源（图片 / CSS / HTML 等）：用 sendFile 让 express 自己设 Content-Type / 范围请求
   res.sendFile(resolved.abs, { headers: { 'Cache-Control': 'no-store' } });
 });
 

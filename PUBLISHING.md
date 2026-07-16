@@ -120,7 +120,7 @@ done
 
 **要求所有 spec 都"失败 0 项"**。任意一个失败必须先修才能发版。
 
-> 当前 spec 清单（17 个）：
+> 当前 spec 清单（18 个）：
 > - `inline-edit.spec.js` — 编辑文件名 / 备注（17 项）
 > - `sidebar.spec.js` — 侧边栏开关、宽度、动画（5 项）
 > - `sidebar-perf.spec.js` — 帧率门槛（p95 ≤ 25ms / max ≤ 50ms）
@@ -135,8 +135,9 @@ done
 > - `folder-toggle-with-jitter.spec.js` — folder 头点击带抖动仍能折叠/展开（4 项）
 > - `search-cn-and-highlight.spec.js` — 中文单字搜索 + iframe 内高亮跳转（13 项）
 > - `dir-picker.spec.js` — 浏览器内目录选择器（14 项）
+> - `toast.spec.js` — 扫描根增删与反馈 toast（11 项）
 > - `landing-demo.spec.js` — landing page demo 交互（27 项，file://，不依赖服务）
-> - `preview-live-edit.spec.js` — 预览区轻量编辑：edit-doc 标注 / 进入编辑 / 文案改+保存 / 列表重排 / 取消恢复 / 冲突 / 安全（20 项，**自起隔离实例**，不依赖 :4321）
+> - `preview-live-edit.spec.js` — 预览区轻量编辑：edit-doc 标注 / 进入编辑 / 文案改+保存 / 列表重排 / 取消恢复 / 冲突 / 安全（32 项，**自起隔离实例**，不依赖 :4321）
 > - `e2e-install.spec.js` — npm pack + 模拟陌生用户安装
 
 ### 步骤 1：更新 PUBLISHING.md
@@ -184,7 +185,7 @@ npm publish --dry-run
 检查输出：
 - `name: atlas-dashboard`
 - `version: <新版本>`
-- `total files:` 应在 11~15 之间（bin/lib/public/server/README/LICENSE）
+- `total files:` 应在 20~24 之间（当前为 21；bin/lib/public/server/README/LICENSE，包含 vendored 前端依赖）
 - 不应含 `tests/`、`data/`、`*.tgz`、`config.json`（这些在 `package.json` 的 `files` 白名单外）
 
 ### 步骤 4：真实发布
@@ -404,6 +405,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.7.1** (2026-07-16) — Bug 修复 + UX 优化：① `server.js` 的局域网分享路由现在会读取 `.md` / `.markdown` 文件并通过共用 Markdown 渲染器返回完整 HTML 页面，同事通过分享链接看到的是渲染后的文档预览，不再是 Markdown 原文；HTML 与其他静态资源继续按原方式发送。② `public/styles.css` 隐藏目录树中与文件类型 icon 重复的 `HTML` / `MD` 彩色角标，仅保留紧凑的类型 icon，同时缩小元素间距和 icon 宽度，并为标题补上 `min-width: 0`，让长标题优先获得空间且继续正确省略。③ `public/vendor/markdown.js` 为链接与图片 URL 增加安全协议白名单，阻断 `javascript:` 等主动内容协议，避免分享页访问者点击恶意链接时执行脚本。④ 同步更新 landing page 文案与 `package-lock.json` 根包版本。⑤ 根据当前 21 个合法发布文件校正 `npm publish --dry-run` 的清单数量范围。
 
 - **0.7.0** (2026-07-13) — 新功能 + UX 修复：**Markdown 只读预览的可折叠侧边目录（TOC）**，以及退出编辑保持浏览位置。① `public/vendor/markdown.js` 的 `renderPage`（服务端 `/api/render-md` 渲染 iframe 只读预览用）重写：新增 `extractHeadings`（给渲染后的 h1–h6 注入去重的锚点 id，中文/连字符保留）、`buildTocTree`/`tocTreeHtml`（按标题 level 组织成嵌套树）、`tocCss`/`tocScript`；页面结构改为「固定侧栏目录 + 居中正文 `.md-inner`」。目录支持：按层级三角折叠展开、点击平滑滚动跳转、`IntersectionObserver` 滚动高亮当前章节并自动展开其父级、左上角独立收起按钮（`localStorage` 记忆 `atlas:mdTocCollapsed`）、窄屏（≤900px）浮层化并点后自动收起。标题少于 2 个的文档不显示目录（正文照旧居中），编辑器分栏预览（用 `render`/`htmlToMarkdown`）完全不受影响。② 修复正文滚到底后靠后标题的锚点跳不动：正文末尾加 70vh 占位留白 + 标题 `scroll-margin-top`。③ `public/app.js`：退出 Markdown 编辑（保存 / 取消都走 `exitEditMode`）时记录编辑器预览面板的滚动**百分比**，iframe 重载后按同比例恢复浏览位置（新增 `pendingPreviewScrollPct` + `applyPendingScrollPct`，换算时从可滚动高度里扣除 `.md-tail-space` 留白，强制 `scroll-behavior:auto` 避免回顶动画），不再跳回顶部。同步更新 `README`（Markdown 段）与 `docs/index.html`（「HTML + Markdown 双模」特性卡）。
 

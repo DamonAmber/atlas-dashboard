@@ -481,7 +481,7 @@ body.resizing iframe { pointer-events: none; }
 .folder.collapsed > .folder-children { display: none; }
 
 .file {
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: 4px;
   padding: 4px 8px;
   border-radius: 5px;
   cursor: pointer;
@@ -493,8 +493,16 @@ body.resizing iframe { pointer-events: none; }
 .file:hover { background: var(--bg-hover); }
 .file.active { background: var(--bg-active); }
 .file.dragging-ghost { opacity: 0.5; }
+/* 树列表只保留左侧类型 icon，避免与 HTML/MD 标签重复占用标题空间。 */
+.tree .file .file-type-badge { display: none; }
+.file .file-type-icon {
+  width: 12px;
+  font-size: 11px;
+  opacity: 0.82;
+}
 .file-name {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
