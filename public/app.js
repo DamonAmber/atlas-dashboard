@@ -2841,7 +2841,12 @@ async function waitForServerBack() {
         // current 字段就是新版本号——说明新 server 已起
         setBannerPhase(`✓ 已更新到 ${info.current}，正在刷新…`);
         await new Promise(r2 => setTimeout(r2, 800));
-        location.reload();
+        // 不用普通 reload：部分 Chromium 浏览器会在服务重启后保留 localhost 的空文档状态。
+        // 新 URL 强制创建一次全新导航，同时用版本号方便诊断升级后的页面来源。
+        const nextUrl = new URL(location.href);
+        nextUrl.searchParams.set('_atlas_v', info.current);
+        nextUrl.searchParams.set('_atlas_reload', String(Date.now()));
+        location.replace(nextUrl.href);
         return;
       }
     } catch {}

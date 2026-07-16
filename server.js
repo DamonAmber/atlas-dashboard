@@ -454,7 +454,12 @@ app.use((req, res, next) => {
   );
 });
 
-app.use(express.static(PUBLIC_DIR));
+// Dashboard 会在运行中自升级；禁止浏览器保留旧 shell/脚本，避免重启窗口命中空文档或旧资源。
+app.use(express.static(PUBLIC_DIR, {
+  setHeaders(res) {
+    res.set('Cache-Control', 'no-store');
+  },
+}));
 
 let rawMounts = [];
 function mountRawRoutes() {
