@@ -303,13 +303,38 @@ function setScanning(on) {
   els.btnRefresh.classList.toggle('scanning', scanningCount > 0);
 }
 
+const STATE_TIMEOUT_MS = 15_000;
+let stateRetryTimer = null;
+let stateRetryDelay = 1000;
+let stateFailed = false;
+let stateInFlight = null;
+
 async function fetchState() {
+  if (stateRetryTimer) { clearTimeout(stateRetryTimer); stateRetryTimer = null; }
   setSaveStatus('loading');
-  setScanning(true);
+  // 已经处于失败态时，后台重试不再点亮转圈动画：否则退避重试会让刷新按钮
+  // 看起来"一直在转"，和故障时的观感没有区别。此时错误信息已经写在统计栏里。
+  const showSpinner = !stateFailed;
+  if (showSpinner) setScanning(true);
+  // 手动 AbortController（而非 AbortSignal.timeout，兼容旧内核）：
+  // 没有超时的话，一旦浏览器连接池被占满，这个 fetch 会永久 pending，
+  // finally 不执行 → 刷新按钮永远停在 scanning 状态。
+  const ctrl = new AbortController();
+  // 让新请求取代仍在飞的旧请求：并发的 fetchState（手动刷新 + SSE 推送 + 重试）
+  // 会各自占一个 scanning 计数，只要有一个迟迟不返回，刷新按钮就一直转；
+  // 而且旧响应后到还会覆盖新数据。同一时刻只保留最后一个。
+  if (stateInFlight) {
+    stateInFlight.superseded = true;
+    try { stateInFlight.abort(); } catch {}
+  }
+  stateInFlight = ctrl;
+  const timer = setTimeout(() => ctrl.abort(), STATE_TIMEOUT_MS);
   try {
-    const res = await fetch('/api/state');
+    const res = await fetch('/api/state', { signal: ctrl.signal });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
+    stateRetryDelay = 1000;
+    stateFailed = false;
     state.tree = data.tree;
     state.files = data.files;
     state.recent = Array.isArray(data.recent) ? data.recent : [];
@@ -320,11 +345,26 @@ async function fetchState() {
     render();
     renderRecent();
   } catch (e) {
+    // 被后来的请求主动取代：不是故障，静默退场（重试由接替者负责）
+    if (ctrl.superseded) return;
     console.error(e);
     setSaveStatus('error');
-    els.stats.textContent = '加载失败：' + e.message;
+    stateFailed = true;
+    const aborted = e && e.name === 'AbortError';
+    els.stats.textContent = aborted
+      ? `加载超时，${Math.round(stateRetryDelay / 1000)}s 后重试…`
+      : '加载失败：' + e.message + `（${Math.round(stateRetryDelay / 1000)}s 后重试）`;
+    // 自动重试（指数退避，上限 30s）：server 重启或连接暂时不可用后页面能自己恢复，
+    // 不必手动刷新
+    stateRetryTimer = setTimeout(() => {
+      stateRetryTimer = null;
+      fetchState();
+    }, stateRetryDelay);
+    stateRetryDelay = Math.min(stateRetryDelay * 2, 30_000);
   } finally {
-    setScanning(false);
+    clearTimeout(timer);
+    if (stateInFlight === ctrl) stateInFlight = null;
+    if (showSpinner) setScanning(false);   // 与上面成对，保证 scanningCount 不失衡
   }
 }
 
@@ -2667,10 +2707,17 @@ function notify(title, body) {
 // ---------- SSE ----------
 let evtSrc = null;
 let pendingRefresh = null;
+let sseRetryTimer = null;
 function connectSSE() {
-  if (evtSrc) try { evtSrc.close(); } catch {}
-  evtSrc = new EventSource('/api/events');
-  evtSrc.onmessage = (msg) => {
+  // 已排程的重连作废——否则多个 timer 会各建一条 EventSource，
+  // 而下面只 close 得到 evtSrc 这一个引用，其余实例丢引用却还占着连接。
+  // 浏览器对同源 HTTP/1.1 只给 6 个连接，泄漏满 6 条后整页所有请求（预览、/api/state）永久排队。
+  if (sseRetryTimer) { clearTimeout(sseRetryTimer); sseRetryTimer = null; }
+  if (evtSrc) { try { evtSrc.close(); } catch {} evtSrc = null; }
+
+  const es = new EventSource('/api/events');
+  evtSrc = es;
+  es.onmessage = (msg) => {
     let data;
     try { data = JSON.parse(msg.data); } catch { return; }
 
@@ -2689,8 +2736,15 @@ function connectSSE() {
     if (pendingRefresh) clearTimeout(pendingRefresh);
     pendingRefresh = setTimeout(() => { pendingRefresh = null; fetchState(); }, 400);
   };
-  evtSrc.onerror = () => {
-    setTimeout(connectSSE, 3000);
+  es.onerror = () => {
+    // 已被后来的实例取代：这是条僵尸连接，关掉就好，不参与重连排程
+    if (evtSrc !== es) { try { es.close(); } catch {} return; }
+    // EventSource 自身也会尝试自动重连，这里先彻底关闭，重连统一由我们排程，
+    // 避免"浏览器自动重连 + 手动重连"两条连接叠加
+    try { es.close(); } catch {}
+    evtSrc = null;
+    if (sseRetryTimer) return;   // 已有重连在排队，不重复排
+    sseRetryTimer = setTimeout(() => { sseRetryTimer = null; connectSSE(); }, 3000);
   };
 }
 

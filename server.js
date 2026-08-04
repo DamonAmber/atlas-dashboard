@@ -366,13 +366,10 @@ function isSelfWrite(filePath, mtimeMs) {
   return false;
 }
 
-let watchers = [];
-function startWatchers() {
-  for (const w of watchers) w.close().catch(() => {});
-  watchers = [];
-
+let watchers = new Map();   // root → chokidar watcher（增量增删，见 startWatchers）
+function buildIgnoredFn() {
   const ignore = getIgnoreSet();
-  const ignoredFn = (p) => {
+  return (p) => {
     const base = path.basename(p);
     if (base.startsWith('.')) return true;
     if (ignore.has(base)) return true;
@@ -380,9 +377,10 @@ function startWatchers() {
     if (base.endsWith('.sock') || base.endsWith('.lock') || base.endsWith('.pid')) return true;
     return false;
   };
+}
 
-  for (const root of getScanRoots()) {
-    if (!fs.existsSync(root)) continue;
+// 为单个扫描根创建 watcher。抽出来是为了支持增量增删（见 startWatchers）
+function createWatcher(root, ignoredFn) {
     const watcher = chokidar.watch(root, {
       ignored: ignoredFn,
       ignoreInitial: true,
@@ -426,7 +424,34 @@ function startWatchers() {
     watcher.on('error', (err) => {
       console.warn('  ! chokidar 忽略错误:', err && (err.code || err.message), err && err.path ? '@ ' + err.path : '');
     });
-    watchers.push(watcher);
+    return watcher;
+}
+
+// 同步 watcher 到当前 scanRoots。
+//   full=false（默认，仅 scanRoots 变动）：只给新增的根建 watcher、只关掉被移除的，
+//     保留不变的根不动。这很关键——chokidar 为大目录（含 node_modules 等）建立监听
+//     要同步遍历数十秒并卡住事件循环，期间浏览器所有请求都被拖慢，加一个扫描根
+//     就会让整个 dashboard 假死。
+//   full=true（ignore / maxDepth 变动）：这些选项作用于每个 watcher 自身，只能全部重建。
+function startWatchers({ full = true } = {}) {
+  const ignoredFn = buildIgnoredFn();
+  const targets = getScanRoots().filter(r => fs.existsSync(r));
+
+  if (full) {
+    for (const w of watchers.values()) w.close().catch(() => {});
+    watchers.clear();
+  } else {
+    for (const [root, w] of [...watchers]) {
+      if (!targets.includes(root)) {
+        w.close().catch(() => {});
+        watchers.delete(root);
+      }
+    }
+  }
+
+  for (const root of targets) {
+    if (watchers.has(root)) continue;   // 已在监听，保持原 watcher 不动
+    watchers.set(root, createWatcher(root, ignoredFn));
   }
 }
 
@@ -1280,7 +1305,9 @@ app.put('/api/config', (req, res) => {
   const body = req.body || {};
   const next = { ...config };
   let rootsChanged = false;
-  let watchDepsChanged = false; // scanRoots / ignore / maxDepth 变化才需要重启 watcher
+  // ignore / maxDepth 作用于每个 watcher 自身，改了只能全部重建；
+  // 只动 scanRoots 时走增量，避免为没变化的大目录重复建监听（会卡住事件循环数十秒）
+  let watchOptsChanged = false;
   if (Array.isArray(body.scanRoots)) {
     const cleaned = [...new Set(body.scanRoots.map(p => path.resolve(String(p).trim())).filter(Boolean))];
     for (const p of cleaned) {
@@ -1290,17 +1317,16 @@ app.put('/api/config', (req, res) => {
     }
     if (JSON.stringify(cleaned) !== JSON.stringify(config.scanRoots || [])) {
       rootsChanged = true;
-      watchDepsChanged = true;
     }
     next.scanRoots = cleaned;
   }
   if (Array.isArray(body.ignore)) {
     next.ignore = body.ignore.map(String);
-    if (JSON.stringify(next.ignore) !== JSON.stringify(config.ignore || [])) watchDepsChanged = true;
+    if (JSON.stringify(next.ignore) !== JSON.stringify(config.ignore || [])) watchOptsChanged = true;
   }
   if (typeof body.maxDepth === 'number') {
     next.maxDepth = Math.min(20, Math.max(1, body.maxDepth));
-    if (next.maxDepth !== config.maxDepth) watchDepsChanged = true;
+    if (next.maxDepth !== config.maxDepth) watchOptsChanged = true;
   }
   if (Array.isArray(body.docTypes)) {
     const cleaned = [...new Set(body.docTypes.filter(t => ALL_DOC_TYPES.includes(t)))];
@@ -1313,9 +1339,21 @@ app.put('/api/config', (req, res) => {
   }
   saveConfig(next);
   // 仅在真正影响到的时候才做重活，避免切换文档类型时无谓地重挂路由 / 重启 watcher（卡顿源头）
+  // mountRawRoutes 很快（只改 router stack），且前端拿到响应后立刻会请求 /raw/*，必须同步做完
   if (rootsChanged) mountRawRoutes();
-  if (watchDepsChanged) startWatchers();
+  // 先把响应发出去：startWatchers 要为每个扫描根重建 chokidar watcher，
+  // 大目录（含 node_modules 等）遍历建监听可达数十秒。压在响应前面会让前端
+  // 迟迟等不到结果——UI 既不弹 toast 也不刷新列表，看起来就是"点了没反应"。
   res.json({ ok: true, config: next });
+  // 同步 watcher 挪到响应之后异步执行。延后仅一个事件循环 tick，
+  // 且用户刚改完扫描配置本就要重新扫描，期间漏掉文件事件的影响可忽略。
+  if (rootsChanged || watchOptsChanged) setImmediate(() => {
+    try {
+      startWatchers({ full: watchOptsChanged });
+    } catch (e) {
+      console.warn('  ! 同步 watcher 失败:', e && e.message);
+    }
+  });
 });
 
 app.get('/api/events', (req, res) => {
@@ -1396,7 +1434,7 @@ httpServer.on('error', (err) => {
 // 优雅退出
 function shutdown() {
   console.log('\n  收到退出信号，关闭中…');
-  for (const w of watchers) {
+  for (const w of watchers.values()) {
     try { w.close().catch(() => {}); } catch {}
   }
   httpServer.close(() => process.exit(0));

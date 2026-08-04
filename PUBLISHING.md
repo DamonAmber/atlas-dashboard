@@ -120,7 +120,7 @@ done
 
 **要求所有 spec 都"失败 0 项"**。任意一个失败必须先修才能发版。
 
-> 当前 spec 清单（18 个）：
+> 当前 spec 清单（19 个）：
 > - `inline-edit.spec.js` — 编辑文件名 / 备注（17 项）
 > - `sidebar.spec.js` — 侧边栏开关、宽度、动画（5 项）
 > - `sidebar-perf.spec.js` — 帧率门槛（p95 ≤ 25ms / max ≤ 50ms）
@@ -130,6 +130,7 @@ done
 > - `drag-to-root.spec.js` — 文件拖到根目录不卡
 > - `drag-hover-expand.spec.js` — 拖到折叠 folder 头上 600ms 自动展开（6 项）
 > - `no-sortable-leak.spec.js` — Sortable 实例不累积（5 项）
+> - `sse-leak-and-retry.spec.js` — SSE 连接不泄漏（含反向验证）+ `/api/state` 挂起时超时中止并自动重试恢复（13 项）
 > - `v0.2-features.spec.js` — 键盘导航 / 最近打开 / 全文搜索（15 项）
 > - `click-with-jitter.spec.js` — file 点击带抖动仍能打开（5 项）
 > - `folder-toggle-with-jitter.spec.js` — folder 头点击带抖动仍能折叠/展开（4 项）
@@ -405,6 +406,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.7.3** (2026-08-04) — Bug 修复：解决「文档点开没反应 / 刷新按钮一直转」的页面假死，以及「改扫描根后界面毫无反馈」。① `public/app.js` 修掉 SSE 连接泄漏——`connectSSE` 的 `onerror` 原本每次都排一个 3s 后的重连 timer，多个 timer 各建一条 `EventSource`，而函数只 `close()` 得到 `evtSrc` 这一个引用，其余实例丢引用却仍占着连接；浏览器对同源 HTTP/1.1 只给 6 个连接，泄漏满 6 条后整页所有请求（预览 iframe、`/api/state`）永久排队，表现为点文档打不开、刷新按钮无限转圈。现在重连排程唯一化，`onerror` 先判断实例是否已被取代（僵尸连接直接关闭不参与重连），并主动 `close()` 后再统一排程，避免浏览器自动重连与手动重连叠加。② `public/app.js` 给 `/api/state` 加 15s `AbortController` 超时 + 指数退避自动重试（1s→30s 上限）：此前该 fetch 无超时，连接池被占满时永久 pending 导致 `finally` 不执行、刷新按钮永远停在 scanning 且页面再也不会自愈；同时进入失败态后重试不再点亮转圈动画（只留统计栏文字提示），并让新请求取代仍在飞的旧请求，消除并发 `fetchState`（手动刷新 + SSE 推送 + 重试）各占一个 scanning 计数导致按钮长期转圈、旧响应后到覆盖新数据的问题。③ `server.js` 修掉改扫描根时的数十秒假死：`PUT /api/config` 原本先同步 `startWatchers()` 重建**全部** chokidar watcher 再返回响应，大目录（含 `node_modules` 等）遍历建监听要几十秒，浏览器侧实测 8.3s 才收到响应头，前端等不到结果 → 既不弹 toast 也不刷新列表，看起来就是「点了没反应」。现在配置写盘后立即响应，watcher 同步挪到响应之后异步执行；并把 watcher 改为按扫描根增量增删（`watchers` 从数组改为 `Map<root, watcher>`，新增根只建新 watcher、移除根只关对应的、不变的根保持不动），仅 `ignore` / `maxDepth` 变化时才全量重建。浏览器侧添加扫描根耗时从 8271ms 降到 8ms。④ 新增回归 spec `sse-leak-and-retry.spec.js`（13 项，含反向验证：故意用旧的泄漏写法建 4 条连接，确认断言真的会判失败而非空断言），已挂进 `npm test`。⑤ 修 `inline-edit.spec.js` 过时断言：测试算「原文件名」时只剥 `.html`，0.6.0 起支持 Markdown 后对 `.md` 目标文件永远算出带后缀的值，与产品 `stripDocExt` 不一致导致该项恒失败；改为与产品一致的 `/\.(html?|md|markdown)$/i`。⑥ 同步 landing page 版本号与 `package-lock.json`。
 
 - **0.7.2** (2026-07-16) — Bug 修复：解决一键自升级重启后，部分 Chromium 浏览器可能把 `localhost` 标签保留为空文档、而 `127.0.0.1` 仍正常的问题。① `server.js` 为 Dashboard 的 HTML、脚本和样式等静态资源统一发送 `Cache-Control: no-store`，避免升级期间替换全局包文件后继续复用旧 shell、旧脚本或异常空文档缓存。② `public/app.js` 在确认新服务上线后不再调用普通 `location.reload()`，改为携带目标版本号与时间戳执行 `location.replace()`，强制建立一次全新导航；`localhost` 继续通过 Node 默认 IPv4/IPv6 双栈监听正常访问，无需改用 `127.0.0.1`。③ 同步更新 landing page 与 package lock 版本。
 

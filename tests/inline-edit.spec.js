@@ -272,7 +272,9 @@ function check(name, ok, detail) {
   const baseName = await page.evaluate(async (p) => {
     const r = await fetch('/api/state');
     const d = await r.json();
-    return d.files[p].name.replace(/\.html$/i, '');
+    // 必须与 app.js 的 stripDocExt 一致：0.6.0 起支持 Markdown，
+    // 只剥 .html 会让 .md 目标文件算出带后缀的 baseName，断言永远不成立
+    return d.files[p].name.replace(/\.(html?|md|markdown)$/i, '');
   }, targetPath);
 
   await page.evaluate((n) => {
