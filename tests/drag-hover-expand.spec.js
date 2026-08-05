@@ -1,5 +1,6 @@
 // 验证：拖文件悬停在折叠 folder 头上 600ms 自动展开
 const { chromium } = require('playwright');
+const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
 
 const checks = [];
 function check(name, ok, detail = '') {
@@ -8,11 +9,17 @@ function check(name, ok, detail = '') {
 }
 
 (async () => {
+  // 自起隔离 Atlas 实例：拖拽与折叠状态都会写 tree，
+  // 直连用户本机 :4321 会污染真实数据。fixture 规模按本用例需要生成。
+  const atlas = await startAtlas({
+    prefix: 'atlas-drag-hover-expand-spec-',
+    files: makeTreeFixtures({ projects: 4, filesPerProject: 5 }),
+  });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('pageerror', e => console.error('[pageerror]', e.message));
 
-  await page.goto('http://localhost:4321', { waitUntil: 'load' });
+  await page.goto(atlas.base, { waitUntil: 'load' });
   await page.waitForSelector('.file');
 
   // 备份初始 tree（结束后恢复）
@@ -171,6 +178,7 @@ function check(name, ok, detail = '') {
   }, backup);
 
   await browser.close();
+  await atlas.stop();
   const failed = checks.filter(c => !c.ok);
   console.log(`\n========================`);
   console.log(`总计 ${checks.length} 项，失败 ${failed.length} 项`);

@@ -101,45 +101,58 @@ atlas status                        # atlas 服务在跑？(测试需要)
 
 ### 步骤 0：跑全套测试
 
-测试都依赖一个本地运行的 Atlas 服务（默认 `:4321`）。
+**所有 spec 都自起隔离实例，不需要预先起服务，也不会碰你真实的 `~/.atlas` 与文档。**
+直接跑即可（跑之前不用 `atlas stop`，跑的时候你正在用的 Atlas 也不受影响）：
 
 ```bash
-# 确保服务在跑且用最新代码（不是 npm 包里的旧版）
-atlas stop
-lsof -ti :4321 | xargs kill 2>/dev/null
-node bin/atlas.js > /tmp/atlas-dev.log 2>&1 &
-sleep 2
-curl -sf http://localhost:4321/api/state >/dev/null && echo "服务 OK"
-
-# 跑全部 spec
 for spec in tests/*.spec.js; do
   echo "=== $spec ==="
   node "$spec" 2>&1 | tail -3
 done
 ```
 
+> 验证过：把本机 Atlas 完全停掉，全套 19 个 spec 依然全绿，且 `~/.atlas/config.json`
+> 与 `store.json` 校验和逐字节未变。若将来某个 spec 在服务停止时失败，说明它偷偷依赖了
+> 你的真实实例，按下面的约定改掉。
+
 **要求所有 spec 都"失败 0 项"**。任意一个失败必须先修才能发版。
 
-> 当前 spec 清单（19 个）：
-> - `inline-edit.spec.js` — 编辑文件名 / 备注（17 项）
-> - `sidebar.spec.js` — 侧边栏开关、宽度、动画（5 项）
-> - `sidebar-perf.spec.js` — 帧率门槛（p95 ≤ 25ms / max ≤ 50ms）
-> - `scroll-stuck.spec.js` — 拖 resizer 不卡死（8 项）
-> - `scroll-after-toggle.spec.js` — 滚动到中间后切侧栏不卡
-> - `drag-stress.spec.js` — 连续随机拖拽不死循环
-> - `drag-to-root.spec.js` — 文件拖到根目录不卡
-> - `drag-hover-expand.spec.js` — 拖到折叠 folder 头上 600ms 自动展开（6 项）
-> - `no-sortable-leak.spec.js` — Sortable 实例不累积（5 项）
+当前 spec 清单（19 个）。除 `landing-demo`（`file://`）外，其余都通过
+`tests/helpers/isolated-atlas.js` 的 `startAtlas()` 起独立实例：临时 `ATLAS_HOME`
+（自带 config/store）+ 临时扫描根 + 临时 fixture + 随机端口，结束即删。
+需要"有规模的文档树"的用例（帧率 / 滚动 / 拖拽）用 `makeTreeFixtures()` 现造，
+不再依赖你本机那几百篇真实文档。
+
+> - `preview-live-edit.spec.js` — 预览区轻量编辑：edit-doc 标注 / 进入编辑 / 文案改+保存 / 列表重排 / 取消恢复 / 冲突 / 安全（32 项）
+> - `toast.spec.js` — 扫描根增删与反馈 toast（12 项，含隔离性断言）
+> - `inline-edit.spec.js` — 编辑文件名 / 备注（18 项，含隔离性断言）
+> - `v0.2-features.spec.js` — 键盘导航 / 最近打开 / 全文搜索（17 项，含隔离性断言）
 > - `sse-leak-and-retry.spec.js` — SSE 连接不泄漏（含反向验证）+ `/api/state` 挂起时超时中止并自动重试恢复（13 项）
-> - `v0.2-features.spec.js` — 键盘导航 / 最近打开 / 全文搜索（15 项）
+> - `search-cn-and-highlight.spec.js` — 中文单字搜索 + iframe 内高亮跳转（13 项，fixture 自带含"灯"的长文档）
 > - `click-with-jitter.spec.js` — file 点击带抖动仍能打开（5 项）
 > - `folder-toggle-with-jitter.spec.js` — folder 头点击带抖动仍能折叠/展开（4 项）
-> - `search-cn-and-highlight.spec.js` — 中文单字搜索 + iframe 内高亮跳转（13 项）
-> - `dir-picker.spec.js` — 浏览器内目录选择器（14 项）
-> - `toast.spec.js` — 扫描根增删与反馈 toast（11 项）
-> - `landing-demo.spec.js` — landing page demo 交互（27 项，file://，不依赖服务）
-> - `preview-live-edit.spec.js` — 预览区轻量编辑：edit-doc 标注 / 进入编辑 / 文案改+保存 / 列表重排 / 取消恢复 / 冲突 / 安全（32 项，**自起隔离实例**，不依赖 :4321）
-> - `e2e-install.spec.js` — npm pack + 模拟陌生用户安装
+> - `no-sortable-leak.spec.js` — Sortable 实例不累积（5 项）
+> - `drag-hover-expand.spec.js` — 拖到折叠 folder 头上 600ms 自动展开（6 项）
+> - `drag-stress.spec.js` — 连续随机拖拽不死循环
+> - `drag-to-root.spec.js` — 文件拖到根目录不卡
+> - `sidebar.spec.js` — 侧边栏开关、宽度、动画（5 项）
+> - `scroll-stuck.spec.js` — 拖 resizer 不卡死（8 项，fixture 用长文档）
+> - `scroll-after-toggle.spec.js` — 滚动到中间后切侧栏不卡（fixture 用长文档）
+> - `sidebar-perf.spec.js` — 帧率门槛（p95 ≤ 25ms / max ≤ 50ms，fixture 造 250 篇。CI 上共享 runner 帧率波动大，设为非阻塞观测）
+> - `dir-picker.spec.js` — 浏览器内目录选择器（15 项。`/api/browse` 本身就是列真实文件系统目录的接口，用例会只读地浏览 home 与 `~/Documents`；因 CI runner 的 home 结构不保证，不放进 CI）
+> - `landing-demo.spec.js` — landing page demo 交互（28 项，`file://`，连服务都不需要）
+> - `e2e-install.spec.js` — npm pack + 模拟陌生用户安装（10 项，自建临时 home 与端口）
+
+> ⚠️ **新写 spec 一律用 `startAtlas()`，不要直连 `:4321`。** 哪怕自认为"只读"也不要——
+> 点开一篇文档就会写 store 的 recent 与已读状态，折叠一个分组就会写 tree。
+>
+> 历史教训：`toast.spec.js` 原先直接改真实 `~/.atlas/config.json`，中断时残留临时扫描根，
+> 堆积后让服务重挂 watcher 越来越慢，进而让测试更容易超时失败 —— 恶性循环，
+> 最终它长期红着没人当真，而它本该守护的功能（扫描根增删反馈）悄悄退化到 0.7.3 才被发现。
+> 另一个例子：`landing-demo` 的拖拽用例曾间歇性失败，真因是 demo 区域在长页面靠下位置
+> （y≈1650）而视口只有 900 高，拖拽目标不在视口内、鼠标事件打不到元素，
+> 偶尔能过是因为前面的用例碰巧把页面滚到了合适位置 —— 现在拖拽前强制
+> `scrollIntoViewIfNeeded()` 并加了"源与目标都在视口内"的前置断言。
 
 ### 步骤 1：更新 PUBLISHING.md
 
@@ -257,7 +270,7 @@ atlas restart      # 让本机服务也用新版
 
 | 触发 | Workflow | 做什么 |
 |---|---|---|
-| `git push` 到 main | `.github/workflows/test.yml` | CLI smoke + landing demo + preview-live-edit（自起隔离实例）+ e2e install + 6 个服务依赖 spec（用 fixture HTML） |
+| `git push` 到 main | `.github/workflows/test.yml` | CLI smoke + landing demo + e2e install + 15 个隔离 spec（各自起实例，无需预置 fixture 与共享服务）+ 帧率非阻塞观测 |
 | `git push origin v*` (tag) | `.github/workflows/release.yml` | 抽取 PUBLISHING.md 该版本段落 → 创建 GitHub Release |
 | 任何 push 到 main | GitHub Pages（仓库设置） | 自动重新部署 `docs/` 到 https://damonamber.github.io/atlas-dashboard/ |
 | `npm publish` | npm registry | 包上架 + CDN 同步（约 1-2 分钟） |
@@ -395,7 +408,7 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 6. **流程有变化？发完最后必须做的事**：
    - 把新版本加到本文档底部 [已发布版本](#已发布版本)
    - 如果改了发版步骤（新增工具、改了命令、新增自动化等）→ 改对应章节
-   - 如果加了新的 spec 文件 → 加到 [步骤 0](#步骤-0跑全套测试) 的 spec 清单
+   - 如果加了新的 spec 文件 → 加到 [步骤 0](#步骤-0跑全套测试) 的 spec 清单（会写状态的必须走 `startAtlas()` 隔离实例，归到 A 类）
    - 如果改了 token / 凭据机制 → 改 [一次性环境配置](#一次性环境配置)
 7. **流程出错的话留痕**：在故障排查章节加一行"现象 → 修复"，让下次少踩坑。
 8. **不要主动用破坏性命令**（unpublish 24h 外、git tag -d、git push --force 之类）—— 必须先和用户确认。

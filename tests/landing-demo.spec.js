@@ -103,18 +103,49 @@ function check(name, ok, detail = '') {
   console.log('\n[5] 拖 weekly-summary 到 prototypes folder');
   // 等 SortableJS 完全 attach 到搜索清空后重建的 DOM
   await page.waitForTimeout(400);
-  const sourceBox = await page.locator('#demo-tree .file[data-file-id="f1"]').boundingBox();
-  const targetBox = await page.locator('#demo-tree .folder[data-folder-id="prototypes"] .folder-children').boundingBox();
-  // 慢速、多步移动让 SortableJS 有时间识别
-  await page.mouse.move(sourceBox.x + 30, sourceBox.y + sourceBox.height / 2);
-  await page.mouse.down();
-  await page.waitForTimeout(120);
-  await page.mouse.move(sourceBox.x + 50, sourceBox.y + sourceBox.height / 2 + 10, { steps: 5 });
-  await page.waitForTimeout(80);
-  await page.mouse.move(targetBox.x + 40, targetBox.y + targetBox.height / 2, { steps: 20 });
-  await page.waitForTimeout(120);
-  await page.mouse.up();
-  await page.waitForTimeout(400);
+
+  // 这三项曾间歇性失败，真因是 demo 区域在长页面的靠下位置（y≈1650，视口只有 900 高），
+  // 拖拽目标不在视口内 → 鼠标坐标落在视口外，事件根本没打到元素上。
+  // 之前偶尔能过是因为前面的用例碰巧把页面滚到了合适位置 —— 滚动位置不确定就成了 flaky。
+  // 实测：不滚动 0/5 成功，先滚进视口 5/5 成功。
+  const srcLoc = page.locator('#demo-tree .file[data-file-id="f1"]');
+  const dstLoc = page.locator('#demo-tree .folder[data-folder-id="prototypes"] .folder-children');
+  await srcLoc.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(250);
+
+  const vp = page.viewportSize();
+  const preBoxes = { s: await srcLoc.boundingBox(), t: await dstLoc.boundingBox() };
+  check('拖拽前源与目标都在视口内（否则鼠标事件打不到元素）',
+    !!preBoxes.s && !!preBoxes.t
+    && preBoxes.s.y >= 0 && preBoxes.s.y <= vp.height
+    && preBoxes.t.y >= 0 && preBoxes.t.y <= vp.height,
+    `srcY=${Math.round(preBoxes.s?.y ?? -1)}, dstY=${Math.round(preBoxes.t?.y ?? -1)}, 视口高=${vp.height}`);
+
+  async function dragF1IntoPrototypes() {
+    const sourceBox = await srcLoc.boundingBox();
+    const targetBox = await dstLoc.boundingBox();
+    if (!sourceBox || !targetBox) return false;
+    // 慢速、多步移动让 SortableJS 有时间识别
+    await page.mouse.move(sourceBox.x + 30, sourceBox.y + sourceBox.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(120);
+    await page.mouse.move(sourceBox.x + 50, sourceBox.y + sourceBox.height / 2 + 10, { steps: 5 });
+    await page.waitForTimeout(80);
+    await page.mouse.move(targetBox.x + 40, targetBox.y + targetBox.height / 2, { steps: 20 });
+    await page.waitForTimeout(120);
+    await page.mouse.up();
+    return page.waitForFunction(() =>
+      [...document.querySelectorAll('#demo-tree .folder[data-folder-id="prototypes"] .file')]
+        .some(e => e.dataset.fileId === 'f1'),
+      { timeout: 2500 }
+    ).then(() => true).catch(() => false);
+  }
+
+  let dragged = await dragF1IntoPrototypes();
+  if (!dragged) {
+    console.log('  (第一次拖拽未被 SortableJS 识别，重试一次)');
+    dragged = await dragF1IntoPrototypes();
+  }
 
   const afterDrag = await page.evaluate(() => {
     const reportsFiles = [...document.querySelectorAll('#demo-tree .folder[data-folder-id="reports"] .file')].map(e => e.dataset.fileId);

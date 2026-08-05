@@ -1,11 +1,18 @@
 // 复现：HTML 滚到中间 → 关闭 sidebar → 无法滚动
 const { chromium } = require('playwright');
+const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
 
 (async () => {
+  // 自起隔离 Atlas 实例：需要长文档与可滚动的长列表，
+  // 直连用户本机 :4321 会污染真实数据。fixture 规模按本用例需要生成。
+  const atlas = await startAtlas({
+    prefix: 'atlas-scroll-after-toggle-spec-',
+    files: makeTreeFixtures({ projects: 8, filesPerProject: 15, longContent: true }),
+  });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('pageerror', e => console.error('[pageerror]', e.message));
-  await page.goto('http://localhost:4321', { waitUntil: 'load' });
+  await page.goto(atlas.base, { waitUntil: 'load' });
   await page.waitForSelector('.file');
 
   // 找一个长 HTML
@@ -204,4 +211,5 @@ const { chromium } = require('playwright');
   console.log('[6] 完整诊断:', JSON.stringify(diag, null, 2));
 
   await browser.close();
+  await atlas.stop();
 })();

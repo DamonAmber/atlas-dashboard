@@ -1,5 +1,23 @@
-// 验证 0.2 三个新功能：键盘导航、最近打开、全文搜索
+// v0.2 三项功能：键盘导航、最近打开、HTML 全文搜索
+//
+// 自起隔离 Atlas 实例：本测试会点开文件，从而写入 store 的"最近打开"列表；
+// 早先版本直连用户本机 :4321，会把测试文档塞进用户真实的 recent 里。
+
 const { chromium } = require('playwright');
+const { startAtlas } = require('./helpers/isolated-atlas');
+
+// fixture 要满足几个用例前提：
+//   · 至少 4 个文档（键盘导航要连按 ↓ 多次、recent 要点开两个不同文件）
+//   · 内容含"数据"（后端 /api/search 用例）
+//   · 内容含 echarts / svg / chart / flex 等词，且文件名与路径都不含这些词
+//     （前端用例要找"内容匹配但文件名不匹配"的样本来验证 .content-match）
+const FIXTURE_FILES = {
+  'proj-a/alpha.html': '<!doctype html><html><body><h1>甲</h1><p>这里有数据，用 echarts 绘制。</p></body></html>',
+  'proj-a/beta.html': '<!doctype html><html><body><h1>乙</h1><p>数据可视化用到 svg 与 rgb 配色。</p></body></html>',
+  'proj-b/gamma.html': '<!doctype html><html><body><h1>丙</h1><p>chart 布局用 flex 排版。</p></body></html>',
+  'proj-b/delta.md': '# 丁\n\n这份文档也包含数据两个字。\n',
+};
+
 const checks = [];
 function check(name, ok, detail = '') {
   checks.push({ name, ok, detail });
@@ -7,10 +25,13 @@ function check(name, ok, detail = '') {
 }
 
 (async () => {
+  const atlas = await startAtlas({ prefix: 'atlas-v02-spec-', files: FIXTURE_FILES });
+  console.log('实例:', atlas.base);
+
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('pageerror', e => console.error('[pageerror]', e.message));
-  await page.goto('http://localhost:4321', { waitUntil: 'load' });
+  await page.goto(atlas.base, { waitUntil: 'load' });
   await page.waitForSelector('.file');
 
   // 备份用于还原
@@ -196,7 +217,17 @@ function check(name, ok, detail = '') {
     });
   }, backup);
 
+  // ========== 隔离性 ==========
+  console.log('\n[4] 隔离性');
+  const store = atlas.readStore() || {};
+  const recent = store.recent || [];
+  check('store.recent 非空（用例确实点开过文件）', recent.length >= 1, `count=${recent.length}`);
+  check('store.recent 的路径都在实例临时目录内',
+    recent.every(p => p.startsWith(atlas.tmpDir)),
+    JSON.stringify(recent.slice(0, 2)));
+
   await browser.close();
+  await atlas.stop();
   const failed = checks.filter(c => !c.ok);
   console.log(`\n========================`);
   console.log(`总计 ${checks.length} 项，失败 ${failed.length} 项`);

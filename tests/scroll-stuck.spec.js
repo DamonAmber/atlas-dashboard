@@ -1,8 +1,8 @@
 // 复现 "iframe 有时无法滚动" 的 bug
 // 假设：body.resizing 或 body.sidebar-animating 卡住没移除 → iframe pointer-events: none → 不能滚
 const { chromium } = require('playwright');
+const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
 
-const BASE = 'http://localhost:4321';
 const checks = [];
 function check(name, ok, detail = '') {
   checks.push({ name, ok, detail });
@@ -10,9 +10,15 @@ function check(name, ok, detail = '') {
 }
 
 (async () => {
+  // 自起隔离 Atlas 实例：需要长文档与可滚动的长列表，
+  // 直连用户本机 :4321 会污染真实数据。fixture 规模按本用例需要生成。
+  const atlas = await startAtlas({
+    prefix: 'atlas-scroll-stuck-spec-',
+    files: makeTreeFixtures({ projects: 8, filesPerProject: 15, longContent: true }),
+  });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  await page.goto(BASE, { waitUntil: 'load' });
+  await page.goto(atlas.base, { waitUntil: 'load' });
   await page.waitForSelector('.file');
 
   // 选一个长 HTML 文件
@@ -170,6 +176,7 @@ function check(name, ok, detail = '') {
 
   // -------- 总结 --------
   await browser.close();
+  await atlas.stop();
   const failed = checks.filter(c => !c.ok);
   console.log(`\n========================`);
   console.log(`总计 ${checks.length} 项，失败 ${failed.length} 项`);

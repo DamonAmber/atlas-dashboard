@@ -1,5 +1,6 @@
 // 验证 Sortable 实例不再泄漏 + 后端 tree 校验拒绝坏数据 + folder 拖进自己被阻止
 const { chromium } = require('playwright');
+const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
 const checks = [];
 function check(name, ok, detail = '') {
   checks.push({ name, ok, detail });
@@ -7,9 +8,15 @@ function check(name, ok, detail = '') {
 }
 
 (async () => {
+  // 自起隔离 Atlas 实例：拖拽会改写 tree 结构，
+  // 直连用户本机 :4321 会污染真实数据。fixture 规模按本用例需要生成。
+  const atlas = await startAtlas({
+    prefix: 'atlas-no-sortable-leak-spec-',
+    files: makeTreeFixtures({ projects: 4, filesPerProject: 5 }),
+  });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  await page.goto('http://localhost:4321', { waitUntil: 'load' });
+  await page.goto(atlas.base, { waitUntil: 'load' });
   await page.waitForSelector('.file');
 
   // ========== 1. Sortable 实例不再累积 ==========
@@ -151,6 +158,7 @@ function check(name, ok, detail = '') {
     !cycleCheck.selfInside, JSON.stringify(cycleCheck));
 
   await browser.close();
+  await atlas.stop();
   const failed = checks.filter(c => !c.ok);
   console.log(`\n========================`);
   console.log(`总计 ${checks.length} 项，失败 ${failed.length} 项`);

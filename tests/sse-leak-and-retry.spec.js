@@ -9,9 +9,11 @@
 //   同时 fetchState 的 fetch 没有超时，连接池满时它永久 pending，finally 不执行，
 //   刷新按钮永远停在 scanning 状态，且页面再也不会自己恢复。
 //
-// 本测试不重启服务、不修改 config/store，只读。
+// 自起隔离 Atlas 实例（独立 ATLAS_HOME + 临时扫描根 + 随机端口），
+// 不依赖用户本机跑着的服务，也不读写用户真实 config/store。
 
 const { chromium } = require('playwright');
+const { startAtlas } = require('./helpers/isolated-atlas');
 
 const checks = [];
 function check(name, ok, detail = '') {
@@ -23,6 +25,15 @@ function check(name, ok, detail = '') {
 const activeCountExpr = () => window.__es.instances.filter(i => i.readyState !== 2).length;
 
 (async () => {
+  const atlas = await startAtlas({
+    prefix: 'atlas-sse-spec-',
+    files: {
+      'proj/index.html': '<!doctype html><html><body><h1>fixture</h1></body></html>',
+      'proj/notes.md': '# 笔记\n\n内容\n',
+    },
+  });
+  console.log('实例:', atlas.base);
+
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 
@@ -43,7 +54,7 @@ const activeCountExpr = () => window.__es.instances.filter(i => i.readyState !==
     window.EventSource = Hooked;
   });
 
-  await page.goto('http://localhost:4321', { waitUntil: 'load' });
+  await page.goto(atlas.base, { waitUntil: 'load' });
   await page.waitForSelector('.file');
 
   // ========== 1. 稳态：只应有一条 SSE ==========
@@ -162,6 +173,7 @@ const activeCountExpr = () => window.__es.instances.filter(i => i.readyState !==
   check('结束时活跃 EventSource ≤ 1', final.active <= 1, `active=${final.active}`);
 
   await browser.close();
+  await atlas.stop();
 
   console.log('\n========================');
   const failed = checks.filter(c => !c.ok);

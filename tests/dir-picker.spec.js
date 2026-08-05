@@ -1,7 +1,14 @@
 // 验证：浏览器内目录浏览器（替代手输绝对路径）
+// 设置面板里的"浏览…"目录选择器（后端 /api/browse + 前端 picker 交互）
+//
+// 自起隔离 Atlas 实例，不依赖用户本机跑着的服务。
+// 注意：/api/browse 本身就是"列出真实文件系统目录"的接口，用例仍会读取 home
+// 与 ~/Documents（只读，不写入任何配置）；填进 #root-input 的路径也不会提交。
+
 const { chromium } = require('playwright');
 const path = require('path');
 const os = require('os');
+const { startAtlas } = require('./helpers/isolated-atlas');
 
 const checks = [];
 function check(name, ok, detail = '') {
@@ -10,10 +17,16 @@ function check(name, ok, detail = '') {
 }
 
 (async () => {
+  const atlas = await startAtlas({
+    prefix: 'atlas-dir-picker-spec-',
+    files: { 'proj/index.html': '<!doctype html><html><body><h1>fixture</h1></body></html>' },
+  });
+  console.log('实例:', atlas.base);
+
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('pageerror', e => console.error('[pageerror]', e.message));
-  await page.goto('http://localhost:4321', { waitUntil: 'load' });
+  await page.goto(atlas.base, { waitUntil: 'load' });
   await page.waitForSelector('.file');
 
   // ===== 1. 后端 /api/browse =====
@@ -112,7 +125,15 @@ function check(name, ok, detail = '') {
     document.getElementById('dir-picker').classList.contains('hidden'));
   check('"取消"关闭 picker', cancelHidden);
 
+  // 隔离性：浏览目录只是只读操作，不应改动实例配置（更不会碰用户真实配置）
+  console.log('\n[隔离性] 浏览目录不写配置');
+  const cfg = atlas.readConfig();
+  check('实例扫描根未被浏览操作改动',
+    cfg.scanRoots.length === 1 && cfg.scanRoots[0] === atlas.scanDir,
+    JSON.stringify(cfg.scanRoots));
+
   await browser.close();
+  await atlas.stop();
   const failed = checks.filter(c => !c.ok);
   console.log(`\n========================`);
   console.log(`总计 ${checks.length} 项，失败 ${failed.length} 项`);

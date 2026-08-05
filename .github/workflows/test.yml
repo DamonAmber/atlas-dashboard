@@ -9,7 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -31,13 +31,9 @@ jobs:
           node bin/atlas.js --version
           node bin/atlas.js --help
 
-      # 2. landing page demo（file:// 协议，不依赖服务）
+      # 2. landing page demo（file:// 协议，连服务都不需要）
       - name: Landing demo
         run: node tests/landing-demo.spec.js
-
-      # 2.5 预览区轻量编辑（自起隔离实例 + 临时 fixture，不依赖 :4321）
-      - name: Preview live-edit spec
-        run: node tests/preview-live-edit.spec.js
 
       # 3. 端到端：模拟全新机器 npx 安装 + 首次引导 + 启动
       - name: End-to-end install
@@ -45,60 +41,36 @@ jobs:
           npm pack
           node tests/e2e-install.spec.js
 
-      # 4. 准备 fixture（足够长以便 scroll 测试）+ 启服务，跑依赖服务的 spec
-      - name: Prepare fixture HTML files
-        run: |
-          mkdir -p .ci-fixtures/proj-a .ci-fixtures/proj-b .ci-fixtures/proj-c
-          node -e "
-          const fs = require('fs');
-          const filler = '<p>填充行：让文档长一点供 scroll 测试用 lorem ipsum dolor sit amet 数据 内容</p>\n'.repeat(300);
-          fs.writeFileSync('.ci-fixtures/proj-a/index.html',
-            '<!doctype html><html><body><h1>Project A</h1><p>contains keyword echarts rgb</p>' + filler + '</body></html>');
-          fs.writeFileSync('.ci-fixtures/proj-a/dashboard.html',
-            '<!doctype html><html><body><h1>Dashboard report</h1><p>chart svg flex layout</p>' + filler + '</body></html>');
-          fs.writeFileSync('.ci-fixtures/proj-b/index.html',
-            '<!doctype html><html><body><h1>Project B</h1>' + filler + '</body></html>');
-          fs.writeFileSync('.ci-fixtures/proj-c/notes.html',
-            '<!doctype html><html><body><h1>Notes</h1><p>echarts dashboard data</p>' + filler + '</body></html>');
-          "
-
-      - name: Start Atlas service in background
-        env:
-          ATLAS_HOME: ${{ github.workspace }}/.ci-atlas-home
-        run: |
-          mkdir -p $ATLAS_HOME
-          cat > $ATLAS_HOME/config.json <<EOF
-          {
-            "scanRoots": ["${{ github.workspace }}/.ci-fixtures"],
-            "ignore": ["node_modules", ".git"],
-            "port": 4321,
-            "maxDepth": 4
-          }
-          EOF
-          node bin/atlas.js > /tmp/atlas-ci.log 2>&1 &
-          # 等服务起来
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            if curl -sf http://localhost:4321/api/state >/dev/null; then
-              echo "Atlas ready after ${i}s"
-              break
-            fi
-            sleep 1
-          done
-          curl -sf http://localhost:4321/api/state >/dev/null || (echo "Atlas failed to start" && cat /tmp/atlas-ci.log && exit 1)
-
-      - name: Run service-dependent specs
-        env:
-          ATLAS_HOME: ${{ github.workspace }}/.ci-atlas-home
+      # 4. 其余全部 spec：每个都用 tests/helpers/isolated-atlas.js 自起隔离实例
+      #    （独立 ATLAS_HOME + 临时扫描根 + 临时 fixture + 随机端口，结束即删），
+      #    所以这里不再需要预置 fixture、也不需要起共享服务。
+      #    dir-picker 例外：它测的是"列真实文件系统目录"的 /api/browse，
+      #    断言依赖 home 下有非隐藏子目录，CI runner 的 home 结构不保证，故不在 CI 跑。
+      - name: Isolated specs
         run: |
           set -e
-          node tests/inline-edit.spec.js
-          node tests/sidebar.spec.js
-          node tests/scroll-stuck.spec.js
-          node tests/drag-hover-expand.spec.js
-          node tests/no-sortable-leak.spec.js
-          node tests/v0.2-features.spec.js
-          node tests/toast.spec.js
+          for spec in \
+            preview-live-edit \
+            toast \
+            inline-edit \
+            v0.2-features \
+            sse-leak-and-retry \
+            click-with-jitter \
+            folder-toggle-with-jitter \
+            no-sortable-leak \
+            drag-hover-expand \
+            drag-stress \
+            drag-to-root \
+            search-cn-and-highlight \
+            sidebar \
+            scroll-stuck \
+            scroll-after-toggle
+          do
+            echo "===== $spec ====="
+            node "tests/$spec.spec.js"
+          done
 
-      - name: Show atlas log on failure
-        if: failure()
-        run: cat /tmp/atlas-ci.log || true
+      # 帧率门槛在共享 CI runner 上波动大（无 GPU、邻居噪声），只做非阻塞观测
+      - name: Sidebar perf (non-blocking)
+        continue-on-error: true
+        run: node tests/sidebar-perf.spec.js

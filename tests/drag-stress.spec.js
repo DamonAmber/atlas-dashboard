@@ -1,14 +1,21 @@
 // 压力测试：file 在根之后的各种连续操作
 const { chromium } = require('playwright');
+const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
 
 (async () => {
+  // 自起隔离 Atlas 实例：连续随机拖拽会反复改写 tree 结构，
+  // 直连用户本机 :4321 会污染真实数据。fixture 规模按本用例需要生成。
+  const atlas = await startAtlas({
+    prefix: 'atlas-drag-stress-spec-',
+    files: makeTreeFixtures({ projects: 4, filesPerProject: 6 }),
+  });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on('pageerror', e => errors.push('[pageerror] ' + e.message));
   page.on('console', m => { if (m.type() === 'error') errors.push('[console.error] ' + m.text()); });
 
-  await page.goto('http://localhost:4321', { waitUntil: 'load' });
+  await page.goto(atlas.base, { waitUntil: 'load' });
   await page.waitForSelector('.file');
 
   const backupTree = await page.evaluate(async () => {
@@ -189,5 +196,6 @@ const { chromium } = require('playwright');
   errors.forEach(e => console.log('  ' + e));
 
   await browser.close();
+  await atlas.stop();
   if (errors.length > 0) process.exit(1);
 })();

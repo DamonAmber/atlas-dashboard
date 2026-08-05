@@ -1,4 +1,5 @@
 const { chromium } = require('playwright');
+const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
 
 // 现在 sidebar 是 fixed + transform 实现，要看"在视口中的位置"而不是 width
 function snap() {
@@ -16,9 +17,15 @@ function snap() {
 }
 
 (async () => {
+  // 自起隔离 Atlas 实例：会点开文件；侧栏动画需要有一定规模的树，
+  // 直连用户本机 :4321 会污染真实数据。fixture 规模按本用例需要生成。
+  const atlas = await startAtlas({
+    prefix: 'atlas-sidebar-spec-',
+    files: makeTreeFixtures({ projects: 6, filesPerProject: 12 }),
+  });
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  await page.goto('http://localhost:4321', { waitUntil: 'load' });
+  await page.goto(atlas.base, { waitUntil: 'load' });
   await page.waitForSelector('.file');
 
   let r = await page.evaluate(snap);
@@ -104,4 +111,5 @@ function snap() {
 
   console.log('\n✓ 全部通过');
   await browser.close();
+  await atlas.stop();
 })();

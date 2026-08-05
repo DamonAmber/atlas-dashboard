@@ -1,14 +1,21 @@
 // 复现：把 file 拖到 tree 根（与所有 folder 同级）后是否卡死
 const { chromium } = require('playwright');
+const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
 
 (async () => {
+  // 自起隔离 Atlas 实例：把文件拖到根目录会改写 tree 结构，
+  // 直连用户本机 :4321 会污染真实数据。fixture 规模按本用例需要生成。
+  const atlas = await startAtlas({
+    prefix: 'atlas-drag-to-root-spec-',
+    files: makeTreeFixtures({ projects: 4, filesPerProject: 5 }),
+  });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on('pageerror', e => errors.push('[pageerror] ' + e.message));
   page.on('console', m => { if (m.type() === 'error') errors.push('[console.error] ' + m.text()); });
 
-  await page.goto('http://localhost:4321', { waitUntil: 'load' });
+  await page.goto(atlas.base, { waitUntil: 'load' });
   await page.waitForSelector('.file');
 
   // ---- 准备：构造一个 file 在根的 tree（直接通过 API 设置，绕开拖拽，先验证渲染层是否能处理）----
@@ -230,6 +237,7 @@ const { chromium } = require('playwright');
   console.log('\n总结：A 响应=' + responsive + ', B 响应=' + responsive2 + ', errors=' + errors.length);
 
   await browser.close();
+  await atlas.stop();
   if (!responsive || !responsive2 || errors.length > 0) {
     process.exit(1);
   }

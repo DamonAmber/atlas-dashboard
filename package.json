@@ -39,7 +39,8 @@
   "scripts": {
     "start": "node bin/atlas.js",
     "dev": "node --watch bin/atlas.js",
-    "test": "node tests/inline-edit.spec.js && node tests/sidebar.spec.js && node tests/scroll-stuck.spec.js && node tests/no-sortable-leak.spec.js && node tests/sse-leak-and-retry.spec.js && node tests/toast.spec.js && node tests/preview-live-edit.spec.js"
+    "test": "node tests/inline-edit.spec.js && node tests/sidebar.spec.js && node tests/scroll-stuck.spec.js && node tests/no-sortable-leak.spec.js && node tests/sse-leak-and-retry.spec.js && node tests/toast.spec.js && node tests/preview-live-edit.spec.js",
+    "test:all": "for f in tests/*.spec.js; do echo \"=== $f ===\"; node \"$f\" || exit 1; done"
   },
   "engines": {
     "node": ">=18"

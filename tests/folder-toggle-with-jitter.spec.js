@@ -1,5 +1,6 @@
 // 验证：folder header 点击带抖动也能正常切换折叠/展开
 const { chromium } = require('playwright');
+const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
 const checks = [];
 function check(name, ok, detail = '') {
   checks.push({ name, ok, detail });
@@ -21,10 +22,16 @@ async function clickWithJitter(page, locator, jitterPx) {
 }
 
 (async () => {
+  // 自起隔离 Atlas 实例：折叠/展开分组会写 tree 的 collapsed 状态，
+  // 直连用户本机 :4321 会污染真实数据。fixture 规模按本用例需要生成。
+  const atlas = await startAtlas({
+    prefix: 'atlas-folder-toggle-with-jitter-spec-',
+    files: makeTreeFixtures({ projects: 4, filesPerProject: 5 }),
+  });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('pageerror', e => console.error('[pageerror]', e.message));
-  await page.goto('http://localhost:4321', { waitUntil: 'load' });
+  await page.goto(atlas.base, { waitUntil: 'load' });
   await page.waitForSelector('.folder');
 
   // 拿第一个 folder
@@ -60,6 +67,7 @@ async function clickWithJitter(page, locator, jitterPx) {
   }
 
   await browser.close();
+  await atlas.stop();
   const failed = checks.filter(c => !c.ok);
   console.log(`\n========================`);
   console.log(`总计 ${checks.length} 项，失败 ${failed.length} 项`);

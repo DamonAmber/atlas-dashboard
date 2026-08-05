@@ -1,5 +1,6 @@
 // 验证：① 中文单字搜索 ② 打开文件后 iframe 内高亮匹配 + 上下跳转
 const { chromium } = require('playwright');
+const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
 
 const checks = [];
 function check(name, ok, detail = '') {
@@ -8,10 +9,28 @@ function check(name, ok, detail = '') {
 }
 
 (async () => {
+  // 自起隔离 Atlas 实例：会点开文件（写 recent / seen），并需要正文内容供搜索高亮，
+  // 直连用户本机 :4321 会污染真实数据。fixture 规模按本用例需要生成。
+  // 本用例专测"中文单字"搜索（搜"灯"）与 iframe 内高亮跳转，
+  // 所以 fixture 正文必须含"灯"，且要出现多次好验证 1/N 跳转徽章。
+  const atlas = await startAtlas({
+    prefix: 'atlas-search-cn-spec-',
+    files: {
+      ...makeTreeFixtures({ projects: 3, filesPerProject: 6, longContent: true }),
+      'lamp/lamp-report.html':
+        '<!doctype html><html><head><title>灯具报告</title></head><body>'
+        + '<h1>客厅灯使用分析</h1>'
+        + '<p>吸顶灯的开关次数最多，其次是台灯与床头灯。</p>'
+        + '<p>填充段落，让文档足够长以便测试滚动到命中位置。</p>'.repeat(120)
+        + '<p>结尾再提一次灯，用于验证多个命中之间的跳转。</p>'
+        + '</body></html>',
+      'lamp/lamp-notes.md': '# 灯光笔记\n\n夜灯亮度偏高，需要调整。\n',
+    },
+  });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('pageerror', e => console.error('[pageerror]', e.message));
-  await page.goto('http://localhost:4321', { waitUntil: 'load' });
+  await page.goto(atlas.base, { waitUntil: 'load' });
   await page.waitForSelector('.file');
 
   // ===== ① 中文单字搜索 =====
@@ -135,6 +154,7 @@ function check(name, ok, detail = '') {
   }
 
   await browser.close();
+  await atlas.stop();
   const failed = checks.filter(c => !c.ok);
   console.log(`\n========================`);
   console.log(`总计 ${checks.length} 项，失败 ${failed.length} 项`);

@@ -1,5 +1,6 @@
 // 复现 + 验证：鼠标点击文件时如果有 1-3px 抖动，SortableJS 不应吞掉 click 事件
 const { chromium } = require('playwright');
+const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
 
 const checks = [];
 function check(name, ok, detail = '') {
@@ -22,10 +23,16 @@ async function clickWithJitter(page, locator, jitterPx) {
 }
 
 (async () => {
+  // 自起隔离 Atlas 实例：点击文件会写入 store 的“最近打开”与已读状态，
+  // 直连用户本机 :4321 会污染真实数据。fixture 规模按本用例需要生成。
+  const atlas = await startAtlas({
+    prefix: 'atlas-click-with-jitter-spec-',
+    files: makeTreeFixtures({ projects: 3, filesPerProject: 6 }),
+  });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('pageerror', e => console.error('[pageerror]', e.message));
-  await page.goto('http://localhost:4321', { waitUntil: 'load' });
+  await page.goto(atlas.base, { waitUntil: 'load' });
   await page.waitForSelector('.file');
 
   // 拿两个不同的 file path 用于切换测试
@@ -60,6 +67,7 @@ async function clickWithJitter(page, locator, jitterPx) {
   }
 
   await browser.close();
+  await atlas.stop();
   const failed = checks.filter(c => !c.ok);
   console.log(`\n========================`);
   console.log(`总计 ${checks.length} 项，失败 ${failed.length} 项`);

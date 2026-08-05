@@ -1,9 +1,21 @@
 // 端到端验证 inline edit 修复：粘贴格式 / 超长省略号 / folder rename
-// 直接 node tests/inline-edit.spec.js 运行
+// 文件备注名 / 分组重命名的行内编辑：防富文本粘贴、超长文本完整可见、
+// 备注名改回原文件名等于删除备注
+//
+// 直接 node tests/inline-edit.spec.js 运行。
+// 自起隔离 Atlas 实例（独立 ATLAS_HOME + 临时扫描根 + 随机端口）：备注名写在
+// store 里，早先版本直连用户本机 :4321，会给用户真实文档设/清 alias，
+// 中断时还会留下"某个备注名"这类脏数据。
 
 const { chromium } = require('playwright');
+const { startAtlas } = require('./helpers/isolated-atlas');
 
-const BASE = 'http://localhost:4321';
+// fixture：一个分组 + 两个文档。目标文件故意用 .md，
+// 用来守住"算原文件名时只剥 .html"那个回归（0.6.0 起支持 Markdown）
+const FIXTURE_FILES = {
+  'proj/aaa-target.md': '# 目标文档\n\n用于测试备注名编辑。\n',
+  'proj/bbb-other.html': '<!doctype html><html><body><h1>另一个文档</h1></body></html>',
+};
 
 const checks = [];
 function check(name, ok, detail) {
@@ -13,6 +25,9 @@ function check(name, ok, detail) {
 }
 
 (async () => {
+  const atlas = await startAtlas({ prefix: 'atlas-inline-edit-spec-', files: FIXTURE_FILES });
+  console.log('实例:', atlas.base);
+
   const browser = await chromium.launch();
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
@@ -22,7 +37,7 @@ function check(name, ok, detail) {
     if (msg.type() === 'error') console.error('[console.error]', msg.text());
   });
 
-  await page.goto(BASE, { waitUntil: 'load' });
+  await page.goto(atlas.base, { waitUntil: 'load' });
   await page.waitForSelector('.file', { timeout: 10000 });
 
   // ========================================
@@ -294,7 +309,16 @@ function check(name, ok, detail) {
   check('改成原文件名 = alias 被清空', !s, `当前 alias: ${s ?? '(null)'}`);
 
   // 清场
+  // 隔离性：备注名只写进了实例自己的 store
+  console.log('\n[隔离性] alias 只落在实例 store 内');
+  const store = atlas.readStore() || {};
+  const aliasPaths = Object.keys(store.aliases || {});
+  check('store 中的 alias 路径都在实例临时目录内',
+    aliasPaths.every(p => p.startsWith(atlas.tmpDir)),
+    aliasPaths.length ? JSON.stringify(aliasPaths) : '（无 alias）');
+
   await browser.close();
+  await atlas.stop();
 
   const failed = checks.filter(c => !c.ok);
   console.log(`\n========================`);

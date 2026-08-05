@@ -1,11 +1,18 @@
 // 量化侧边栏切换的帧率：连续录 1 秒 rAF 时间戳，看 sidebar 切换期间最大帧间隔
 // 60fps = 每帧 16.7ms。如果有帧间隔 > 50ms 说明掉帧严重；> 100ms 说明卡顿明显
 const { chromium } = require('playwright');
+const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
 
 (async () => {
+  // 自起隔离 Atlas 实例：帧率门槛需要足够多的节点才有意义（约 250 篇），
+  // 直连用户本机 :4321 会污染真实数据。fixture 规模按本用例需要生成。
+  const atlas = await startAtlas({
+    prefix: 'atlas-sidebar-perf-spec-',
+    files: makeTreeFixtures({ projects: 10, filesPerProject: 25 }),
+  });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  await page.goto('http://localhost:4321', { waitUntil: 'load' });
+  await page.goto(atlas.base, { waitUntil: 'load' });
   await page.waitForSelector('.file');
 
   // 选个文件让 iframe 加载（更接近真实使用场景）
@@ -62,6 +69,7 @@ const { chromium } = require('playwright');
     if (parseFloat(r.max) > 50) { console.warn(`⚠ ${r.label} max = ${r.max}ms（>50ms 明显卡顿）`); bad++; }
   }
   await browser.close();
+  await atlas.stop();
   if (bad > 0) {
     console.log(`\n✗ 有 ${bad} 处帧率不达标`);
     process.exit(1);
