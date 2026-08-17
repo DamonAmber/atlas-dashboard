@@ -111,19 +111,29 @@ for spec in tests/*.spec.js; do
 done
 ```
 
-> 验证过：把本机 Atlas 完全停掉，全套 19 个 spec 依然全绿，且 `~/.atlas/config.json`
+> 验证过：把本机 Atlas 完全停掉，全套 28 个 spec 依然全绿，且 `~/.atlas/config.json`
 > 与 `store.json` 校验和逐字节未变。若将来某个 spec 在服务停止时失败，说明它偷偷依赖了
 > 你的真实实例，按下面的约定改掉。
 
 **要求所有 spec 都"失败 0 项"**。任意一个失败必须先修才能发版。
 
-当前 spec 清单（19 个）。除 `landing-demo`（`file://`）外，其余都通过
+当前 spec 清单（28 个）。除 `landing-demo`（`file://`）与 `diff-algorithm`（纯函数单测）
+外，其余都通过
 `tests/helpers/isolated-atlas.js` 的 `startAtlas()` 起独立实例：临时 `ATLAS_HOME`
 （自带 config/store）+ 临时扫描根 + 临时 fixture + 随机端口，结束即删。
 需要"有规模的文档树"的用例（帧率 / 滚动 / 拖拽）用 `makeTreeFixtures()` 现造，
 不再依赖你本机那几百篇真实文档。
 
 > - `preview-live-edit.spec.js` — 预览区轻量编辑：edit-doc 标注 / 进入编辑 / 文案改+保存 / 列表重排 / 取消恢复 / 冲突 / 安全（32 项）
+> - `md-render-and-roundtrip.spec.js` — Markdown 渲染与往返保真：`<base href>`（相对图片能加载）/ front matter / 锚点链接不新开标签页 / 任务列表复选框 / 代码块语言标签+复制 / 标题锚点 / 表格横向滚动 / 深色模式；以及所见即所得改一处后源码逐字节保真（表格对齐、段落软换行、块间距都不被顺手改掉）（28 项）
+> - `md-editor-ux.spec.js` — Markdown 编辑器交互：`/` 键不再被全局快捷键抢走（设置里能手输绝对路径）/ ⌘B ⌘I ⌘E ⌘K ⌘S / 回车续列表（无序·有序·任务）/ Tab 多行缩进与反缩进 / 格式工具条 / 分栏拖拽与持久化 / 大纲 / 未保存草稿恢复（41 项）
+> - `quickopen-a11y-rename.spec.js` — ⌘K 快速打开（模糊匹配 + 键盘导航）/ 弹窗可访问性（Esc 关闭 · role=dialog · 焦点陷阱 · 焦点归还 · 嵌套只关最上层）/ 重命名磁盘文件与 store 状态迁移 + 输入校验（30 项）
+> - `md-pdf-export.spec.js` — Markdown 导出 PDF：打印版形态（无目录侧栏 / 无复制按钮 / 配色钉回浅色 / `@page` 页边距）+ 端到端产出非空 PDF + 临时目录清理（21 项，本机没有 Chromium 系浏览器时自动跳过端到端部分）
+> - `index-perf-and-search.spec.js` — 文件索引与搜索：索引与磁盘一致 / watcher 增量维护（增·改·删·改名）/ 配置变更重建 / `/api/state` 不再每次重写 store.json / 切换文档类型不重扫 / 多关键词 AND 与引号短语 / 耗时门槛（25 项）
+> - `share-security.spec.js` — 局域网分享的安全边界：默认只放行文档引用到的资源、同目录未引用文件 403、显式 `scope=dir` 逃生口、路径穿越、有效期到期 410 与过期条目清理（42 项）
+> - `diff-algorithm.spec.js` — 行级 diff 算法单测：上限必须卡在编辑距离而非 N+M、trace 切片边界、大文件性能（33 项，纯函数，不起服务）
+> - `diff-view.spec.js` — 和上次已读版本对比：底本生命周期（打开即记录·内容相同去重·数量上限·删文件即清理）/ hunk 与统计 / 上下文行数 / 标记为已看过 / 改名后底本迁移 / 前端面板与编辑态互斥（41 项）
+> - `misc-hardening.spec.js` — 杂项加固：编辑备份扩展名跟随源文件 / 请求体上限与可读错误 / `/raw` 路由不依赖 `app._router.stack`（扫描根运行时增删后序号重排仍正确）（26 项）
 > - `toast.spec.js` — 扫描根增删与反馈 toast（12 项，含隔离性断言）
 > - `inline-edit.spec.js` — 编辑文件名 / 备注（18 项，含隔离性断言）
 > - `v0.2-features.spec.js` — 键盘导航 / 最近打开 / 全文搜索（17 项，含隔离性断言）
@@ -199,7 +209,7 @@ npm publish --dry-run
 检查输出：
 - `name: atlas-dashboard`
 - `version: <新版本>`
-- `total files:` 应在 20~24 之间（当前为 21；bin/lib/public/server/README/LICENSE，包含 vendored 前端依赖）
+- `total files:` 应在 20~26 之间（当前为 23；bin/lib/public/server/README/LICENSE，包含 vendored 前端依赖）
 - 不应含 `tests/`、`data/`、`*.tgz`、`config.json`（这些在 `package.json` 的 `files` 白名单外）
 
 ### 步骤 4：真实发布
@@ -419,6 +429,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.8.0** (2026-08-17) — 一轮系统性评审后的集中修复与增强。**① 修掉三个实测确认的交互 bug**：全局单键快捷键只排除了 `isContentEditable`，而 `<input>`/`<textarea>` 的该属性是 `false`，于是每敲一个 `/` 焦点就被弹到搜索框——设置里的「扫描根路径」输入框实测输入 `/Users/x` 得到空字符串，绝对路径根本打不进去；现在统一用 `isTypingTarget()` 排除 INPUT/TEXTAREA/SELECT。⌘B 在 Markdown 编辑器里会去收侧边栏而不是加粗、⌘S 完全没被接管（触发浏览器"保存网页"），两者都已按上下文分流。**② 修掉 Markdown 渲染的四处硬伤**：`renderPage` 不注入 `<base href>`，预览页 URL 是 `/api/render-md?path=...`，导致 `![](./assets/x.png)` 被解析成 `/api/assets/x.png` → md 里的本地图片全部 404（修法就在隔壁：HTML 编辑文档早已注入 base）；YAML front matter 被当成「分割线+段落+分割线」渲染成乱码；正文里手写的 `#锚点` 链接被加 `target="_blank"` 每点一次开一个新标签页；表格 `display:block` 脱离正常流让宽表格的滚动条很难发现。**③ 修掉所见即所得编辑的信息丢失**：过去在预览里改一个字会重新序列化整篇文档，表格对齐 `:---:` 退化成 `---`、软换行段落被压成一行——对 git 版本化的文档就是满屏无意义 diff。现在 `render()` 给每个顶层块记下原始源码（`data-md-raw`）与块间距（`data-md-gap`），只有真正被碰过的块（`data-md-dirty`）才重新序列化，实测改一个标题后全文逐字节不变（唯一规范化是文件末尾补一个换行符）。**④ Markdown 呈现增强**：深色模式（配色全面改为 CSS 变量驱动，此前预览页硬编码白底，深色壳子里嵌一块刺眼白板，编辑器更是左半深色右半纯白）、代码块语言标签 + 一键复制、GFM 任务列表渲染成真复选框、标题 hover 锚点、宽表格横向滚动层。**⑤ Markdown 编辑器**：分栏可拖拽（此前 50/50 写死）+ 双击复位 + 方向键微调、回车自动续列表（无序/有序序号自增/任务）、Tab 多行缩进与反缩进、格式工具条、可折叠大纲、⌘B/⌘I/⌘K/⌘E、崩溃后可恢复的本地草稿（此前只有 `beforeunload`，进程崩了就没了）、支持导出 PDF（此前按钮直接 disabled）。**⑥ 可访问性**：弹窗支持 Esc 关闭、`role=dialog`/`aria-modal`、Tab 焦点陷阱、关闭后焦点归还（此前一个都没有，Tab 会跑到弹窗背后）；全部 6 处 `confirm()` 与 2 处 `prompt()` 换成应用内对话框；emoji 图标按钮补 `aria-label`（此前屏幕阅读器只会读出 emoji 名字）。**⑦ 新功能**：⌘K 快速打开（模糊子序列匹配文件名/备注/项目）、重命名磁盘文件（此前只能改显示用的备注名）、**和上次已读版本对比**——未读红点只回答了"AI 动过这个文件"，这个功能补上"动了什么"：用户每次打开文档时把内容存一份底本到 `~/.atlas/versions/`，之后可逐行 diff（新增 `lib/diff.js`，Myers O((N+M)·D)）。**⑧ 性能**：`/api/state` 与 `/api/search` 原来每次请求都全盘递归 walk，而前者每 60s + 每次切回前台 + 每个文件事件都会被调用；改为 chokidar 增量维护的内存索引后，603 篇文档下 `/api/state` 从 18~28ms 降到 4.7ms、搜索冷启动从 528ms 降到 22ms，且不再每分钟无意义重写 `store.json`。搜索支持多关键词 AND 与引号短语，内容缓存从"按 mtime 淘汰"改成真正的 LRU。**⑨ 安全**：局域网分享此前服务的是被分享文件所在目录的整棵子树——分享 `~/Documents/report.html` 等于把整个 `~/Documents/` 开放给拿到 token 的人；现在默认只放行文档真正引用到的资源（HTML 属性 + srcset + CSS `url()` + md 图片，跟一层引用），并保留 `scope=dir` 逃生口给在 JS 里动态拼路径的页面。token 也不再永久有效（默认 2 小时，可选 30 分钟 / 24 小时 / 不过期），过期返回 410 并自动从 store 清理。**⑩ 杂项**：编辑备份的扩展名跟随源文件（此前 `.md` 被备份成 `.html`，且 pruneOld 只筛 `.html` 导致 md 备份永不淘汰）；请求体上限提到 8MB 使路由自己的 5MB 提示可达，并把 body parser 错误翻译成 JSON；`/raw` 路由不再 splice `app._router.stack`（依赖 Express 内部结构，Express 5 已移除该字段）。**新增 9 个 spec 共 287 项断言**：`md-render-and-roundtrip` / `md-editor-ux` / `quickopen-a11y-rename` / `md-pdf-export` / `index-perf-and-search` / `share-security` / `diff-algorithm` / `diff-view` / `misc-hardening`，全部挂进 `npm test`；同时修了 `toast.spec.js` 与 `preview-live-edit.spec.js`——它们靠 `page.on('dialog')` 应答原生 confirm，弹窗改成应用内后失效，新增 `autoAcceptDialogs()` helper 顶上。全套 28 个 spec 全绿。
 
 - **0.7.3** (2026-08-04) — Bug 修复：解决「文档点开没反应 / 刷新按钮一直转」的页面假死，以及「改扫描根后界面毫无反馈」。① `public/app.js` 修掉 SSE 连接泄漏——`connectSSE` 的 `onerror` 原本每次都排一个 3s 后的重连 timer，多个 timer 各建一条 `EventSource`，而函数只 `close()` 得到 `evtSrc` 这一个引用，其余实例丢引用却仍占着连接；浏览器对同源 HTTP/1.1 只给 6 个连接，泄漏满 6 条后整页所有请求（预览 iframe、`/api/state`）永久排队，表现为点文档打不开、刷新按钮无限转圈。现在重连排程唯一化，`onerror` 先判断实例是否已被取代（僵尸连接直接关闭不参与重连），并主动 `close()` 后再统一排程，避免浏览器自动重连与手动重连叠加。② `public/app.js` 给 `/api/state` 加 15s `AbortController` 超时 + 指数退避自动重试（1s→30s 上限）：此前该 fetch 无超时，连接池被占满时永久 pending 导致 `finally` 不执行、刷新按钮永远停在 scanning 且页面再也不会自愈；同时进入失败态后重试不再点亮转圈动画（只留统计栏文字提示），并让新请求取代仍在飞的旧请求，消除并发 `fetchState`（手动刷新 + SSE 推送 + 重试）各占一个 scanning 计数导致按钮长期转圈、旧响应后到覆盖新数据的问题。③ `server.js` 修掉改扫描根时的数十秒假死：`PUT /api/config` 原本先同步 `startWatchers()` 重建**全部** chokidar watcher 再返回响应，大目录（含 `node_modules` 等）遍历建监听要几十秒，浏览器侧实测 8.3s 才收到响应头，前端等不到结果 → 既不弹 toast 也不刷新列表，看起来就是「点了没反应」。现在配置写盘后立即响应，watcher 同步挪到响应之后异步执行；并把 watcher 改为按扫描根增量增删（`watchers` 从数组改为 `Map<root, watcher>`，新增根只建新 watcher、移除根只关对应的、不变的根保持不动），仅 `ignore` / `maxDepth` 变化时才全量重建。浏览器侧添加扫描根耗时从 8271ms 降到 8ms。④ 新增回归 spec `sse-leak-and-retry.spec.js`（13 项，含反向验证：故意用旧的泄漏写法建 4 条连接，确认断言真的会判失败而非空断言），已挂进 `npm test`。⑤ 修 `inline-edit.spec.js` 过时断言：测试算「原文件名」时只剥 `.html`，0.6.0 起支持 Markdown 后对 `.md` 目标文件永远算出带后缀的值，与产品 `stripDocExt` 不一致导致该项恒失败；改为与产品一致的 `/\.(html?|md|markdown)$/i`。⑥ 同步 landing page 版本号与 `package-lock.json`。
 

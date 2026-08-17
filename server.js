@@ -14,6 +14,8 @@ const share = require('./lib/share');
 const editable = require('./lib/editable');
 const editApply = require('./lib/edit-apply');
 const editBackup = require('./lib/edit-backup');
+const versionStore = require('./lib/version-store');
+const diffLib = require('./lib/diff');
 const markdown = require('./public/vendor/markdown.js');
 const pkg = require('./package.json');
 
@@ -91,7 +93,12 @@ function docTypeOfPath(p) {
 }
 
 function emptyStore() {
-  return { tree: [], seen: {}, aliases: {}, recent: [], archivedProjects: [], shares: {} };
+  return {
+    tree: [], seen: {}, aliases: {}, recent: [],
+    archivedProjects: [], shares: {},
+    // path → { file, hash, at }：用户上次看过的那一版内容的底本，供 diff 用
+    seenVersions: {},
+  };
 }
 
 function loadStore() {
@@ -112,6 +119,7 @@ function migrateStore(raw) {
     raw.recent = Array.isArray(raw.recent) ? raw.recent : [];
     raw.archivedProjects = Array.isArray(raw.archivedProjects) ? raw.archivedProjects : [];
     raw.shares = (raw.shares && typeof raw.shares === 'object') ? raw.shares : {};
+    raw.seenVersions = (raw.seenVersions && typeof raw.seenVersions === 'object') ? raw.seenVersions : {};
     return raw;
   }
   // 旧版 {folders: [{id,name,files:[]}], seen}
@@ -141,20 +149,118 @@ function saveStore(store) {
   fs.renameSync(tmp, STORE_PATH);
 }
 
-async function scanDocFiles() {
-  const results = [];
+// ---------- 文件索引（内存常驻，由 chokidar 增量维护）----------
+//
+// 为什么要有它：/api/state 与 /api/search 原来每次请求都做一遍全盘递归 walk。
+// 而 /api/state 被调用得非常频繁——每 60s 定时、每次标签页切回前台、每个文件
+// 系统事件（400ms 防抖）、打开设置面板时还会再拉一次。扫 ~/Documents 这种量级
+// 的目录时，这就是持续的磁盘与事件循环压力，而 chokidar 本来就已经在监听所有
+// 扫描根了，重复遍历没有任何新信息。
+//
+// 现在：首次访问时构建一次，之后由 watcher 的 add/change/unlink 事件增量更新。
+// 索引里存所有文档类型（html + md），按当前启用的 docTypes 在读取时过滤——
+// 这样在设置里勾选 / 取消文档类型不需要重新扫盘。
+const ALL_DOC_EXTENSIONS = ALL_DOC_TYPES.reduce(
+  (acc, t) => acc.concat(DOC_EXTENSIONS[t] || []), [],
+);
+function isAnyDocPath(name) {
+  const lower = String(name).toLowerCase();
+  return ALL_DOC_EXTENSIONS.some(ext => lower.endsWith(ext));
+}
+
+const fileIndex = new Map();     // absPath → 文件记录
+let indexSignature = null;       // 影响扫描结果的配置快照
+let indexBuilding = null;        // 构建中的 Promise（并发请求共用一次扫描）
+
+// 只有这些配置会改变"磁盘上哪些文件属于索引"。docTypes 不在其中：它只影响读取过滤
+function currentIndexSignature() {
+  return JSON.stringify([getScanRoots(), [...getIgnoreSet()].sort(), getMaxDepth()]);
+}
+
+function makeRecord(absPath, scanRoot, rootIndex, stat) {
+  const rel = path.relative(scanRoot, absPath);
+  const segments = rel.split(path.sep);
+  return {
+    path: absPath,
+    relPath: rel,
+    rootIndex,
+    name: path.basename(absPath),
+    projectName: segments.length > 1 ? segments[0] : path.basename(scanRoot),
+    mtime: stat.mtimeMs,
+    size: stat.size,
+    docType: docTypeOfPath(absPath),
+  };
+}
+
+// 找到某个绝对路径属于哪个扫描根
+function ownerRoot(absPath) {
+  const roots = getScanRoots();
+  for (let i = 0; i < roots.length; i++) {
+    const rel = path.relative(roots[i], absPath);
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return { root: roots[i], rootIndex: i };
+  }
+  return null;
+}
+
+// 单个文件进 / 出索引（watcher 事件与重命名都走这里）
+async function indexUpsert(absPath) {
+  if (!isAnyDocPath(absPath)) return null;
+  const owner = ownerRoot(absPath);
+  if (!owner) return null;
+  try {
+    const stat = await fsp.stat(absPath);
+    const rec = makeRecord(absPath, owner.root, owner.rootIndex, stat);
+    fileIndex.set(absPath, rec);
+    return rec;
+  } catch {
+    fileIndex.delete(absPath);
+    return null;
+  }
+}
+function indexRemove(absPath) {
+  fileIndex.delete(absPath);
+  contentCache.delete(absPath);
+}
+
+async function buildIndex() {
   const ignore = getIgnoreSet();
   const maxDepth = getMaxDepth();
-  for (const root of getScanRoots()) {
-    if (!fs.existsSync(root)) continue;
-    await walk(root, root, 0, results, ignore, maxDepth);
+  const roots = getScanRoots();
+  const next = new Map();
+  for (let i = 0; i < roots.length; i++) {
+    if (!fs.existsSync(roots[i])) continue;
+    await walk(roots[i], roots[i], i, 0, next, ignore, maxDepth);
   }
-  return results;
+  fileIndex.clear();
+  for (const [k, v] of next) fileIndex.set(k, v);
+  indexSignature = currentIndexSignature();
 }
-// 兼容旧调用名
-const scanHtmlFiles = scanDocFiles;
 
-async function walk(currentDir, scanRoot, depth, results, ignore, maxDepth) {
+// 拿当前启用文档类型下的文件列表。索引不存在 / 配置已变时才真正扫盘
+async function getScannedFiles() {
+  if (indexSignature !== currentIndexSignature()) {
+    // 配置变了：丢掉旧索引，重建（并发调用共用同一次构建）
+    indexSignature = null;
+  }
+  if (indexSignature === null) {
+    if (!indexBuilding) {
+      indexBuilding = buildIndex().finally(() => { indexBuilding = null; });
+    }
+    await indexBuilding;
+  }
+  const out = [];
+  for (const rec of fileIndex.values()) {
+    if (matchesDocType(rec.name)) out.push(rec);
+  }
+  return out;
+}
+
+// 让索引失效（配置变更 / 结构性改动后调用），下次读取时重建
+function invalidateFileIndex() {
+  indexSignature = null;
+}
+
+async function walk(currentDir, scanRoot, rootIndex, depth, out, ignore, maxDepth) {
   if (depth > maxDepth) return;
   let entries;
   try {
@@ -167,23 +273,10 @@ async function walk(currentDir, scanRoot, depth, results, ignore, maxDepth) {
     if (ignore.has(entry.name)) continue;
     const full = path.join(currentDir, entry.name);
     if (entry.isDirectory()) {
-      await walk(full, scanRoot, depth + 1, results, ignore, maxDepth);
-    } else if (entry.isFile() && matchesDocType(entry.name)) {
+      await walk(full, scanRoot, rootIndex, depth + 1, out, ignore, maxDepth);
+    } else if (entry.isFile() && isAnyDocPath(entry.name)) {
       try {
-        const stat = await fsp.stat(full);
-        const rel = path.relative(scanRoot, full);
-        const segments = rel.split(path.sep);
-        const projectName = segments.length > 1 ? segments[0] : path.basename(scanRoot);
-        results.push({
-          path: full,
-          relPath: rel,
-          rootIndex: getScanRoots().indexOf(scanRoot),
-          name: entry.name,
-          projectName,
-          mtime: stat.mtimeMs,
-          size: stat.size,
-          docType: docTypeOfPath(entry.name),
-        });
+        out.set(full, makeRecord(full, scanRoot, rootIndex, await fsp.stat(full)));
       } catch {}
     }
   }
@@ -390,17 +483,36 @@ function createWatcher(root, ignoredFn) {
     });
 
     const onEvent = (kind) => async (filePath) => {
+      // 索引维护对所有文档类型都做（html + md），与当前启用的 docTypes 无关：
+      // 这样在设置里切换文档类型不需要重新扫盘。
+      if (!isAnyDocPath(filePath)) return;
+
+      if (kind === 'unlink') {
+        indexRemove(filePath);
+        // 文件没了，它的 diff 底本也没有留存价值——顺手清掉，别让 versions/ 无限长
+        try { versionStore.removeAllFor(filePath); } catch {}
+        const st = loadStore();
+        if (st.seenVersions && st.seenVersions[filePath]) {
+          delete st.seenVersions[filePath];
+          saveStore(st);
+        }
+      } else {
+        await indexUpsert(filePath);
+      }
+
+      // 但对外通知（未读标记 / SSE 推送）只针对当前启用的类型
       if (!matchesDocType(path.basename(filePath))) return;
+
       let mtime = 0;
       try { mtime = (await fsp.stat(filePath)).mtimeMs; } catch {}
       const rel = path.relative(root, filePath);
       const segments = rel.split(path.sep);
       const projectName = segments.length > 1 ? segments[0] : path.basename(root);
 
-      const store = loadStore();
       if (kind === 'change') {
         // 自我写入（编辑保存触发）不标未读
         if (!isSelfWrite(filePath, mtime)) {
+          const store = loadStore();
           delete store.seen[filePath];
           saveStore(store);
         }
@@ -456,7 +568,21 @@ function startWatchers({ full = true } = {}) {
 }
 
 const app = express();
-app.use(express.json({ limit: '4mb' }));
+// 上限要高于各路由自己的内容上限（save-md 是 5MB），否则请求会先被 body parser
+// 以一个含义不清的 413 挡掉，路由里那句"内容过大"的提示根本走不到
+const JSON_BODY_LIMIT_MB = 8;
+app.use(express.json({ limit: `${JSON_BODY_LIMIT_MB}mb` }));
+// 把 body parser 的错误翻译成 JSON，前端才能拿到可读信息
+app.use((err, req, res, next) => {
+  if (!err) return next();
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ error: `请求体超过 ${JSON_BODY_LIMIT_MB}MB 上限` });
+  }
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: '请求体不是合法 JSON' });
+  }
+  return next(err);
+});
 
 // 安全：Dashboard 仅在本机可用，LAN/外部访问只允许 /share/<token>/* 路径
 // （Node.js app.listen(PORT) 默认 dual-stack，LAN 内可访问；这里通过中间件兜底）
@@ -486,28 +612,48 @@ app.use(express.static(PUBLIC_DIR, {
   },
 }));
 
-let rawMounts = [];
+// /raw/<扫描根序号>/<相对路径> → 直接服务磁盘文件。
+//
+// 扫描根可以在运行时增删，所以这里的映射必须能重建。原来的做法是每次
+// app.use() 一批新的 static 中间件、再从 app._router.stack 里 splice 掉旧的
+// ——依赖 Express 的内部结构，Express 5 已经把 app._router 移除了，静默失效。
+// 现在只注册一个稳定入口，真正的 handler 放在数组里按序号查表。
+let rawHandlers = [];
 function mountRawRoutes() {
-  for (const m of rawMounts) {
-    const idx = app._router.stack.indexOf(m);
-    if (idx >= 0) app._router.stack.splice(idx, 1);
-  }
-  rawMounts = [];
-  getScanRoots().forEach((root, idx) => {
-    const handler = express.static(root, {
-      setHeaders(res) { res.setHeader('Cache-Control', 'no-store'); },
-    });
-    app.use(`/raw/${idx}`, handler);
-    rawMounts.push(app._router.stack[app._router.stack.length - 1]);
-  });
+  rawHandlers = getScanRoots().map(root => express.static(root, {
+    setHeaders(res) { res.setHeader('Cache-Control', 'no-store'); },
+  }));
 }
 mountRawRoutes();
 
+app.use('/raw', (req, res, next) => {
+  // 这里的 req.url 形如 /0/proj/a.html（Express 已经剥掉了 /raw 前缀）
+  const m = /^\/(\d+)(\/[\s\S]*)?$/.exec(req.url);
+  if (!m) return next();
+  const handler = rawHandlers[Number(m[1])];
+  if (!handler) return next();
+  const originalUrl = req.url;
+  req.url = m[2] || '/';
+  handler(req, res, (err) => {
+    req.url = originalUrl;   // 没命中就还原，交给后面的路由
+    next(err);
+  });
+});
+
 // 全文搜索：HTML 内容缓存（按 mtime 失效）+ 简单 contains 匹配
 const contentCache = new Map();   // path → { mtime, text }
+
+// 文件集合发生结构性变化（配置改动）后调用：丢弃派生缓存 + 让文件索引重建
+function invalidateIndex() {
+  contentCache.clear();
+  invalidateFileIndex();
+}
 async function getFileText(filePath, mtime) {
   const cached = contentCache.get(filePath);
-  if (cached && cached.mtime === mtime) return cached.text;
+  if (cached && cached.mtime === mtime) {
+    cached.usedAt = Date.now();   // LRU 淘汰用
+    return cached.text;
+  }
   try {
     const raw = await fsp.readFile(filePath, 'utf8');
     let text;
@@ -526,39 +672,64 @@ async function getFileText(filePath, mtime) {
         .replace(/\s+/g, ' ')
         .toLowerCase();
     }
-    contentCache.set(filePath, { mtime, text });
+    contentCache.set(filePath, { mtime, text, usedAt: Date.now() });
     return text;
   } catch {
     return '';
   }
 }
 
+// 查询词切分：空白分隔的多个关键词按 AND 组合（"配网 转化率" = 两个词都要出现）。
+// 用引号可以把含空格的短语当成一个词："error rate"
+function parseQueryTerms(q) {
+  const terms = [];
+  const re = /"([^"]+)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(q)) !== null) {
+    const t = (m[1] || m[2] || '').trim();
+    if (t) terms.push(t);
+  }
+  return terms;
+}
+
+// 单字符 ASCII（'a'/'e'）匹配面太广没意义；非 ASCII（中日韩）单字通常是有意义的词
+function termIsSearchable(t) {
+  if (!t) return false;
+  return /^[\x00-\x7F]+$/.test(t) ? t.length >= 2 : true;
+}
+
 app.get('/api/search', async (req, res) => {
   const q = (req.query.q || '').toString().trim().toLowerCase();
   if (q.length === 0) return res.json({ matches: [] });
-  // ASCII 单字符（'a'/'e' 等）匹配面太广，要求 ≥ 2；
-  // 非 ASCII（中文/日文/韩文）单字符通常是有意义的词，允许搜
-  const isAscii = /^[\x00-\x7F]+$/.test(q);
-  if (isAscii && q.length < 2) return res.json({ matches: [] });
+  const terms = parseQueryTerms(q).filter(termIsSearchable);
+  if (terms.length === 0) return res.json({ matches: [] });
   try {
-    const scanned = await scanHtmlFiles();
+    const scanned = await getScannedFiles();
     const matches = [];
     for (const f of scanned) {
       const text = await getFileText(f.path, f.mtime);
-      const idx = text.indexOf(q);
-      if (idx >= 0) {
-        const start = Math.max(0, idx - 35);
-        const end = Math.min(text.length, idx + q.length + 35);
-        const snippet = (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
-        matches.push({ path: f.path, snippet });
+      // AND：所有关键词都要命中
+      let firstIdx = -1;
+      let firstLen = 0;
+      let all = true;
+      for (const t of terms) {
+        const idx = text.indexOf(t);
+        if (idx < 0) { all = false; break; }
+        if (firstIdx < 0 || idx < firstIdx) { firstIdx = idx; firstLen = t.length; }
       }
+      if (!all || firstIdx < 0) continue;
+      const start = Math.max(0, firstIdx - 35);
+      const end = Math.min(text.length, firstIdx + firstLen + 35);
+      const snippet = (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
+      matches.push({ path: f.path, snippet });
     }
-    // GC：缓存大于 500 个文件时清掉一半
+    // GC：缓存大于 500 个文件时按最久未访问淘汰一半
+    // （原来按 mtime 排序淘汰，等于优先丢掉最稳定、最该留着的老文件）
     if (contentCache.size > 500) {
-      const all = [...contentCache.entries()].sort((a, b) => a[1].mtime - b[1].mtime);
+      const all = [...contentCache.entries()].sort((a, b) => (a[1].usedAt || 0) - (b[1].usedAt || 0));
       for (let i = 0; i < all.length / 2; i++) contentCache.delete(all[i][0]);
     }
-    res.json({ matches });
+    res.json({ matches, terms });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -566,10 +737,13 @@ app.get('/api/search', async (req, res) => {
 
 app.get('/api/state', async (_req, res) => {
   try {
-    const scanned = await scanHtmlFiles();
+    const scanned = await getScannedFiles();
     const store = loadStore();
+    // 只在 reconcile 真的改动了树结构时才落盘。原来是无条件 saveStore()，
+    // 而 /api/state 每 60s 就被调用一次——等于每分钟无意义地重写一遍 store.json
+    const treeBefore = JSON.stringify(store.tree);
     reconcile(store, scanned);
-    saveStore(store);
+    let storeDirty = JSON.stringify(store.tree) !== treeBefore;
 
     const fileMap = {};
     for (const f of scanned) {
@@ -585,6 +759,11 @@ app.get('/api/state', async (_req, res) => {
         seenAt: store.seen[f.path] || 0,
         unread: (store.seen[f.path] || 0) < f.mtime,
         alias: store.aliases[f.path] || null,
+        // 只看 store 里有没有登记（内存判断，免费）。不在这里 stat 底本文件——
+        // 那是每个文件一次 syscall，几百篇文档就把 /api/state 拖回去了
+        hasBaseline: !!(store.seenVersions && store.seenVersions[f.path]),
+        baselineAt: (store.seenVersions && store.seenVersions[f.path]
+          && store.seenVersions[f.path].at) || 0,
       };
     }
 
@@ -594,9 +773,10 @@ app.get('/api/state', async (_req, res) => {
       const cleaned = store.recent.filter(p => allPaths.has(p));
       if (cleaned.length !== store.recent.length) {
         store.recent = cleaned;
-        saveStore(store);
+        storeDirty = true;
       }
     }
+    if (storeDirty) saveStore(store);
 
     // 归档列表：给每个归档的 projectName 附带磁盘上的实际文件数（让用户决定要不要恢复）
     const projCounts = countByProject(scanned);
@@ -651,8 +831,33 @@ function shareEntryPublic(token, entry) {
     path: entry.path,
     name: path.basename(entry.path),
     sharedAt: entry.sharedAt,
+    expiresAt: entry.expiresAt || null,
+    scope: entry.scope === 'dir' ? 'dir' : 'refs',
     urls: buildShareUrls(token, entry.path),
   };
+}
+
+// 允许的有效期档位（分钟）。0 = 永不过期
+const SHARE_TTL_CHOICES = [0, 30, 120, 1440];
+const SHARE_TTL_DEFAULT = 120;
+
+// 资源白名单缓存：path → { mtime, allow }
+// 按入口文件 mtime 失效，这样编辑文档后新引用的图片能立刻放行
+const shareAllowCache = new Map();
+async function getShareAllowlist(entry) {
+  const baseDir = path.dirname(entry.path);
+  const entryRel = path.basename(entry.path);
+  let mtime = 0;
+  try { mtime = (await fsp.stat(entry.path)).mtimeMs; } catch {}
+  const cached = shareAllowCache.get(entry.path);
+  if (cached && cached.mtime === mtime) return cached.allow;
+  const allow = await share.buildAllowlist(
+    { readFile: (p) => fsp.readFile(p, 'utf8') },
+    baseDir,
+    entryRel,
+  );
+  shareAllowCache.set(entry.path, { mtime, allow });
+  return allow;
 }
 
 // 启动分享：返回该文件已有 token 或新建一个
@@ -664,17 +869,27 @@ app.post('/api/share/start', (req, res) => {
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: '文件不存在' });
   }
+  // 有效期：默认 2 小时。README 里写的是"暂时发布到局域网"，但原来 token
+  // 永不过期还跨重启保留，和"暂时"完全不符
+  let ttl = req.body && req.body.ttlMinutes;
+  ttl = SHARE_TTL_CHOICES.includes(Number(ttl)) ? Number(ttl) : SHARE_TTL_DEFAULT;
+  const scope = (req.body && req.body.scope) === 'dir' ? 'dir' : 'refs';
+
   const store = loadStore();
-  // 同一个文件如果已经在分享，复用旧 token（避免每次按按钮都换 URL）
-  const existing = Object.entries(store.shares || {}).find(([, v]) => v && v.path === filePath);
-  let token;
-  if (existing) {
-    token = existing[0];
-  } else {
-    token = share.genToken();
-    store.shares[token] = { path: filePath, sharedAt: Date.now() };
-    saveStore(store);
-  }
+  // 同一个文件如果已经在分享，复用旧 token（避免每次按按钮都换 URL），
+  // 但按本次选择刷新有效期与范围
+  const existing = Object.entries(store.shares || {})
+    .find(([, v]) => v && v.path === filePath && !share.isExpired(v));
+  const token = existing ? existing[0] : share.genToken();
+  const now = Date.now();
+  store.shares[token] = {
+    path: filePath,
+    sharedAt: existing ? (existing[1].sharedAt || now) : now,
+    expiresAt: ttl > 0 ? now + ttl * 60_000 : null,
+    scope,
+  };
+  saveStore(store);
+  shareAllowCache.delete(filePath);   // 范围可能变了，重算白名单
   res.json(shareEntryPublic(token, store.shares[token]));
 });
 
@@ -703,20 +918,50 @@ app.post('/api/share/stop-all', (_req, res) => {
 
 app.get('/api/shares', (_req, res) => {
   const store = loadStore();
+  // 顺手把已过期的条目从 store 里清掉，别让它无限堆积
+  let pruned = false;
+  for (const [token, v] of Object.entries(store.shares || {})) {
+    if (!v || !v.path || share.isExpired(v)) {
+      delete store.shares[token];
+      pruned = true;
+    }
+  }
+  if (pruned) saveStore(store);
   const list = Object.entries(store.shares || {})
     .filter(([, v]) => v && v.path && fs.existsSync(v.path))
     .sort((a, b) => (b[1].sharedAt || 0) - (a[1].sharedAt || 0))
     .map(([token, v]) => shareEntryPublic(token, v));
-  res.json({ shares: list, lanIps: share.getLanIPs(), port: PORT });
+  res.json({
+    shares: list,
+    lanIps: share.getLanIPs(),
+    port: PORT,
+    ttlChoices: SHARE_TTL_CHOICES,
+    ttlDefault: SHARE_TTL_DEFAULT,
+  });
 });
 
 // 公开访问入口：/share/:token → 重定向到 /share/:token/<原文件名>
 // 这样 HTML 里的相对资源（./style.css）浏览器会自动拼成 /share/:token/style.css，命中下面的资源 handler
+// 分享失效页：统一文案，不区分"不存在 / 已过期 / 已停止"，避免向外部泄漏细节
+function shareGonePage(res, reason) {
+  return res.status(410).type('html').send(
+    '<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>链接已失效</title>'
+    + '<style>body{font-family:-apple-system,system-ui,"PingFang SC",sans-serif;color:#444;'
+    + 'background:#f6f7f9;display:flex;align-items:center;justify-content:center;height:100vh;'
+    + 'margin:0;padding:2rem;text-align:center;line-height:1.6}main{max-width:460px}'
+    + 'h1{font-size:18px;margin:0 0 10px}p{font-size:14px;color:#666;margin:0}</style>'
+    + '</head><body><main><h1>链接已失效</h1>'
+    + `<p>${markdown.escapeHtml(reason || '这个分享链接已过期或被作者停止。')}</p>`
+    + '</main></body></html>',
+  );
+}
+
 app.get('/share/:token', (req, res) => {
   const store = loadStore();
   const entry = store.shares && store.shares[req.params.token];
-  if (!entry) return res.status(404).type('html').send('<h1>404 — 链接已失效</h1><p>这个分享链接已被作者停止。</p>');
-  if (!fs.existsSync(entry.path)) return res.status(404).type('html').send('<h1>404 — 文件已不存在</h1>');
+  if (!entry) return shareGonePage(res);
+  if (share.isExpired(entry)) return shareGonePage(res, '分享已到期。请让作者重新生成链接。');
+  if (!fs.existsSync(entry.path)) return shareGonePage(res, '源文件已不存在。');
   return res.redirect(302, `/share/${req.params.token}/${encodeURIComponent(path.basename(entry.path))}`);
 });
 
@@ -726,8 +971,9 @@ app.get('/share/:token/*', async (req, res) => {
   const token = req.params.token;
   const store = loadStore();
   const entry = store.shares && store.shares[token];
-  if (!entry) return res.status(404).type('html').send('<h1>404 — 链接已失效</h1>');
-  if (!fs.existsSync(entry.path)) return res.status(404).type('html').send('<h1>404 — 文件已不存在</h1>');
+  if (!entry) return shareGonePage(res);
+  if (share.isExpired(entry)) return shareGonePage(res, '分享已到期。请让作者重新生成链接。');
+  if (!fs.existsSync(entry.path)) return shareGonePage(res, '源文件已不存在。');
 
   const baseDir = path.dirname(entry.path);
   let relPath;
@@ -741,6 +987,27 @@ app.get('/share/:token/*', async (req, res) => {
   if (!resolved.ok) {
     return res.status(403).type('html').send('<h1>403 — 路径越界</h1>');
   }
+
+  // 默认只放行文档真正引用到的资源。
+  // 不这么做的话，分享 ~/Documents/report.html 等于把整个 ~/Documents/
+  // 开放给局域网内拿到 token 的人——token 猜不到，但转发出去就是全量访问权。
+  if (entry.scope !== 'dir') {
+    const allow = await getShareAllowlist(entry);
+    const wanted = path.relative(baseDir, resolved.abs).split(path.sep).join('/');
+    if (!allow.has(wanted)) {
+      return res.status(403).type('html').send(
+        '<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>403</title>'
+        + '<style>body{font-family:-apple-system,system-ui,"PingFang SC",sans-serif;color:#444;'
+        + 'background:#f6f7f9;display:flex;align-items:center;justify-content:center;height:100vh;'
+        + 'margin:0;padding:2rem;text-align:center;line-height:1.6}main{max-width:460px}'
+        + 'h1{font-size:18px;margin:0 0 10px}p{font-size:13px;color:#666;margin:0}</style>'
+        + '</head><body><main><h1>这个文件不在分享范围内</h1>'
+        + '<p>分享只放行文档本身引用到的资源。如果页面缺图，请让作者在分享面板里把范围改成「同目录全部资源」。</p>'
+        + '</main></body></html>',
+      );
+    }
+  }
+
   if (!fs.existsSync(resolved.abs)) {
     return res.status(404).type('html').send('<h1>404 — 资源不存在</h1>');
   }
@@ -820,6 +1087,17 @@ function insertIntoFolder(nodes, folderId, child) {
   return false;
 }
 
+// 记录"用户看过某个版本"，同时留一份底本供之后 diff。
+// 这是 diff 视图的地基：只有在用户看过的那一刻存下内容，之后 AI 改了文件
+// 才有东西可比——事后再想补是补不回来的。
+function recordSeenVersion(store, filePath) {
+  const snap = versionStore.snapshot(filePath);
+  if (snap.ok) {
+    store.seenVersions[filePath] = { file: snap.file, hash: snap.hash, at: snap.at };
+  }
+  return snap;
+}
+
 app.post('/api/seen', (req, res) => {
   const filePath = req.body && req.body.path;
   if (!filePath || !isPathInScanRoots(filePath)) {
@@ -828,8 +1106,63 @@ app.post('/api/seen', (req, res) => {
   const store = loadStore();
   store.seen[filePath] = Date.now();
   pushRecent(store, filePath);   // 同时更新 recent
+  recordSeenVersion(store, filePath);
   saveStore(store);
   res.json({ ok: true, seenAt: store.seen[filePath] });
+});
+
+// GET /api/diff?path=<abs>：当前磁盘内容 vs 上次已读版本
+app.get('/api/diff', async (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath || typeof filePath !== 'string' || !isPathInScanRoots(filePath)) {
+    return res.status(400).json({ error: '路径非法' });
+  }
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: '文件不存在' });
+  }
+  const store = loadStore();
+  const meta = store.seenVersions && store.seenVersions[filePath];
+  if (!meta || !versionStore.hasSnapshot(meta.file)) {
+    return res.json({
+      hasBaseline: false,
+      reason: 'no-baseline',
+      message: '还没有可对比的底本。打开过一次之后，Atlas 会记下你看到的版本，下次它被改动就能对比了。',
+    });
+  }
+  const baseline = versionStore.readSnapshot(meta.file);
+  if (baseline == null) {
+    return res.json({ hasBaseline: false, reason: 'baseline-unreadable', message: '底本读取失败。' });
+  }
+  try {
+    const current = await fsp.readFile(filePath, 'utf8');
+    // 注意不能写 `parseInt(...) || 3`：context=0 是合法值，会被 || 吃掉变成 3
+    const rawCtx = parseInt(req.query.context, 10);
+    const context = Number.isFinite(rawCtx) ? Math.min(10, Math.max(0, rawCtx)) : 3;
+    const result = diffLib.diffText(baseline, current, { context });
+    res.json({
+      hasBaseline: true,
+      baselineAt: meta.at || null,
+      ...result,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e && e.message || String(e) });
+  }
+});
+
+// POST /api/diff/accept：把当前内容设为新底本（"这些改动我看过了"）
+app.post('/api/diff/accept', (req, res) => {
+  const filePath = req.body && req.body.path;
+  if (!filePath || !isPathInScanRoots(filePath)) {
+    return res.status(400).json({ error: '路径非法' });
+  }
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: '文件不存在' });
+  }
+  const store = loadStore();
+  const snap = recordSeenVersion(store, filePath);
+  store.seen[filePath] = Date.now();
+  saveStore(store);
+  res.json({ ok: true, baselineAt: snap.ok ? snap.at : null });
 });
 
 app.post('/api/seen/all', (_req, res) => {
@@ -849,6 +1182,83 @@ app.post('/api/unseen', (req, res) => {
   delete store.seen[filePath];
   saveStore(store);
   res.json({ ok: true });
+});
+
+// 重命名磁盘上的文件。备注名（alias）只是显示层的别名，改不了真实文件名，
+// 而 AI 生成的 `report-final-v3-copy.html` 这类名字用户往往就是想改掉本体。
+// 只允许在同目录内改名（不做移动），并把 store 里挂在旧路径上的状态一起迁移。
+app.post('/api/rename', async (req, res) => {
+  const { path: filePath, name } = req.body || {};
+  if (!filePath || typeof filePath !== 'string' || !isPathInScanRoots(filePath)) {
+    return res.status(400).json({ error: '路径非法' });
+  }
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: '文件不存在' });
+  }
+  const raw = (name || '').toString().trim();
+  if (!raw) return res.status(400).json({ error: '文件名不能为空' });
+  // 只接受纯文件名：禁止路径分隔符、上跳、控制字符与 Windows 保留字符
+  if (/[\\/]/.test(raw) || raw === '.' || raw === '..') {
+    return res.status(400).json({ error: '文件名不能包含路径分隔符' });
+  }
+  if (/[\x00-\x1f<>:"|?*]/.test(raw)) {
+    return res.status(400).json({ error: '文件名包含非法字符' });
+  }
+  if (Buffer.byteLength(raw, 'utf8') > 240) {
+    return res.status(400).json({ error: '文件名过长' });
+  }
+  // 扩展名必须仍属于当前支持的文档类型，否则改完就从看板里消失了
+  if (!matchesDocType(raw)) {
+    return res.status(400).json({
+      error: `扩展名需要是 ${currentExtensions().join(' / ')} 之一`,
+    });
+  }
+  const dir = path.dirname(filePath);
+  const nextPath = path.join(dir, raw);
+  if (nextPath === filePath) return res.json({ ok: true, unchanged: true, path: filePath });
+  if (!isPathInScanRoots(nextPath)) {
+    return res.status(400).json({ error: '目标路径超出扫描根' });
+  }
+  // 大小写不敏感的文件系统上，`a.md` → `A.md` 的 existsSync 会误报冲突，
+  // 因此只在解析后路径确实不同的情况下才判定重名
+  if (fs.existsSync(nextPath) && nextPath.toLowerCase() !== filePath.toLowerCase()) {
+    return res.status(409).json({ error: '同目录下已存在同名文件' });
+  }
+  try {
+    await fsp.rename(filePath, nextPath);
+  } catch (e) {
+    return res.status(500).json({ error: '重命名失败：' + (e && e.message || e) });
+  }
+  // 迁移 store 里挂在旧路径上的状态：已读时间、备注名、最近打开、分享、树节点
+  const store = loadStore();
+  if (store.seen[filePath] != null) {
+    store.seen[nextPath] = store.seen[filePath];
+    delete store.seen[filePath];
+  }
+  if (store.aliases[filePath] != null) {
+    store.aliases[nextPath] = store.aliases[filePath];
+    delete store.aliases[filePath];
+  }
+  if (store.seenVersions && store.seenVersions[filePath]) {
+    store.seenVersions[nextPath] = store.seenVersions[filePath];
+    delete store.seenVersions[filePath];
+  }
+  store.recent = (store.recent || []).map(p => (p === filePath ? nextPath : p));
+  for (const [token, entry] of Object.entries(store.shares || {})) {
+    if (entry && entry.path === filePath) store.shares[token].path = nextPath;
+  }
+  const retarget = (nodes) => {
+    for (const n of nodes) {
+      if (n.type === 'file' && n.path === filePath) n.path = nextPath;
+      else if (n.type === 'folder' && Array.isArray(n.children)) retarget(n.children);
+    }
+  };
+  retarget(store.tree || []);
+  saveStore(store);
+  // 定点更新索引即可，不必为一次改名触发全盘重建
+  indexRemove(filePath);
+  await indexUpsert(nextPath);
+  res.json({ ok: true, path: nextPath, name: raw });
 });
 
 app.post('/api/alias', (req, res) => {
@@ -912,13 +1322,38 @@ app.post('/api/export-pdf', async (req, res) => {
     send({ phase: 'error', reason: 'invalid-path', message: '路径非法' });
     return res.end();
   }
-  if (!filePath.toLowerCase().endsWith('.html') && !filePath.toLowerCase().endsWith('.htm')) {
-    send({ phase: 'error', reason: 'unsupported', message: '只支持 HTML 文件' });
+  const lowerPath = filePath.toLowerCase();
+  const isHtml = lowerPath.endsWith('.html') || lowerPath.endsWith('.htm');
+  const isMd = isMarkdownPath(filePath);
+  if (!isHtml && !isMd) {
+    send({ phase: 'error', reason: 'unsupported', message: '只支持 HTML 与 Markdown 文件' });
     return res.end();
   }
+  if (!fs.existsSync(filePath)) {
+    send({ phase: 'error', reason: 'source-missing', message: '文件不存在' });
+    return res.end();
+  }
+
+  // Markdown 先渲染成一份打印版 HTML 落到临时目录，再交给同一套 Chromium 管线。
+  // base href 指向 md 原目录的 file:// URL：PDF 是在 file:// 下渲染的，
+  // 预览页那套 /raw/ 前缀在这里取不到图。
+  let renderPath = filePath;
+  let tempDir = null;
   try {
+    if (isMd) {
+      send({ phase: 'launching', message: '正在渲染 Markdown…' });
+      const raw = await fsp.readFile(filePath, 'utf8');
+      const html = markdown.renderPage(raw, {
+        title: path.basename(filePath),
+        baseHref: pdfExport.dirFileUrl(path.dirname(filePath)),
+        forPrint: true,
+      });
+      tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'atlas-mdpdf-'));
+      renderPath = path.join(tempDir, 'doc.html');
+      await fsp.writeFile(renderPath, html, 'utf8');
+    }
     const result = await pdfExport.exportPdf(
-      { htmlPath: filePath, fileName },
+      { htmlPath: renderPath, fileName },
       (phaseEvent) => send(phaseEvent),  // 把每个阶段事件转发为 SSE
     );
     if (result.ok) {
@@ -930,6 +1365,10 @@ app.post('/api/export-pdf', async (req, res) => {
   } catch (err) {
     send({ phase: 'error', reason: 'unexpected', message: err.message });
     res.end();
+  } finally {
+    if (tempDir) {
+      try { await fsp.rm(tempDir, { recursive: true, force: true }); } catch {}
+    }
   }
 });
 
@@ -1044,6 +1483,14 @@ function isMarkdownPath(p) {
   return DOC_EXTENSIONS.md.some(ext => String(p).toLowerCase().endsWith(ext));
 }
 
+// Markdown 预览页的 <base href>：该文件所在目录对应的 /raw/<idx>/<dir>/ 前缀。
+// 与 HTML 编辑文档（editable.buildAnnotatedDoc）用的是同一套逻辑。
+function mdBaseHref(filePath) {
+  const fileUrl = buildFileUrl(filePath);
+  if (!fileUrl) return null;
+  return fileUrl.slice(0, fileUrl.lastIndexOf('/') + 1);
+}
+
 // GET /api/render-md?path=<abs>：把 .md 渲染成完整 HTML 页面，用于 iframe 只读预览
 app.get('/api/render-md', async (req, res) => {
   const filePath = req.query.path;
@@ -1058,7 +1505,13 @@ app.get('/api/render-md', async (req, res) => {
   }
   try {
     const raw = await fsp.readFile(filePath, 'utf8');
-    const html = markdown.renderPage(raw, { title: path.basename(filePath) });
+    // base href 指向该 md 所在目录的 /raw/ 前缀：预览页 URL 是
+    // /api/render-md?path=...，没有 base 的话文档里 `![](./img/a.png)`
+    // 会被解析成 /api/img/a.png → 404，md 里的本地图片全部裂开
+    const html = markdown.renderPage(raw, {
+      title: path.basename(filePath),
+      baseHref: mdBaseHref(filePath),
+    });
     res.set('Cache-Control', 'no-store');
     res.type('html').send(html);
   } catch (e) {
@@ -1338,6 +1791,9 @@ app.put('/api/config', (req, res) => {
     // docTypes 变化无需重启 watcher：事件回调按 matchesDocType 实时过滤
   }
   saveConfig(next);
+  // 扫描根 / ignore / maxDepth 变了 → 文件索引必须重建。
+  // （docTypes 变化不需要：索引存全部文档类型，读取时按启用类型过滤）
+  if (rootsChanged || watchOptsChanged) invalidateIndex();
   // 仅在真正影响到的时候才做重活，避免切换文档类型时无谓地重挂路由 / 重启 watcher（卡顿源头）
   // mountRawRoutes 很快（只改 router stack），且前端拿到响应后立刻会请求 /raw/*，必须同步做完
   if (rootsChanged) mountRawRoutes();

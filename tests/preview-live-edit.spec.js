@@ -4,6 +4,7 @@
 // （独立 ATLAS_HOME + 临时扫描根 + 临时端口），绝不触碰用户真实数据。
 
 const { chromium } = require('playwright');
+const { autoAcceptDialogs } = require('./helpers/isolated-atlas');
 const { spawn } = require('child_process');
 const http = require('http');
 const fs = require('fs');
@@ -121,6 +122,8 @@ async function inFrame(page, fn, arg) {
   page.on('pageerror', e => console.error('[pageerror]', e.message));
   // 自动接受 confirm（取消编辑 / 离开拦截）
   page.on('dialog', d => d.accept().catch(() => {}));
+  // "放弃未保存改动"已从原生 confirm() 换成应用内对话框
+  await autoAcceptDialogs(page);
 
   try {
     await page.goto(BASE, { waitUntil: 'load' });

@@ -201,3 +201,39 @@ function makeTreeFixtures(opts = {}) {
 }
 
 module.exports = { startAtlas, makeTreeFixtures };
+
+/**
+ * 自动应答应用内确认框（.atlas-dialog）。
+ *
+ * 为什么需要：确认 / 输入弹窗从原生 confirm()/prompt() 换成了应用内对话框，
+ * Playwright 的 page.on('dialog') 不再触发。用 MutationObserver 盯着弹窗出现
+ * 并自动点按钮，等价于以前的 `page.on('dialog', d => d.accept())`。
+ *
+ * 必须在 page.goto() 之前调用（走 addInitScript，重载后依然生效）。
+ *
+ * @param {import('playwright').Page} page
+ * @param {object}  opts
+ * @param {'confirm'|'cancel'} opts.choice 点确定还是取消（默认确定）
+ */
+async function autoAcceptDialogs(page, opts = {}) {
+  const sel = opts.choice === 'cancel' ? '.dialog-cancel' : '.dialog-confirm';
+  const installer = (buttonSel) => {
+    const click = () => {
+      document.querySelectorAll('.atlas-dialog').forEach((d) => {
+        const btn = d.querySelector(buttonSel);
+        if (btn) btn.click();
+      });
+    };
+    const start = () => {
+      new MutationObserver(click).observe(document.body, { childList: true, subtree: false });
+      click();
+    };
+    if (document.body) start();
+    else document.addEventListener('DOMContentLoaded', start);
+  };
+  await page.addInitScript(installer, sel);
+  // 页面可能已经加载完（helper 在 goto 之后被调用时的兜底）
+  await page.evaluate(installer, sel).catch(() => {});
+}
+
+module.exports.autoAcceptDialogs = autoAcceptDialogs;

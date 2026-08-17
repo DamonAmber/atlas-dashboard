@@ -31,6 +31,36 @@
     return '#';
   }
 
+  // ---------- YAML front matter ----------
+  // AI 生成的 md 几乎默认带 front matter。不识别的话它会被当成
+  // 「分割线 + 段落 + 分割线」，渲染成 `title: xxx author: yyy` 这种乱码。
+  // 这里把它抽出来单独渲染成一个安静的元信息块，并用 data-md-raw 记住原始
+  // 源码——所见即所得编辑反解析时原样吐回，不会被序列化破坏。
+  function splitFrontMatter(src) {
+    var s = String(src == null ? '' : src).replace(/^\uFEFF/, '');
+    var m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(s);
+    if (!m) return { meta: null, raw: '', body: s };
+    return { meta: m[1], raw: m[0], body: s.slice(m[0].length) };
+  }
+
+  function frontMatterHtml(meta, raw) {
+    var rows = [];
+    meta.split(/\r?\n/).forEach(function (line) {
+      if (!line.trim()) return;
+      var mm = /^([A-Za-z0-9_.$-]+)[ \t]*:[ \t]*(.*)$/.exec(line);
+      if (mm) rows.push({ k: mm[1], v: mm[2] });
+      else rows.push({ k: '', v: line.trim() });
+    });
+    if (!rows.length) return '';
+    var items = rows.map(function (r) {
+      return '<div class="md-fm-row">'
+        + (r.k ? '<span class="md-fm-key">' + escapeHtml(r.k) + '</span>' : '')
+        + '<span class="md-fm-val">' + escapeHtml(r.v) + '</span></div>';
+    }).join('');
+    return '<div class="md-frontmatter" data-md-raw="' + escapeHtml(raw) + '">'
+      + '<div class="md-fm-label">文档信息</div>' + items + '</div>';
+  }
+
   function indentOf(line) {
     var m = line.match(/^(\s*)/);
     return m ? m[1].length : 0;
@@ -74,10 +104,15 @@
       });
 
     // 4) 链接 [text](url "title")
+    // 纯锚点链接（#section）不能加 target="_blank"——否则文档里手写的目录
+    // 每点一下都新开一个标签页，而不是在当前文档内跳转。
     text = text.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+&quot;([^)]*?)&quot;)?\)/g,
       function (m, label, url, title) {
         var t = title ? ' title="' + title + '"' : '';
-        return '<a href="' + safeUrl(url, false) + '"' + t + ' target="_blank" rel="noopener noreferrer">' + label + '</a>';
+        var href = safeUrl(url, false);
+        var isAnchor = href.charAt(0) === '#';
+        var rel = isAnchor ? '' : ' target="_blank" rel="noopener noreferrer"';
+        return '<a href="' + href + '"' + t + rel + '>' + label + '</a>';
       });
 
     // 5) 自动链接 <http...>（转义后为 &lt;http...&gt;）
@@ -110,6 +145,7 @@
     var baseIndent = indentOf(lines[i]);
     var ordered = isOrdered(lines[i]);
     var items = [];
+    var hasTask = false;
 
     while (i < n) {
       if (isBlank(lines[i])) {
@@ -141,30 +177,77 @@
         else break;
       }
 
-      var itemHtml = inline(head.trim());
+      // GFM 任务列表：`- [ ] 待办` / `- [x] 已完成` → 真的复选框
+      // （只读展示，disabled；要改状态在源码里改，避免给出"点了会保存"的错觉）
+      var itemHtml;
+      var liClass = '';
+      var task = /^\[([ xX])\][ \t]+([\s\S]*)$/.exec(head.trim());
+      if (task) {
+        hasTask = true;
+        var checked = task[1].toLowerCase() === 'x';
+        liClass = ' class="md-task-item' + (checked ? ' md-task-done' : '') + '"';
+        itemHtml = '<input type="checkbox" class="md-task" disabled'
+          + (checked ? ' checked' : '') + ' /><span>' + inline(task[2]) + '</span>';
+      } else {
+        itemHtml = inline(head.trim());
+      }
       if (nested.length) {
         var strip = new RegExp('^\\s{0,' + (baseIndent + 2) + '}');
         var dedented = nested.map(function (l) { return l === '' ? '' : l.replace(strip, ''); });
         itemHtml += '\n' + render(dedented.join('\n'));
       }
-      items.push('<li>' + itemHtml + '</li>');
+      items.push('<li' + liClass + '>' + itemHtml + '</li>');
     }
 
     var tag = ordered ? 'ol' : 'ul';
-    return { html: '<' + tag + '>' + items.join('') + '</' + tag + '>', next: i };
+    var listClass = (hasTask && !ordered) ? ' class="md-task-list"' : '';
+    return { html: '<' + tag + listClass + '>' + items.join('') + '</' + tag + '>', next: i };
+  }
+
+  // 给一个块的 HTML 的最外层标签塞上 data-md-raw="原始 Markdown 源码"。
+  // 用途：所见即所得编辑保存时，只有被用户真正改过的块才重新序列化，
+  // 其余块原样吐回源码——这样表格对齐、段落软换行、脚注等本渲染器
+  // 无法完整往返的语法都不会被"改一个字"波及。
+  // gap = 本块之前的空行数。也一起记下来，回写时按原样还原块间距——
+  // 否则 `## 标题` 紧跟正文（无空行）这种写法每次保存都会被塞进一个空行，
+  // 对 git 版本化的文档就是无意义的 diff。
+  function withRaw(html, raw, gap) {
+    if (!raw) return html;
+    var attr = ' data-md-raw="' + escapeHtml(raw) + '"'
+      + (gap == null ? '' : ' data-md-gap="' + gap + '"');
+    return html.replace(/^<([a-zA-Z][a-zA-Z0-9]*)(\s|>|\/>)/, function (m, tag, tail) {
+      if (tail === '>') return '<' + tag + attr + '>';
+      if (tail === '/>') return '<' + tag + attr + ' />';
+      return '<' + tag + attr + ' ';
+    });
   }
 
   // ---------- 块级渲染 ----------
-  function render(src) {
+  // opts.annotateRaw：给顶层块标注原始源码（只有最外层这一次调用生效，
+  // 引用块 / 列表项的递归调用不标注——脏块跟踪的粒度就是顶层块）
+  function render(src, opts) {
     src = String(src == null ? '' : src).replace(/\r\n?/g, '\n');
+    var annotate = !!(opts && opts.annotateRaw);
     var lines = src.split('\n');
     var out = [];
     var i = 0, n = lines.length;
+    var blockStart = 0;
+    var prevEnd = 0;      // 上一个块结束后的行号，用来算块之间的空行数
+    // 把刚生成的块推入 out，需要时带上原始源码与块间距
+    var push = function (html) {
+      if (annotate) {
+        out.push(withRaw(html, lines.slice(blockStart, i).join('\n'), blockStart - prevEnd));
+      } else {
+        out.push(html);
+      }
+      prevEnd = i;
+    };
 
     while (i < n) {
       var line = lines[i];
 
       if (isBlank(line)) { i++; continue; }
+      blockStart = i;
 
       // 围栏代码块
       var fence = line.match(/^\s*(```+|~~~+)\s*([^\s`~]*)\s*$/);
@@ -181,7 +264,7 @@
           i++;
         }
         var cls = lang ? ' class="language-' + escapeHtml(lang) + '"' : '';
-        out.push('<pre><code' + cls + '>' + escapeHtml(buf.join('\n')) + '</code></pre>');
+        push('<pre><code' + cls + '>' + escapeHtml(buf.join('\n')) + '</code></pre>');
         continue;
       }
 
@@ -189,15 +272,15 @@
       var h = line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/);
       if (h) {
         var level = h[1].length;
-        out.push('<h' + level + '>' + inline(h[2]) + '</h' + level + '>');
         i++;
+        push('<h' + level + '>' + inline(h[2]) + '</h' + level + '>');
         continue;
       }
 
       // 分割线
       if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
-        out.push('<hr />');
         i++;
+        push('<hr />');
         continue;
       }
 
@@ -208,7 +291,7 @@
           qbuf.push(lines[i].replace(/^\s*>\s?/, ''));
           i++;
         }
-        out.push('<blockquote>' + render(qbuf.join('\n')) + '</blockquote>');
+        push('<blockquote>' + render(qbuf.join('\n')) + '</blockquote>');
         continue;
       }
 
@@ -234,15 +317,15 @@
             return '<td' + alignAttr(aligns[idx]) + '>' + inline((r[idx] || '').trim()) + '</td>';
           }).join('') + '</tr>';
         }).join('') + '</tbody>';
-        out.push('<table>' + thead + tbody + '</table>');
+        push('<table>' + thead + tbody + '</table>');
         continue;
       }
 
       // 列表
       if (isMarker(line)) {
         var lr = parseList(lines, i);
-        out.push(lr.html);
         i = lr.next;
+        push(lr.html);
         continue;
       }
 
@@ -255,35 +338,110 @@
       // 软换行按空格处理（CommonMark 语义），行尾两个空格转硬换行
       var ptext = inline(pbuf.join('\n'));
       ptext = ptext.replace(/ {2,}\n/g, '<br />\n').replace(/\n/g, ' ');
-      out.push('<p>' + ptext + '</p>');
+      push('<p>' + ptext + '</p>');
     }
 
     return out.join('\n');
   }
 
-  // 预览基础样式：以 .md-body 作用域，iframe 与主文档编辑预览面板共用
+  // 整篇文档的渲染入口：front matter + 正文。
+  // render() 本身是纯块级渲染器，会被引用块 / 列表项递归调用，所以
+  // front matter 只能在顶层这一层识别，不能塞进 render() 内部
+  // （否则 `> ---\n> foo\n> ---` 这种引用块会被误判成 front matter）。
+  function renderBody(src, opts) {
+    var fm = splitFrontMatter(src);
+    var head = fm.meta != null ? frontMatterHtml(fm.meta, fm.raw) : '';
+    var body = render(fm.body, opts);
+    return head ? head + '\n' + body : body;
+  }
+
+  // 页面级样式：只给 /api/render-md 产出的独立预览页用。
+  // 之前 html/body 背景是硬编码的 #fff——dashboard 跟随系统进深色模式时，
+  // 阅读区就是深色壳子里嵌一块刺眼的白板。
+  var pageCss = [
+    ':root{color-scheme:light dark;}',
+    'html,body{margin:0;background:#ffffff;}',
+    '@media (prefers-color-scheme: dark){html,body{background:#12141a;}}',
+  ].join('');
+
+  // 预览基础样式：以 .md-body 作用域，iframe 与主文档编辑预览面板共用。
+  // 全部走 CSS 变量，深色模式只需覆盖变量——iframe 预览页和 dashboard 内
+  // 的编辑预览面板因此能自动保持一致。
   var markdownCss = [
-    '.md-body{color:#24292f;font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;word-wrap:break-word;}',
-    '.md-body h1,.md-body h2,.md-body h3,.md-body h4,.md-body h5,.md-body h6{margin:1.4em 0 .6em;font-weight:600;line-height:1.3;}',
-    '.md-body h1{font-size:1.9em;padding-bottom:.3em;border-bottom:1px solid #eaecef;}',
-    '.md-body h2{font-size:1.5em;padding-bottom:.3em;border-bottom:1px solid #eaecef;}',
-    '.md-body h3{font-size:1.25em;}.md-body h4{font-size:1.05em;}.md-body h5{font-size:.95em;}.md-body h6{font-size:.9em;color:#6a737d;}',
+    '.md-body{',
+    '--md-fg:#24292f;--md-fg-muted:#6a737d;--md-fg-faint:#8a8f98;',
+    '--md-border:#eaecef;--md-border-strong:#d0d7de;',
+    '--md-code-bg:rgba(175,184,193,.28);--md-pre-bg:#f6f8fa;--md-pre-head:#eceff3;',
+    '--md-link:#0969da;--md-table-alt:#f6f8fa;--md-quote-fg:#57606a;',
+    '--md-fm-bg:#f6f8fa;--md-fm-border:#e3e6ec;',
+    'color:var(--md-fg);font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;word-wrap:break-word;}',
+    '@media (prefers-color-scheme: dark){.md-body{',
+    '--md-fg:#e3e6ec;--md-fg-muted:#9aa4b2;--md-fg-faint:#7c8494;',
+    '--md-border:#272c36;--md-border-strong:#333a46;',
+    '--md-code-bg:rgba(120,132,150,.22);--md-pre-bg:#171b22;--md-pre-head:#1f242d;',
+    '--md-link:#6cb0ff;--md-table-alt:#171b22;--md-quote-fg:#a4adbb;',
+    '--md-fm-bg:#171b22;--md-fm-border:#272c36;}}',
+    '.md-body h1,.md-body h2,.md-body h3,.md-body h4,.md-body h5,.md-body h6{margin:1.4em 0 .6em;font-weight:600;line-height:1.3;position:relative;}',
+    '.md-body h1{font-size:1.9em;padding-bottom:.3em;border-bottom:1px solid var(--md-border);}',
+    '.md-body h2{font-size:1.5em;padding-bottom:.3em;border-bottom:1px solid var(--md-border);}',
+    '.md-body h3{font-size:1.25em;}.md-body h4{font-size:1.05em;}.md-body h5{font-size:.95em;}.md-body h6{font-size:.9em;color:var(--md-fg-muted);}',
     '.md-body p{margin:0 0 1em;}',
-    '.md-body a{color:#0969da;text-decoration:none;}.md-body a:hover{text-decoration:underline;}',
-    '.md-body code{background:rgba(175,184,193,.28);border-radius:6px;padding:.2em .4em;font-size:.88em;font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;}',
-    '.md-body pre{background:#f6f8fa;border-radius:8px;padding:14px 16px;overflow:auto;margin:0 0 1em;}',
+    '.md-body a{color:var(--md-link);text-decoration:none;}.md-body a:hover{text-decoration:underline;}',
+    '.md-body code{background:var(--md-code-bg);border-radius:6px;padding:.2em .4em;font-size:.88em;font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;}',
+    '.md-body pre{position:relative;background:var(--md-pre-bg);border-radius:8px;padding:14px 16px;overflow:auto;margin:0 0 1em;}',
     '.md-body pre code{background:none;padding:0;font-size:.85em;line-height:1.5;}',
-    '.md-body blockquote{margin:0 0 1em;padding:.2em 1em;color:#57606a;border-left:.28em solid #d0d7de;}',
+    '.md-body blockquote{margin:0 0 1em;padding:.2em 1em;color:var(--md-quote-fg);border-left:.28em solid var(--md-border-strong);}',
     '.md-body ul,.md-body ol{margin:0 0 1em;padding-left:1.8em;}',
     '.md-body li{margin:.25em 0;}',
     '.md-body li>ul,.md-body li>ol{margin:.25em 0;}',
-    '.md-body hr{height:1px;border:0;background:#d0d7de;margin:1.6em 0;}',
+    '.md-body hr{height:1px;border:0;background:var(--md-border-strong);margin:1.6em 0;}',
     '.md-body img{max-width:100%;border-radius:6px;}',
-    '.md-body table{border-collapse:collapse;margin:0 0 1em;display:block;overflow:auto;}',
-    '.md-body table th,.md-body table td{border:1px solid #d0d7de;padding:6px 13px;}',
-    '.md-body table th{background:#f6f8fa;font-weight:600;}',
-    '.md-body table tr:nth-child(2n){background:#f6f8fa;}',
-    '.md-body del{color:#8a8f98;}',
+    // 表格：外层容器负责横向滚动，table 本身保持 table 布局
+    // （原来 table 自己 display:block 会脱离正常流，宽表格的滚动条很难发现）
+    '.md-body table{border-collapse:collapse;margin:0 0 1em;max-width:100%;}',
+    '.md-body table th,.md-body table td{border:1px solid var(--md-border-strong);padding:6px 13px;}',
+    '.md-body table th{background:var(--md-table-alt);font-weight:600;}',
+    '.md-body table tr:nth-child(2n){background:var(--md-table-alt);}',
+    '.md-body del{color:var(--md-fg-faint);}',
+    // front matter 元信息块
+    '.md-frontmatter{margin:0 0 1.4em;padding:10px 14px;border:1px solid var(--md-fm-border);',
+    'border-radius:8px;background:var(--md-fm-bg);font-size:.86em;line-height:1.6;}',
+    '.md-fm-label{font-size:.85em;letter-spacing:.08em;text-transform:uppercase;color:var(--md-fg-faint);margin-bottom:4px;}',
+    '.md-fm-row{display:flex;gap:8px;}',
+    '.md-fm-key{flex:0 0 auto;min-width:5.5em;color:var(--md-fg-muted);}',
+    '.md-fm-val{flex:1 1 auto;min-width:0;color:var(--md-fg);word-break:break-word;}',
+    // 任务列表
+    '.md-body ul.md-task-list{list-style:none;padding-left:1.1em;}',
+    '.md-body li.md-task-item{display:flex;align-items:flex-start;gap:.5em;}',
+    '.md-body input.md-task{margin:.42em 0 0;flex:0 0 auto;accent-color:var(--md-link);}',
+    '.md-body li.md-task-item.md-task-done{color:var(--md-fg-muted);text-decoration:line-through;',
+    'text-decoration-color:var(--md-fg-faint);}',
+    // 标题锚点：hover 才出现，不干扰正常阅读
+    '.md-body .md-anchor{margin-left:.4em;color:var(--md-fg-faint);text-decoration:none;',
+    'opacity:0;transition:opacity .12s ease;font-weight:400;}',
+    '.md-body h1:hover .md-anchor,.md-body h2:hover .md-anchor,.md-body h3:hover .md-anchor,',
+    '.md-body h4:hover .md-anchor,.md-body h5:hover .md-anchor,.md-body h6:hover .md-anchor{opacity:1;}',
+    '.md-body .md-anchor:focus-visible{opacity:1;outline:2px solid var(--md-link);outline-offset:2px;}',
+    // 代码块头部（语言标签 + 复制按钮），由 enhanceScript 注入
+    '.md-body .md-code-head{position:absolute;top:0;right:0;left:0;display:flex;align-items:center;',
+    'justify-content:space-between;gap:8px;padding:5px 10px 5px 14px;background:var(--md-pre-head);',
+    'border-radius:8px 8px 0 0;font:500 11px/1.4 -apple-system,system-ui,sans-serif;}',
+    '.md-body pre:has(.md-code-head){padding-top:38px;}',
+    '.md-body .md-code-lang{color:var(--md-fg-muted);letter-spacing:.04em;text-transform:uppercase;}',
+    '.md-body .md-code-copy{border:1px solid var(--md-border-strong);border-radius:5px;background:transparent;',
+    'color:var(--md-fg-muted);padding:2px 8px;font:inherit;cursor:pointer;transition:color .12s,border-color .12s;}',
+    '.md-body .md-code-copy:hover{color:var(--md-fg);border-color:var(--md-fg-muted);}',
+    '.md-body .md-code-copy.copied{color:#3fb950;border-color:#3fb950;}',
+    // 走浏览器打印对话框时（找不到 Chromium 的降级路径）：纸上点不了的控件都藏掉
+    '@media print{',
+    '.md-body .md-code-head{display:none;}',
+    '.md-body pre{padding-top:14px !important;white-space:pre-wrap;word-break:break-word;}',
+    '.md-body .md-anchor{display:none;}',
+    '.md-body .md-table-scroll{overflow:visible;}',
+    '}',
+    // 表格横向滚动包裹层，由 enhanceScript 注入
+    '.md-body .md-table-scroll{overflow-x:auto;margin:0 0 1em;}',
+    '.md-body .md-table-scroll table{margin:0;}',
   ].join('\n');
 
   // ---------- HTML → Markdown（反向序列化，仅浏览器端所见即所得编辑用）----------
@@ -304,6 +462,12 @@
       case 'CODE': return '`' + (n.textContent || '') + '`';
       case 'A': return '[' + inner().trim() + '](' + (n.getAttribute('href') || '') + ')';
       case 'IMG': return '![' + (n.getAttribute('alt') || '') + '](' + (n.getAttribute('src') || '') + ')';
+      // 任务列表复选框：还原成 [ ] / [x]，否则回写时勾选状态和方括号一起丢掉
+      case 'INPUT':
+        if ((n.getAttribute('type') || '').toLowerCase() === 'checkbox') {
+          return (n.checked ? '[x] ' : '[ ] ');
+        }
+        return '';
       default: return inner();
     }
   }
@@ -332,13 +496,25 @@
     return lines.join('\n');
   }
 
+  // 单元格对齐：渲染时写在 style="text-align:..." 里，回写时读回来，
+  // 否则 `|:---|--:|` 这类对齐信息会在往返中退化成统一的 `---`
+  function cellAlignBar(cell) {
+    var style = (cell && cell.getAttribute && cell.getAttribute('style')) || '';
+    var m = /text-align:\s*(left|center|right)/i.exec(style);
+    var a = m ? m[1].toLowerCase() : '';
+    if (a === 'center') return ':---:';
+    if (a === 'right') return '---:';
+    if (a === 'left') return ':---';
+    return '---';
+  }
+
   function serializeTable(tbl) {
-    var head = Array.prototype.map.call(tbl.querySelectorAll('thead th, thead td'),
-      function (c) { return serializeInlineChildren(c).trim(); });
-    if (!head.length) return serializeBlocksList(tbl).join('\n\n');
+    var headCells = Array.prototype.slice.call(tbl.querySelectorAll('thead th, thead td'));
+    var head = headCells.map(function (c) { return serializeInlineChildren(c).trim(); });
+    if (!head.length) return joinBlocks(serializeBlocksList(tbl));
     var rows = [];
     rows.push('| ' + head.join(' | ') + ' |');
-    rows.push('| ' + head.map(function () { return '---'; }).join(' | ') + ' |');
+    rows.push('| ' + headCells.map(cellAlignBar).join(' | ') + ' |');
     Array.prototype.forEach.call(tbl.querySelectorAll('tbody tr'), function (tr) {
       var cells = Array.prototype.map.call(tr.children,
         function (c) { return serializeInlineChildren(c).trim(); });
@@ -348,6 +524,15 @@
   }
 
   function serializeBlock(el, indent) {
+    // 没被用户碰过的块：直接吐回渲染时记下的原始源码。
+    // 这是"改一个字不该重写整篇文档"的关键——表格对齐、段落软换行、
+    // front matter、以及本渲染器不完整支持的语法都因此得以原样保留。
+    if (el.getAttribute) {
+      var raw = el.getAttribute('data-md-raw');
+      if (raw != null && el.getAttribute('data-md-dirty') == null) {
+        return raw.replace(/[\s]+$/, '');
+      }
+    }
     var tag = el.tagName;
     if (/^H[1-6]$/.test(tag)) return '#'.repeat(+tag[1]) + ' ' + serializeInlineChildren(el).trim();
     if (tag === 'HR') return '---';
@@ -361,27 +546,31 @@
     if (tag === 'UL' || tag === 'OL') return serializeList(el, indent || '', tag === 'OL');
     if (tag === 'TABLE') return serializeTable(el);
     if (tag === 'BLOCKQUOTE') {
-      var inner = serializeBlocksList(el).join('\n\n');
+      var inner = joinBlocks(serializeBlocksList(el));
       return inner.split('\n').map(function (l) { return l ? '> ' + l : '>'; }).join('\n');
     }
     // P / DIV / 其它：当作一个段落
     return serializeInlineChildren(el).trim();
   }
 
+  // 返回 [{ text, gap }]，gap = 该块之前原本有几个空行（未知时为 null）
   function serializeBlocksList(container) {
     var blocks = [];
     var inlineBuf = [];
     var flush = function () {
       if (!inlineBuf.length) return;
       var text = inlineBuf.map(serializeNodeInline).join('').trim();
-      if (text) blocks.push(text);
+      if (text) blocks.push({ text: text, gap: null });
       inlineBuf = [];
     };
     Array.prototype.forEach.call(container.childNodes, function (n) {
       if (n.nodeType === 1 && BLOCK_TAGS.test(n.tagName)) {
         flush();
         var b = serializeBlock(n, '');
-        if (b && b.trim()) blocks.push(b);
+        if (b && b.trim()) {
+          var g = n.getAttribute ? n.getAttribute('data-md-gap') : null;
+          blocks.push({ text: b, gap: g == null ? null : parseInt(g, 10) });
+        }
       } else {
         inlineBuf.push(n);
       }
@@ -390,11 +579,24 @@
     return blocks;
   }
 
+  // 按各块记录的原始间距拼接；未知间距回落到一个空行（标准 Markdown 写法）
+  function joinBlocks(blocks) {
+    var out = '';
+    blocks.forEach(function (b, idx) {
+      if (idx > 0) {
+        var gap = (b.gap == null || isNaN(b.gap)) ? 1 : Math.max(0, b.gap);
+        out += new Array(gap + 2).join('\n');   // gap 个空行 = gap+1 个换行
+      }
+      out += b.text;
+    });
+    return out;
+  }
+
   // 把（本渲染器产出的）DOM 子树转回 Markdown 文本
   function htmlToMarkdown(root) {
     if (!root) return '';
-    var md = serializeBlocksList(root).join('\n\n');
-    return md.replace(/\n{3,}/g, '\n\n').replace(/[ \t]+\n/g, '\n').trim() + '\n';
+    var md = joinBlocks(serializeBlocksList(root));
+    return md.replace(/[ \t]+\n/g, '\n').replace(/\s+$/, '') + '\n';
   }
 
   // ---------- 目录（TOC）：从渲染后的 HTML 抽取标题，生成锚点导航 ----------
@@ -416,7 +618,8 @@
     return slug;
   }
 
-  // 给渲染后的 HTML 里的标题注入 id，并收集目录项
+  // 给渲染后的 HTML 里的标题注入 id + hover 锚点链接，并收集目录项。
+  // 只在只读预览页（renderPage）里用，不影响编辑器预览面板的反解析。
   function extractHeadings(html) {
     var used = {};
     var items = [];
@@ -425,7 +628,8 @@
       if (!text) return m;
       var id = slugify(text, used);
       items.push({ level: +lvl, id: id, text: text });
-      return '<h' + lvl + ' id="' + id + '">' + inner + '</h' + lvl + '>';
+      var anchor = '<a class="md-anchor" href="#' + id + '" aria-label="复制本节链接">#</a>';
+      return '<h' + lvl + ' id="' + id + '">' + inner + anchor + '</h' + lvl + '>';
     });
     return { html: out, items: items };
   }
@@ -467,33 +671,36 @@
 
   // 只读预览页里 TOC 侧栏的样式（不影响编辑器分栏预览面板）——克制、极简
   var tocCss = [
-    'html,body{margin:0;background:#fff;}',
+    'body{--toc-bg:#fff;--toc-border:#f0f1f3;--toc-title:#a0a6b0;--toc-fg:#697280;',
+    '--toc-fg-strong:#1f2328;--toc-hover:#f6f7f9;--toc-active:#0969da;--toc-caret:#c2c7d0;}',
+    '@media (prefers-color-scheme: dark){body{--toc-bg:#12141a;--toc-border:#22262f;--toc-title:#6f7784;',
+    '--toc-fg:#9aa4b2;--toc-fg-strong:#e3e6ec;--toc-hover:#1b1f27;--toc-active:#6cb0ff;--toc-caret:#4a515e;}}',
     '*{scroll-behavior:smooth;}',
     '.md-toc{position:fixed;top:0;left:0;width:250px;height:100vh;box-sizing:border-box;overflow-y:auto;',
-    'padding:46px 10px 32px 14px;border-right:1px solid #f0f1f3;background:#fff;z-index:5;transition:transform .2s ease;',
+    'padding:46px 10px 32px 14px;border-right:1px solid var(--toc-border);background:var(--toc-bg);z-index:5;transition:transform .2s ease;',
     'font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}',
-    '.md-toc-title{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#a0a6b0;font-weight:600;padding:0 8px 10px;}',
+    '.md-toc-title{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--toc-title);font-weight:600;padding:0 8px 10px;}',
     '.toc-ul{list-style:none;margin:0;padding:0;}',
     '.toc-ul .toc-ul{padding-left:13px;}',
     '.toc-row{display:flex;align-items:center;}',
-    '.toc-row a{flex:1;min-width:0;display:block;padding:4px 6px;color:#697280;text-decoration:none;',
+    '.toc-row a{flex:1;min-width:0;display:block;padding:4px 6px;color:var(--toc-fg);text-decoration:none;',
     'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:5px;transition:color .12s,background .12s;}',
-    '.toc-row a:hover{color:#1f2328;background:#f6f7f9;}',
-    '.toc-row a.active{color:#0969da;font-weight:500;}',
+    '.toc-row a:hover{color:var(--toc-fg-strong);background:var(--toc-hover);}',
+    '.toc-row a.active{color:var(--toc-active);font-weight:500;}',
     // caret：极简三角，仅有子项时可点
     '.toc-caret{flex:0 0 16px;width:16px;height:20px;padding:0;border:0;background:none;cursor:pointer;',
-    'display:inline-flex;align-items:center;justify-content:center;color:#c2c7d0;}',
+    'display:inline-flex;align-items:center;justify-content:center;color:var(--toc-caret);}',
     '.toc-caret::before{content:"";width:0;height:0;border-left:4px solid currentColor;',
     'border-top:3.5px solid transparent;border-bottom:3.5px solid transparent;transition:transform .15s ease;}',
     '.toc-li.has-children:not(.collapsed)>.toc-row>.toc-caret::before{transform:rotate(90deg);}',
-    '.toc-caret:hover{color:#697280;}',
+    '.toc-caret:hover{color:var(--toc-fg);}',
     '.toc-caret-leaf{cursor:default;}.toc-caret-leaf::before{display:none;}',
     '.toc-li.collapsed>.toc-ul{display:none;}',
     // 收起 / 展开按钮：无边框图标
     '.md-toc-toggle{position:fixed;top:9px;left:9px;z-index:6;width:30px;height:30px;padding:0;',
     'display:flex;align-items:center;justify-content:center;border:0;border-radius:7px;background:transparent;',
-    'color:#9aa1ac;cursor:pointer;transition:background .12s,color .12s;}',
-    '.md-toc-toggle:hover{background:#f2f3f5;color:#4b5563;}',
+    'color:var(--toc-title);cursor:pointer;transition:background .12s,color .12s;}',
+    '.md-toc-toggle:hover{background:var(--toc-hover);color:var(--toc-fg-strong);}',
     '.md-toc-toggle svg{width:17px;height:17px;}',
     '.md-content{margin-left:250px;transition:margin-left .2s ease;}',
     '.md-content .md-inner{max-width:860px;margin:0 auto;padding:32px 44px;box-sizing:border-box;}',
@@ -503,6 +710,13 @@
     'body.toc-collapsed .md-toc{transform:translateX(-100%);}',
     'body.toc-collapsed .md-content{margin-left:0;}',
     '@media (max-width:900px){.md-content{margin-left:0;}.md-toc{box-shadow:2px 0 14px rgba(0,0,0,.1);}}',
+    // 打印时目录侧栏是 fixed 定位，会盖在每一页正文上——直接隐藏，正文铺满纸张
+    '@media print{',
+    '.md-toc,.md-toc-toggle,.md-tail-space{display:none !important;}',
+    '.md-content{margin-left:0 !important;}',
+    '.md-content .md-inner{max-width:none;padding:0;}',
+    '@page{margin:16mm 14mm;}',
+    '}',
   ].join('');
 
   // TOC 交互脚本：收起持久化、层级折叠、平滑滚动、滚动高亮当前章节
@@ -528,44 +742,127 @@
     + 'heads.forEach(function(h){io.observe(h);});}'
     + '})();';
 
+  // 只读预览页的运行时增强：给代码块加「语言标签 + 复制」，给宽表格套横向滚动层。
+  // 特意只在 iframe 预览页里做、不写进 render() 的输出——编辑器右侧的所见即所得
+  // 预览面板要靠 htmlToMarkdown() 反解析回源码，DOM 里多出按钮会污染结果。
+  var enhanceScript = '(function(){'
+    + 'function fallbackCopy(text,done){try{var ta=document.createElement("textarea");ta.value=text;'
+    + 'ta.setAttribute("aria-hidden","true");ta.style.position="fixed";ta.style.top="-1000px";ta.style.opacity="0";'
+    + 'document.body.appendChild(ta);ta.select();document.execCommand("copy");document.body.removeChild(ta);done();}catch(e){}}'
+    + 'Array.prototype.forEach.call(document.querySelectorAll(".md-body pre"),function(pre){'
+    + 'var code=pre.querySelector("code");if(!code)return;'
+    + 'var lang="";var m=(code.className||"").match(/language-([\\w+#.-]+)/);if(m)lang=m[1];'
+    + 'var head=document.createElement("div");head.className="md-code-head";'
+    + 'var tag=document.createElement("span");tag.className="md-code-lang";tag.textContent=lang||"text";'
+    + 'head.appendChild(tag);'
+    + 'var btn=document.createElement("button");btn.type="button";btn.className="md-code-copy";'
+    + 'btn.textContent="复制";btn.setAttribute("aria-label","复制这段代码");'
+    + 'btn.addEventListener("click",function(){var t=code.textContent;'
+    + 'var done=function(){btn.textContent="已复制";btn.classList.add("copied");'
+    + 'setTimeout(function(){btn.textContent="复制";btn.classList.remove("copied");},1500);};'
+    + 'if(navigator.clipboard&&navigator.clipboard.writeText){'
+    + 'navigator.clipboard.writeText(t).then(done,function(){fallbackCopy(t,done);});'
+    + '}else{fallbackCopy(t,done);}});'
+    + 'head.appendChild(btn);pre.insertBefore(head,pre.firstChild);'
+    + '});'
+    // 宽表格：套一层可横向滚动的容器，滚动条位置更符合预期
+    + 'Array.prototype.forEach.call(document.querySelectorAll(".md-body table"),function(tbl){'
+    + 'if(tbl.parentNode&&tbl.parentNode.classList&&tbl.parentNode.classList.contains("md-table-scroll"))return;'
+    + 'var wrap=document.createElement("div");wrap.className="md-table-scroll";'
+    + 'tbl.parentNode.insertBefore(wrap,tbl);wrap.appendChild(tbl);'
+    + '});'
+    + '})();';
+
+  // 打印 / PDF 专用样式。
+  // 两个关键点：
+  //   ① 把配色钉回浅色 —— 否则在深色系统上导出会得到一张整页墨黑的 PDF
+  //     （放在 markdownCss 之后，同特异性下后写的规则生效）
+  //   ② 页边距交给 @page，正文不再限制 max-width，避免纸张两侧大片留白
+  var printCss = [
+    '.md-body{',
+    '--md-fg:#24292f;--md-fg-muted:#57606a;--md-fg-faint:#8a8f98;',
+    '--md-border:#d8dce2;--md-border-strong:#c4cad2;',
+    '--md-code-bg:rgba(175,184,193,.28);--md-pre-bg:#f6f8fa;--md-pre-head:#eceff3;',
+    '--md-link:#0b5cc4;--md-table-alt:#f6f8fa;--md-quote-fg:#57606a;',
+    '--md-fm-bg:#f6f8fa;--md-fm-border:#e3e6ec;}',
+    'html,body{margin:0;background:#fff;}',
+    'body{padding:0;}',
+    '@page{margin:16mm 14mm;}',
+    // 分页控制：标题不要吊在页尾，代码块 / 表格 / 图片尽量不被切断
+    '.md-body h1,.md-body h2,.md-body h3,.md-body h4,.md-body h5,.md-body h6{',
+    'break-after:avoid;page-break-after:avoid;break-inside:avoid;}',
+    '.md-body pre,.md-body table,.md-body blockquote,.md-body img,.md-body .md-frontmatter{',
+    'break-inside:avoid;page-break-inside:avoid;}',
+    '.md-body pre{white-space:pre-wrap;word-break:break-word;overflow:visible;}',
+    '.md-body table{width:100%;}',
+    // 链接在纸上点不动，把地址打出来才有意义（锚点链接除外）
+    '.md-body a[href^="http"]::after{content:" (" attr(href) ")";font-size:.82em;color:var(--md-fg-faint);',
+    'word-break:break-all;}',
+  ].join('');
+
   // 组装完整 HTML 预览页（供服务端 /api/render-md 使用）
+  // opts.baseHref：必须传！预览页的 URL 是 /api/render-md?path=...，
+  // 没有 <base> 的话文档里 `![](./img/a.png)` 会被解析成 /api/img/a.png → 404，
+  // 也就是「md 里的本地图片全裂」。baseHref 指向该 md 所在目录的 /raw/ 前缀。
   function renderPage(src, opts) {
     opts = opts || {};
     var title = escapeHtml(opts.title || 'Markdown');
-    var extracted = extractHeadings(render(src));
+    var baseTag = opts.baseHref
+      ? '<base href="' + escapeHtml(opts.baseHref) + '" />'
+      : '';
+    // 打印模式：不要固定定位的目录侧栏（会盖在每页正文上）、不要代码块复制按钮
+    // （纸上点不了）、不要标题 hover 锚点。只要干净的正文。
+    if (opts.forPrint) {
+      return '<!doctype html><html lang="zh"><head><meta charset="utf-8" />'
+        + baseTag
+        + '<meta name="color-scheme" content="light" />'
+        + '<title>' + title + '</title>'
+        + '<style>' + markdownCss + printCss + '</style></head>'
+        + '<body class="md-body">' + renderBody(src) + '</body></html>';
+    }
+
+    var extracted = extractHeadings(renderBody(src));
     var body = extracted.html;
     var items = extracted.items;
     var hasToc = items.length >= 2; // 至少两个标题才值得显示导航
+    var head = '<!doctype html><html lang="zh"><head><meta charset="utf-8" />'
+      + baseTag
+      + '<meta name="viewport" content="width=device-width,initial-scale=1" />'
+      + '<meta name="color-scheme" content="light dark" />'
+      + '<title>' + title + '</title>';
 
     if (!hasToc) {
-      return '<!doctype html><html lang="zh"><head><meta charset="utf-8" />'
-        + '<meta name="viewport" content="width=device-width,initial-scale=1" />'
-        + '<title>' + title + '</title>'
-        + '<style>html,body{margin:0;background:#fff;}body{padding:32px 40px;max-width:900px;margin:0 auto;}'
-        + markdownCss + '</style></head>'
-        + '<body class="md-body">' + body + '</body></html>';
+      return head
+        + '<style>html,body{margin:0;}body{padding:32px 40px;max-width:900px;margin:0 auto;}'
+        + pageCss + markdownCss + '</style></head>'
+        + '<body class="md-body">' + body
+        + '<script>' + enhanceScript + '</script>'
+        + '</body></html>';
     }
 
     var toggleSvg = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" '
       + 'stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg>';
 
-    return '<!doctype html><html lang="zh"><head><meta charset="utf-8" />'
-      + '<meta name="viewport" content="width=device-width,initial-scale=1" />'
-      + '<title>' + title + '</title>'
-      + '<style>' + tocCss + markdownCss + '</style></head>'
+    return head
+      + '<style>' + pageCss + tocCss + markdownCss + '</style></head>'
       + '<body>'
       + '<button class="md-toc-toggle" id="mdTocToggle" type="button" title="展开 / 收起目录" aria-label="展开或收起目录">' + toggleSvg + '</button>'
       + '<nav class="md-toc" id="mdToc" aria-label="文档目录"><div class="md-toc-title">目录</div>' + tocListHtml(items) + '</nav>'
       + '<div class="md-content"><div class="md-inner md-body">' + body + '<div class="md-tail-space" aria-hidden="true"></div></div></div>'
       + '<script>' + tocScript + '</script>'
+      + '<script>' + enhanceScript + '</script>'
       + '</body></html>';
   }
 
   return {
     render: render,
+    renderBody: renderBody,
     renderPage: renderPage,
     htmlToMarkdown: htmlToMarkdown,
     markdownCss: markdownCss,
+    pageCss: pageCss,
+    printCss: printCss,
+    splitFrontMatter: splitFrontMatter,
     escapeHtml: escapeHtml,
   };
 });

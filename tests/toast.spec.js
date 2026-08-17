@@ -6,7 +6,7 @@
 // 越堆越多让服务重挂 watcher 越来越慢，进而让测试更容易超时失败 —— 恶性循环。
 
 const { chromium } = require('playwright');
-const { startAtlas } = require('./helpers/isolated-atlas');
+const { startAtlas, autoAcceptDialogs } = require('./helpers/isolated-atlas');
 
 const checks = [];
 function check(name, ok, detail = '') {
@@ -59,6 +59,8 @@ async function clearAllToasts(page) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('pageerror', e => console.error('[pageerror]', e.message));
   page.on('dialog', d => d.accept());
+  // 确认框已从原生 confirm() 换成应用内对话框，page.on('dialog') 不再触发
+  await autoAcceptDialogs(page);
 
   try {
     await page.goto(atlas.base, { waitUntil: 'domcontentloaded' });

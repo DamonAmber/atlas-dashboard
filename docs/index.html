@@ -1043,7 +1043,7 @@
   <div class="wrap">
     <div class="eyebrow">
       <span class="pulse"></span>
-      <span>v<span id="cur-version">0.7.3</span> · 已上架 npm</span>
+      <span>v<span id="cur-version">0.8.0</span> · 已上架 npm</span>
     </div>
     <h1>你让 AI 写了 30 份 HTML / Markdown 报告——<br/><span class="grad">它们现在在哪？</span></h1>
     <p class="lede">
@@ -1197,7 +1197,7 @@
           </span>
           HTML + Markdown 双模
         </h3>
-        <p>不止 HTML——设置里勾选文档类型，<strong>HTML 与 Markdown 可同时扫描共存</strong>，目录树用紧凑的类型 icon 区分并把更多空间留给标题。Markdown 内建渲染预览，长文档自动带一个<strong>可折叠的侧边目录</strong>：按标题层级折叠展开、点击平滑跳转、滚动高亮当前章节。还带一个<strong>源码 / 预览分栏编辑器</strong>：左边写源码右边实时渲染、两侧滚动同步，<strong>预览区还能直接所见即所得地改</strong>，编辑即反解析回 Markdown，保存写回原文件（含冲突检测与自动备份）；退出编辑会停在你刚才浏览的位置，不跳回顶部。</p>
+        <p>不止 HTML——设置里勾选文档类型，<strong>HTML 与 Markdown 可同时扫描共存</strong>，目录树用紧凑的类型 icon 区分并把更多空间留给标题。Markdown 内建渲染预览：<strong>本地相对路径的图片正常显示</strong>、YAML front matter 渲染成安静的元信息块、代码块带语言标签与一键复制、<code>- [ ]</code> 任务列表是真复选框、标题 hover 出锚点、<strong>跟随系统深浅色</strong>；长文档自动带可折叠侧边目录（层级折叠、平滑跳转、滚动高亮当前章节）。<br>还带一个<strong>源码 / 预览分栏编辑器</strong>：分栏宽度可拖拽、两侧滚动同步、可开侧边大纲；回车自动续列表（有序列表序号自增）、<kbd>Tab</kbd> 多行缩进、<kbd>⌘B</kbd> <kbd>⌘I</kbd> <kbd>⌘K</kbd> 与一条格式工具栏、<kbd>⌘S</kbd> 保存。<strong>预览区还能直接所见即所得地改</strong>，而且只重写你真正碰过的那几个块——表格对齐、段落软换行都逐字节保留，不会给 git 留下满屏无意义 diff。编辑期间内容会自动存本地草稿，浏览器意外关闭也能恢复。</p>
       </div>
       <div class="feat">
         <h3>
@@ -1231,7 +1231,7 @@
           </span>
           未读红点
         </h3>
-        <p>AI 改过哪个 HTML，文件名后立即出红点。点开预览即清除——精准锁定"还没看过"的内容。</p>
+        <p>AI 改过哪个文档，文件名后立即出红点。点开预览即清除——精准锁定"还没看过"的内容。<br>红点只说"变了"，那"变了什么"呢？顶栏的<strong>对比</strong>按钮会拿当前内容和<strong>你上次看到的那一版</strong>逐行 diff：绿色新增、红色删除、中间没动的大段自动折叠。看完点「标记为已看过」把当前内容设为新底本。底本在你每次打开文档时自动记录，存在 <code>~/.atlas/versions/</code>，每个文件留最近 5 份。</p>
       </div>
       <div class="feat">
         <h3>
@@ -1289,7 +1289,7 @@
           </span>
           全文搜索 + 高亮跳转
         </h3>
-        <p>搜索框同时匹配文件名 / 备注 / 路径 / <strong>HTML 内容</strong>。中文单字（"灯"）也能搜。打开命中文件后 iframe 内所有匹配自动高亮，顶栏出现 <kbd>X / N</kbd> 跳转栏，<kbd>Enter</kbd> / <kbd>Shift+Enter</kbd> 上下跳。<kbd>/</kbd> 一键聚焦搜索框。</p>
+        <p>搜索框同时匹配文件名 / 备注 / 路径 / 项目名 / <strong>文档内容</strong>。中文单字（"灯"）也能搜。<strong>空格分隔多个关键词按"都要出现"过滤</strong>（<code>配网 转化率</code>），要整段短语就用引号（<code>"error rate"</code>）。打开命中文件后 iframe 内所有关键词自动高亮，顶栏出现 <kbd>X / N</kbd> 跳转栏，<kbd>Enter</kbd> / <kbd>Shift+Enter</kbd> 上下跳。<kbd>/</kbd> 一键聚焦搜索框。</p>
       </div>
       <div class="feat">
         <h3>
@@ -1301,7 +1301,7 @@
           </span>
           键盘导航
         </h3>
-        <p>搜索框按 <kbd>↓</kbd> 进入文件列表，<kbd>↑↓</kbd> 切换，<kbd>Enter</kbd> 打开当前文件，<kbd>Esc</kbd> 回搜索框。完全的键盘流，鼠标可以放一边。</p>
+        <p><kbd>⌘K</kbd> 唤出<strong>快速打开</strong>：敲几个字母模糊匹配文件名 / 备注 / 项目（<code>aprt</code> 能命中 <code>api-report</code>），<kbd>↑↓</kbd> 选、<kbd>Enter</kbd> 直接打开。<br>也可以走侧栏：搜索框按 <kbd>↓</kbd> 进入文件列表，<kbd>↑↓</kbd> 切换，<kbd>Enter</kbd> 打开，<kbd>Esc</kbd> 回搜索框。所有弹窗都能 <kbd>Esc</kbd> 关闭、<kbd>Tab</kbd> 焦点锁在面板内。完全的键盘流，鼠标可以放一边。</p>
       </div>
       <div class="feat">
         <h3>
@@ -1361,7 +1361,7 @@
           </span>
           导出 PDF
         </h3>
-        <p>顶栏一键导出当前文档为 PDF——后端调本机 Chrome / Edge / Brave headless 渲染，<strong>布局 100% 保真</strong>（不是 html2canvas 那种像素截图）。带阶段进度条：启动 → 渲染 → 写入。一键直保存到 Downloads，toast 里直接"在访达中显示"。没装 chromium 系浏览器自动降级到打印对话框。</p>
+        <p>顶栏一键导出当前文档为 PDF——<strong>HTML 与 Markdown 都支持</strong>，后端调本机 Chrome / Edge / Brave headless 渲染，<strong>布局 100% 保真</strong>（不是 html2canvas 那种像素截图）。Markdown 走专门的打印版排版：不带目录侧栏、配色钉回浅色（深色系统下不会导出一张墨黑的纸）、标题不吊在页尾、代码块与表格尽量不被跨页切断、外链把地址打印出来。带阶段进度条：启动 → 渲染 → 写入。一键直保存到 Downloads，toast 里直接"在访达中显示"。没装 chromium 系浏览器自动降级到打印对话框。</p>
       </div>
       <div class="feat">
         <h3>
@@ -1384,7 +1384,7 @@
           </span>
           局域网分享 + 二维码
         </h3>
-        <p>评审现场要让同事看一份 HTML / Markdown 文档？文件行 hover 出 🔗 按钮——一键生成不可猜的 token URL，弹出大二维码同事手机扫码即看（同 Wi-Fi 即可）。<strong>Markdown 分享链接会直接展示渲染后的预览页面，而不是 Markdown 原文</strong>；顶栏 dashboard 仅本机访问，其他人只能通过分享链接访问被分享的文件。可标记多个文件，<strong>一键停止全部</strong>，评审完即关。Atlas 重启 token 不失效。</p>
+        <p>评审现场要让同事看一份 HTML / Markdown 文档？文件行 hover 出 🔗 按钮——一键生成不可猜的 token URL，弹出大二维码同事手机扫码即看（同 Wi-Fi 即可）。<strong>Markdown 分享链接会直接展示渲染后的预览页面，而不是 Markdown 原文</strong>；顶栏 dashboard 仅本机访问。<br><strong>默认只放行这份文档真正引用到的资源</strong>（图片 / CSS / 脚本），同目录下的其它文件访问不到——分享一份报告不等于把整个目录开放出去。页面在 JS 里动态拼资源路径导致缺图时，可在面板里显式切成「同目录全部资源」。<strong>链接默认 2 小时后自动失效</strong>（可选 30 分钟 / 24 小时 / 不过期），面板实时显示剩余时间；也可以随时<strong>一键停止全部</strong>。</p>
       </div>
       <div class="feat">
         <h3>

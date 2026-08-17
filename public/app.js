@@ -51,6 +51,13 @@ const els = {
   btnReloadPreview: document.getElementById('btn-reload-preview'),
   btnExportPdf: document.getElementById('btn-export-pdf'),
   btnShare: document.getElementById('btn-share'),
+  btnDiff: document.getElementById('btn-diff'),
+  diffPanel: document.getElementById('diff-panel'),
+  diffBody: document.getElementById('diff-body'),
+  diffStats: document.getElementById('diff-stats'),
+  diffContext: document.getElementById('diff-context'),
+  diffAccept: document.getElementById('diff-accept'),
+  diffClose: document.getElementById('diff-close'),
   btnEdit: document.getElementById('btn-edit'),
   btnEditSave: document.getElementById('btn-edit-save'),
   btnEditCancel: document.getElementById('btn-edit-cancel'),
@@ -65,6 +72,10 @@ const els = {
   shareUrls: document.getElementById('share-urls'),
   shareOpenBtn: document.getElementById('share-open-btn'),
   shareStopBtn: document.getElementById('share-stop-btn'),
+  shareTtl: document.getElementById('share-ttl'),
+  shareScope: document.getElementById('share-scope'),
+  shareExpiry: document.getElementById('share-expiry'),
+  shareScopeHint: document.getElementById('share-scope-hint'),
   shareList: document.getElementById('share-list'),
   shareStopAllBtn: document.getElementById('share-stop-all-btn'),
   rootInput: document.getElementById('root-input'),
@@ -95,6 +106,11 @@ const els = {
   mdEditor: document.getElementById('md-editor'),
   mdSource: document.getElementById('md-source'),
   mdPreview: document.getElementById('md-preview'),
+  mdEditorSplit: document.getElementById('md-editor-split'),
+  mdToolbar: document.querySelector('.md-toolbar'),
+  mdOutline: document.getElementById('md-outline'),
+  mdOutlineList: document.getElementById('md-outline-list'),
+  mdOutlineToggle: document.getElementById('md-outline-toggle'),
   // 设置：文档类型单选
   doctypeRadios: document.querySelectorAll('input[name="doctype"]'),
 };
@@ -172,6 +188,148 @@ function showToast({ kind = 'info', text = '', secondary = '', duration = 2800, 
   els.toastContainer.appendChild(t);
   if (!progress && duration > 0) setTimeout(close, duration);
   return { close, setText, setSecondary, el: t };
+}
+
+// ---------- 弹窗基础设施：Esc 关闭 / 焦点陷阱 / 焦点归还 ----------
+// 所有弹窗（设置、分享、确认框）共用一个栈。原来的弹窗既不能按 Esc 关闭，
+// 也没有 role=dialog / aria-modal，Tab 会跑到弹窗背后的侧边栏按钮上。
+const openModals = [];
+const FOCUSABLE_SELECTOR = [
+  'a[href]', 'button:not([disabled])', 'input:not([disabled])',
+  'select:not([disabled])', 'textarea:not([disabled])', '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+function focusablesIn(panel) {
+  return [...panel.querySelectorAll(FOCUSABLE_SELECTOR)]
+    .filter(el => !el.hasAttribute('hidden') && el.offsetParent !== null);
+}
+
+function pushModal({ panel, close, initialFocus }) {
+  const entry = { panel, close, prevFocus: document.activeElement };
+  openModals.push(entry);
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-modal', 'true');
+  if (!panel.hasAttribute('tabindex')) panel.setAttribute('tabindex', '-1');
+  requestAnimationFrame(() => {
+    const target = initialFocus || focusablesIn(panel)[0] || panel;
+    try { target.focus(); } catch {}
+  });
+  return entry;
+}
+
+function popModal(entry) {
+  const i = openModals.indexOf(entry);
+  if (i >= 0) openModals.splice(i, 1);
+  if (entry && entry.prevFocus && document.contains(entry.prevFocus)) {
+    try { entry.prevFocus.focus(); } catch {}
+  }
+}
+
+// 用 capture 阶段：要先于其它全局快捷键处理，避免 Esc 同时清掉搜索框
+document.addEventListener('keydown', (e) => {
+  if (!openModals.length) return;
+  const top = openModals[openModals.length - 1];
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    top.close();
+    return;
+  }
+  if (e.key === 'Tab') {
+    const list = focusablesIn(top.panel);
+    if (!list.length) return;
+    const first = list[0], last = list[list.length - 1];
+    const inPanel = top.panel.contains(document.activeElement);
+    if (e.shiftKey && (document.activeElement === first || !inPanel)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (document.activeElement === last || !inPanel)) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+}, true);
+
+// ---------- 应用内确认 / 输入对话框 ----------
+// 替代原生 confirm() / prompt()：原生弹窗与整体设计语言割裂，而且浏览器可能
+// 出现"阻止此页面创建更多对话框"从而让操作彻底点不动。
+function showDialog({
+  title, body, confirmText = '确定', cancelText = '取消', danger = false, input = null,
+} = {}) {
+  return new Promise((resolve) => {
+    const root = document.createElement('div');
+    root.className = 'modal atlas-dialog';
+    root.innerHTML = `
+      <div class="modal-backdrop" data-dialog-cancel></div>
+      <div class="modal-panel dialog-panel" tabindex="-1">
+        <header class="modal-header"><h2></h2></header>
+        <div class="dialog-body"></div>
+        <div class="dialog-actions">
+          <button type="button" class="dialog-cancel" data-dialog-cancel></button>
+          <button type="button" class="dialog-confirm"></button>
+        </div>
+      </div>`;
+    const panel = root.querySelector('.dialog-panel');
+    panel.querySelector('h2').textContent = title || '确认';
+    const bodyEl = root.querySelector('.dialog-body');
+    if (body) {
+      const p = document.createElement('p');
+      p.className = 'dialog-text';
+      p.textContent = body;   // 配合 CSS white-space:pre-line 保留换行
+      bodyEl.appendChild(p);
+    }
+    let inputEl = null;
+    if (input) {
+      inputEl = document.createElement('input');
+      inputEl.type = 'text';
+      inputEl.className = 'dialog-input';
+      inputEl.spellcheck = false;
+      inputEl.value = input.value || '';
+      inputEl.placeholder = input.placeholder || '';
+      inputEl.setAttribute('aria-label', input.label || title || '输入');
+      bodyEl.appendChild(inputEl);
+    }
+    const okBtn = root.querySelector('.dialog-confirm');
+    const cancelBtn = root.querySelector('.dialog-cancel');
+    okBtn.textContent = confirmText;
+    cancelBtn.textContent = cancelText;
+    if (danger) okBtn.classList.add('danger');
+
+    let entry = null;
+    let done = false;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      if (entry) popModal(entry);
+      root.remove();
+      resolve(value);
+    };
+    const close = () => finish(input ? null : false);
+    root.addEventListener('click', (e) => {
+      if (e.target.dataset && e.target.dataset.dialogCancel !== undefined) close();
+    });
+    okBtn.addEventListener('click', () => finish(input ? (inputEl.value.trim() || null) : true));
+    cancelBtn.addEventListener('click', close);
+    if (inputEl) {
+      inputEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          finish(inputEl.value.trim() || null);
+        }
+      });
+    }
+    document.body.appendChild(root);
+    entry = pushModal({ panel, close, initialFocus: inputEl || okBtn });
+    if (inputEl) requestAnimationFrame(() => { try { inputEl.select(); } catch {} });
+  });
+}
+
+function showConfirm(opts) {
+  return showDialog(opts);
+}
+// 返回 trim 后的字符串，取消 / 空输入返回 null
+function showPrompt({ title, body, label, value, placeholder, confirmText = '确定' } = {}) {
+  return showDialog({ title, body, confirmText, input: { label, value, placeholder } });
 }
 
 // ---------- 侧边栏宽度 / 收起 ----------
@@ -344,6 +502,11 @@ async function fetchState() {
     setSaveStatus('idle');
     render();
     renderRecent();
+    // 对比面板开着的时候，如果当前文件在磁盘上又被改了，自动刷新差异
+    if (diffState.open && diffState.path) {
+      const f = state.files[diffState.path];
+      if (f && f.mtime !== diffState.mtime) loadDiff();
+    }
   } catch (e) {
     // 被后来的请求主动取代：不是故障，静默退场（重试由接替者负责）
     if (ctrl.superseded) return;
@@ -389,14 +552,34 @@ function scheduleSaveTree() {
 }
 
 // ---------- 过滤 ----------
+// 查询词切分：空白分隔多关键词按 AND 组合，引号内当成一个短语。
+// 必须和 server 的 parseQueryTerms 保持一致，否则前端过滤和内容搜索结果会打架。
+function parseQueryTerms(q) {
+  const terms = [];
+  const re = /"([^"]+)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(String(q || '').toLowerCase())) !== null) {
+    const t = (m[1] || m[2] || '').trim();
+    if (t) terms.push(t);
+  }
+  return terms;
+}
+
 function fileMatches(file) {
   if (state.onlyUnread && !file.unread) return false;
   if (!state.search) return true;
-  const q = state.search.toLowerCase();
-  return file.name.toLowerCase().includes(q)
-    || file.relPath.toLowerCase().includes(q)
-    || (file.alias && file.alias.toLowerCase().includes(q))
-    || state.contentMatches.has(file.path);   // 内容匹配
+  const terms = parseQueryTerms(state.search);
+  if (!terms.length) return true;
+  // 内容命中由后端判定（它已经做过 AND）
+  if (state.contentMatches.has(file.path)) return true;
+  // 文件名 / 备注 / 路径：拼成一条待搜文本，要求每个关键词都出现
+  const haystack = [
+    file.name,
+    file.relPath,
+    file.alias || '',
+    file.projectName || '',
+  ].join('\n').toLowerCase();
+  return terms.every(t => haystack.includes(t));
 }
 function nodeMatches(node) {
   if (node.type === 'file') {
@@ -538,9 +721,9 @@ function renderFolder(folder) {
     ${counts.unread > 0 ? `<span class="folder-unread-dot" title="${counts.unread} 个未读"></span>` : ''}
     <span class="folder-count">${counts.files}</span>
     <span class="folder-actions">
-      <button data-act="new-sub" title="在此分组内新建子分组">＋</button>
-      <button data-act="rename" title="重命名">✎</button>
-      <button data-act="delete" title="删除分组（文件下次扫描会回到所属项目）">✕</button>
+      <button data-act="new-sub" title="在此分组内新建子分组" aria-label="在「${escapeHtml(folder.name)}」内新建子分组"><span aria-hidden="true">＋</span></button>
+      <button data-act="rename" title="重命名" aria-label="重命名分组「${escapeHtml(folder.name)}」"><span aria-hidden="true">✎</span></button>
+      <button data-act="delete" title="删除分组（文件下次扫描会回到所属项目）" aria-label="删除分组「${escapeHtml(folder.name)}」"><span aria-hidden="true">✕</span></button>
     </span>
   `;
   folderEl.appendChild(header);
@@ -577,7 +760,13 @@ function renderFolder(folder) {
   header.addEventListener('pointercancel', () => { hpdDown = false; });
   header.querySelector('[data-act="new-sub"]').addEventListener('click', async (e) => {
     e.stopPropagation();
-    const name = prompt(`在「${folder.name}」中新建子分组：`, '新分组');
+    const name = await showPrompt({
+      title: '新建子分组',
+      body: `新分组会建在「${folder.name}」里面。`,
+      label: '分组名称',
+      value: '新分组',
+      confirmText: '创建',
+    });
     if (!name) return;
     const res = await fetch('/api/folders/new', {
       method: 'POST',
@@ -618,12 +807,11 @@ function renderFile(file, node) {
   const fileEl = document.createElement('div');
   // 是否是"仅内容匹配"（文件名/备注/路径都不命中，只内容命中）
   const snippet = state.contentMatches.get(file.path);
-  const q = state.search ? state.search.toLowerCase() : '';
-  const isNameMatch = q && (
-    file.name.toLowerCase().includes(q)
-    || file.relPath.toLowerCase().includes(q)
-    || (file.alias && file.alias.toLowerCase().includes(q))
-  );
+  const terms = state.search ? parseQueryTerms(state.search) : [];
+  const isNameMatch = terms.length > 0 && (() => {
+    const haystack = [file.name, file.relPath, file.alias || ''].join('\n').toLowerCase();
+    return terms.every(t => haystack.includes(t));
+  })();
   const contentOnly = !!snippet && !isNameMatch;
   const dtype = isMdFile(file) ? 'md' : 'html';
   fileEl.className = 'file'
@@ -656,11 +844,12 @@ function renderFile(file, node) {
     </span>
     <span class="file-mtime">${fmtMtime(file.mtime)}</span>
     <span class="file-actions">
-      <button data-act="share" title="分享到局域网（生成可访问链接 + 二维码）">
-        <svg viewBox="0 0 14 14" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8L9 5M5 8a2 2 0 0 1-2-2 2 2 0 0 1 4 0M9 5a2 2 0 0 1 2-2 2 2 0 0 1 0 4 2 2 0 0 1-2-2M5 8a2 2 0 0 0-2 2 2 2 0 0 0 4 0 2 2 0 0 0-2-2"/></svg>
+      <button data-act="share" title="分享到局域网（生成可访问链接 + 二维码）" aria-label="分享「${escapeHtml(displayName)}」到局域网">
+        <svg viewBox="0 0 14 14" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 8L9 5M5 8a2 2 0 0 1-2-2 2 2 0 0 1 4 0M9 5a2 2 0 0 1 2-2 2 2 0 0 1 0 4 2 2 0 0 1-2-2M5 8a2 2 0 0 0-2 2 2 2 0 0 0 4 0 2 2 0 0 0-2-2"/></svg>
       </button>
-      <button data-act="alias" title="备注名（不改源文件名）">✎</button>
-      <button data-act="reveal" title="在访达中显示">📂</button>
+      <button data-act="rename-file" title="重命名磁盘文件" aria-label="重命名文件「${escapeHtml(file.name)}」"><span aria-hidden="true">Aa</span></button>
+      <button data-act="alias" title="备注名（不改源文件名）" aria-label="给「${escapeHtml(displayName)}」起备注名"><span aria-hidden="true">✎</span></button>
+      <button data-act="reveal" title="在访达中显示" aria-label="在访达中显示「${escapeHtml(displayName)}」"><span aria-hidden="true">📂</span></button>
     </span>
   `;
   // 用 pointerdown + pointerup 替代 click：
@@ -693,6 +882,10 @@ function renderFile(file, node) {
   fileEl.querySelector('.file-name').addEventListener('dblclick', (e) => {
     e.stopPropagation();
     startEditAlias(file, e.currentTarget);
+  });
+  fileEl.querySelector('[data-act="rename-file"]').addEventListener('click', (e) => {
+    e.stopPropagation();
+    renameFileOnDisk(file);
   });
   fileEl.querySelector('[data-act="reveal"]').addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -830,6 +1023,39 @@ function startRenameFolder(folder, nameEl) {
   });
 }
 
+// 重命名磁盘上的真实文件（区别于 alias 备注名：那个只改显示）
+async function renameFileOnDisk(file) {
+  const next = await showPrompt({
+    title: '重命名文件',
+    body: `会改动磁盘上的真实文件名。\n当前：${file.relPath}`,
+    label: '新文件名（含扩展名）',
+    value: file.name,
+    confirmText: '重命名',
+  });
+  if (!next || next === file.name) return;
+  try {
+    const r = await fetch('/api/rename', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: file.path, name: next }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      showToast({ kind: 'error', text: '重命名失败', secondary: data.error || ('HTTP ' + r.status) });
+      return;
+    }
+    // 当前正预览 / 正编辑的就是它 → 让新路径接管，避免预览指向一个已不存在的文件
+    const wasActive = state.activeFilePath === file.path;
+    if (editState.active && editState.path === file.path) editState.path = data.path;
+    if (wasActive) state.activeFilePath = data.path;
+    await fetchState();
+    if (wasActive && state.files[data.path]) setActiveFile(data.path, true);
+    showToast({ kind: 'success', text: '已重命名', secondary: data.name });
+  } catch (e) {
+    showToast({ kind: 'error', text: '重命名失败', secondary: e.message });
+  }
+}
+
 function startEditAlias(file, nameEl) {
   const baseName = stripDocExt(file.name);
   const original = file.alias || baseName;
@@ -857,7 +1083,7 @@ function startEditAlias(file, nameEl) {
   });
 }
 
-function deleteFolder(folder) {
+async function deleteFolder(folder) {
   // 判断这个 folder 是不是磁盘扫描自动建的"项目分组"（projectName 同名）：
   // 如果是 → 走"归档"路径，下次扫描跳过同名 projectName，不再被自动重建
   // 如果不是（用户自建子分组）→ 单纯删除，里面的文件下次扫描会回到所属项目分组
@@ -869,10 +1095,16 @@ function deleteFolder(folder) {
 
   if (isAutoProject) {
     // 归档对话——告诉用户这是隐藏，不是删除文件
-    const prompt = counts.files > 0
-      ? `归档分组「${folder.name}」？\n\n该分组下有 ${counts.files} 个文档（磁盘文件不会被删），归档后将不再扫描，可在 设置 → 已归档分组 中恢复。`
-      : `归档分组「${folder.name}」？归档后将不再扫描，可在 设置 → 已归档分组 中恢复。`;
-    if (!confirm(prompt)) return;
+    const detail = counts.files > 0
+      ? `该分组下有 ${counts.files} 个文档（磁盘文件不会被删），归档后将不再扫描，可在 设置 → 已归档分组 中恢复。`
+      : '归档后将不再扫描，可在 设置 → 已归档分组 中恢复。';
+    const ok = await showConfirm({
+      title: `归档分组「${folder.name}」？`,
+      body: detail,
+      confirmText: '归档',
+      cancelText: '不归档',
+    });
+    if (!ok) return;
 
     fetch('/api/archive', {
       method: 'POST',
@@ -900,7 +1132,13 @@ function deleteFolder(folder) {
 
   // 自建分组 —— 原行为（删完文件下次扫描会回到所属项目分组）
   if (counts.files > 0) {
-    if (!confirm(`分组「${folder.name}」中有 ${counts.files} 个文件（含子分组），删除后文件下次扫描会回到所属项目分组。继续？`)) return;
+    const ok = await showConfirm({
+      title: `删除分组「${folder.name}」？`,
+      body: `分组中有 ${counts.files} 个文件（含子分组）。删除只是拆掉这个分组，文件下次扫描会回到所属项目分组，磁盘文件不受影响。`,
+      confirmText: '删除分组',
+      danger: true,
+    });
+    if (!ok) return;
   }
   removeFolderFromTree(state.tree, folder.id);
   scheduleSaveTree();
@@ -1065,6 +1303,13 @@ function findFolderById(nodes, id) {
 async function openFile(filePath) {
   const file = state.files[filePath];
   if (!file) return;
+  // 编辑模式下切换到别的文件：先确认丢弃改动再退出编辑
+  // （放在这里而不是 setActiveFile 里：确认框是异步的，而 setActiveFile
+  //   也被 render() 以 doNavigate=false 同步调用，不该被 await 卡住）
+  if (editState.active && editState.path && editState.path !== filePath) {
+    if (!(await confirmDiscardIfDirty())) return;
+    exitEditMode({ restore: false });
+  }
   setActiveFile(filePath, true);
 
   // 更新 recent（即时本地，server 端会通过 /api/seen 同步）
@@ -1122,11 +1367,6 @@ function updateUnreadDecorations() {
 }
 
 function setActiveFile(filePath, doNavigate) {
-  // 编辑模式下切换到别的文件：先确认丢弃改动并退出编辑
-  if (doNavigate && editState.active && editState.path && editState.path !== filePath) {
-    if (!confirmDiscardIfDirty()) return;
-    exitEditMode({ restore: false });
-  }
   state.activeFilePath = filePath;
   els.tree.querySelectorAll('.file.active').forEach(e => e.classList.remove('active'));
   // 切换 active 时清除键盘焦点态，避免"两个被选中"的视觉异常
@@ -1152,15 +1392,17 @@ function setActiveFile(filePath, doNavigate) {
   els.btnOpenExternal.disabled = false;
   els.btnCopyPath.disabled = false;
   els.btnReloadPreview.disabled = false;
-  // PDF 导出目前仅支持 HTML；md 文件禁用该按钮
-  els.btnExportPdf.disabled = isMdFile(file);
-  els.btnExportPdf.title = isMdFile(file) ? 'PDF 导出暂仅支持 HTML 文档' : '导出为 PDF 保存到 Downloads';
+  els.btnExportPdf.disabled = false;
+  els.btnExportPdf.title = '导出为 PDF 保存到 Downloads';
   els.btnShare.disabled = false;
   els.btnEdit.disabled = false;
   // 已在分享中的文件，让顶栏 share 按钮高亮提示状态
   els.btnShare.classList.toggle('shared', state.sharesByPath && state.sharesByPath.has(file.path));
+  updateDiffButton();
 
   if (doNavigate) {
+    // 切到别的文件时关掉对比面板（面板内容是上一个文件的）
+    if (diffState.open && diffState.path !== filePath) closeDiff();
     els.preview.classList.remove('hidden');
     els.emptyState.classList.add('hidden');
     // 切换前淡出，加载完成后淡入；同 url 直接显示不闪烁
@@ -1255,9 +1497,15 @@ function applyPendingScroll(target) {
   requestAnimationFrame(doScroll);
 }
 
-function confirmDiscardIfDirty() {
+async function confirmDiscardIfDirty() {
   if (!editState.active || !editState.dirty) return true;
-  return window.confirm('当前有未保存的编辑改动，确定要放弃吗？');
+  return showConfirm({
+    title: '放弃未保存的改动？',
+    body: '当前文档有还没保存的编辑内容，离开会丢弃它们。\n（草稿会在本地留 7 天，下次进入编辑时可以恢复）',
+    confirmText: '放弃改动',
+    cancelText: '继续编辑',
+    danger: true,
+  });
 }
 
 // 进入编辑模式：把 iframe 切到带锚点的编辑文档
@@ -1293,7 +1541,243 @@ let mdRenderScheduled = false;
 
 function renderMdPreview() {
   if (!els.mdPreview || !window.AtlasMarkdown) return;
-  els.mdPreview.innerHTML = window.AtlasMarkdown.render(els.mdSource.value);
+  // annotateRaw：给每个顶层块记上原始 Markdown 源码。用户在预览里改动时
+  // 只有被改过的块会重新序列化，其余原样吐回——这样"改一个字"不会把
+  // 表格对齐、段落软换行这些渲染器无法完整往返的东西一起改掉。
+  els.mdPreview.innerHTML = window.AtlasMarkdown.renderBody(els.mdSource.value, { annotateRaw: true });
+  scheduleMdOutline();
+}
+
+// 大纲重建比渲染重（要建 DOM 按钮），单独用一个更慢的节流，不跟着每帧渲染跑
+let mdOutlineTimer = null;
+function scheduleMdOutline() {
+  if (!mdOutlineVisible) return;
+  if (mdOutlineTimer) clearTimeout(mdOutlineTimer);
+  mdOutlineTimer = setTimeout(() => {
+    mdOutlineTimer = null;
+    renderMdOutline();
+  }, 250);
+}
+
+// ---------- 编辑器大纲（第三栏） ----------
+// 只读预览页早就有可折叠 TOC，但一进编辑模式就没了，长文档定位全靠滚。
+// 这里从预览面板已渲染的标题直接生成，点击滚动预览区——滚动同步会带着源码栏一起走。
+let mdOutlineVisible = localStorage.getItem('atlas:mdOutline') === '1';
+let mdOutlineHeadings = [];
+
+function renderMdOutline() {
+  if (!els.mdOutlineList || !els.mdPreview) return;
+  const heads = [...els.mdPreview.querySelectorAll('h1,h2,h3,h4,h5,h6')];
+  mdOutlineHeadings = heads;
+  els.mdOutlineList.innerHTML = '';
+  if (!heads.length) {
+    const empty = document.createElement('div');
+    empty.className = 'md-outline-empty';
+    empty.textContent = '这篇文档还没有标题';
+    els.mdOutlineList.appendChild(empty);
+    return;
+  }
+  heads.forEach((h, idx) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'md-outline-item';
+    btn.dataset.level = h.tagName[1];
+    btn.dataset.idx = String(idx);
+    const text = (h.textContent || '').trim();
+    btn.textContent = text || '(空标题)';
+    btn.title = text;
+    btn.addEventListener('click', () => {
+      h.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      setMdOutlineActive(idx);
+      // 钉住高亮，别让平滑滚动过程中的 scroll 事件把它抢回去。
+      // 文档末尾的标题滚不到面板顶部（下面没有更多内容了），按位置算出来的
+      // "当前章节"会一直是上一个——用户点了哪个就该高亮哪个。
+      mdOutlinePinnedUntil = Date.now() + 800;
+    });
+    els.mdOutlineList.appendChild(btn);
+  });
+  updateMdOutlineActive();
+}
+
+function setMdOutlineActive(idx) {
+  if (!els.mdOutlineList) return;
+  els.mdOutlineList.querySelectorAll('.md-outline-item.active')
+    .forEach(e => e.classList.remove('active'));
+  const el = els.mdOutlineList.querySelector(`.md-outline-item[data-idx="${idx}"]`);
+  if (el) el.classList.add('active');
+}
+
+// 按预览区滚动位置高亮当前章节：取最后一个顶边越过面板上沿的标题
+let mdOutlinePinnedUntil = 0;
+function updateMdOutlineActive() {
+  if (!mdOutlineVisible || !mdOutlineHeadings.length || !els.mdPreview) return;
+  if (Date.now() < mdOutlinePinnedUntil) return;   // 刚点过大纲，别覆盖用户的选择
+  const top = els.mdPreview.getBoundingClientRect().top + 8;
+  let active = 0;
+  for (let i = 0; i < mdOutlineHeadings.length; i++) {
+    if (mdOutlineHeadings[i].getBoundingClientRect().top <= top + 40) active = i;
+    else break;
+  }
+  setMdOutlineActive(active);
+}
+
+function applyMdOutlineVisibility() {
+  if (!els.mdOutline || !els.mdOutlineToggle) return;
+  els.mdOutline.classList.toggle('hidden', !mdOutlineVisible);
+  els.mdOutlineToggle.setAttribute('aria-pressed', String(mdOutlineVisible));
+  if (mdOutlineVisible) renderMdOutline();
+}
+
+if (els.mdOutlineToggle) {
+  els.mdOutlineToggle.addEventListener('click', () => {
+    mdOutlineVisible = !mdOutlineVisible;
+    localStorage.setItem('atlas:mdOutline', mdOutlineVisible ? '1' : '0');
+    applyMdOutlineVisibility();
+  });
+}
+
+// ---------- 分栏拖拽 ----------
+// 原来 50/50 是写死的（.md-editor-split { flex: 0 0 1px }，没有任何拖拽逻辑）。
+// 复用侧边栏 resizer 那套 pointer capture 方案：指针被拖出窗口也能正确收尾。
+const MD_SPLIT_MIN = 15, MD_SPLIT_MAX = 85, MD_SPLIT_DEFAULT = 50;
+
+function applyMdSplit(pct) {
+  const v = Math.min(MD_SPLIT_MAX, Math.max(MD_SPLIT_MIN, pct));
+  els.mdEditor.style.setProperty('--md-split', v + '%');
+  if (els.mdEditorSplit) els.mdEditorSplit.setAttribute('aria-valuenow', String(Math.round(v)));
+  return v;
+}
+
+(function setupMdSplit() {
+  if (!els.mdEditorSplit || !els.mdEditor) return;
+  const saved = parseFloat(localStorage.getItem('atlas:mdSplit'));
+  let current = applyMdSplit(Number.isFinite(saved) ? saved : MD_SPLIT_DEFAULT);
+
+  let dragging = false;
+  let pointerId = null;
+  let rafId = 0;
+  let pending = null;
+
+  const flush = () => {
+    rafId = 0;
+    if (pending != null) current = applyMdSplit(pending);
+  };
+  const endDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    if (pointerId != null) {
+      try { els.mdEditorSplit.releasePointerCapture(pointerId); } catch {}
+      pointerId = null;
+    }
+    document.body.classList.remove('md-splitting');
+    els.mdEditorSplit.classList.remove('dragging');
+    localStorage.setItem('atlas:mdSplit', String(Math.round(current)));
+  };
+
+  els.mdEditorSplit.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    dragging = true;
+    pointerId = e.pointerId;
+    try { els.mdEditorSplit.setPointerCapture(e.pointerId); } catch {}
+    document.body.classList.add('md-splitting');
+    els.mdEditorSplit.classList.add('dragging');
+  });
+  els.mdEditorSplit.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const rect = els.mdEditor.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    pending = ((e.clientX - rect.left) / rect.width) * 100;
+    if (!rafId) rafId = requestAnimationFrame(flush);
+  });
+  els.mdEditorSplit.addEventListener('pointerup', endDrag);
+  els.mdEditorSplit.addEventListener('pointercancel', endDrag);
+  window.addEventListener('blur', endDrag);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) endDrag(); });
+
+  // 双击复位
+  els.mdEditorSplit.addEventListener('dblclick', () => {
+    current = applyMdSplit(MD_SPLIT_DEFAULT);
+    localStorage.setItem('atlas:mdSplit', String(MD_SPLIT_DEFAULT));
+  });
+  // 键盘可达：方向键微调
+  els.mdEditorSplit.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 10 : 2;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); current = applyMdSplit(current - step); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); current = applyMdSplit(current + step); }
+    else if (e.key === 'Home') { e.preventDefault(); current = applyMdSplit(MD_SPLIT_DEFAULT); }
+    else return;
+    localStorage.setItem('atlas:mdSplit', String(Math.round(current)));
+  });
+  els.mdEditorSplit.setAttribute('aria-valuemin', String(MD_SPLIT_MIN));
+  els.mdEditorSplit.setAttribute('aria-valuemax', String(MD_SPLIT_MAX));
+})();
+
+// ---------- 格式工具条 ----------
+// 快捷键已经有了，但没有任何可见入口——工具条主要解决"发现不了"的问题，
+// title 里带上快捷键，用两次就能记住。
+function mdLinePrefix(prefix, { toggle = true } = {}) {
+  const ta = els.mdSource;
+  const v = ta.value;
+  const s = ta.selectionStart, e = ta.selectionEnd;
+  const blockStart = v.lastIndexOf('\n', s - 1) + 1;
+  let blockEnd = v.indexOf('\n', e);
+  if (blockEnd < 0) blockEnd = v.length;
+  const lines = v.slice(blockStart, blockEnd).split('\n');
+  // 已经全部带该前缀 → 再点一次去掉
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const has = new RegExp('^\\s*' + escaped);
+  const allHave = toggle && lines.every(l => !l.trim() || has.test(l));
+  const next = lines.map(l => {
+    if (!l.trim()) return l;
+    if (allHave) return l.replace(has, '');
+    return prefix + l;
+  }).join('\n');
+  mdReplaceRange(blockStart, blockEnd, next);
+  ta.setSelectionRange(blockStart, blockStart + next.length);
+}
+
+const MD_TOOLBAR_ACTIONS = {
+  bold: () => mdWrapSelection('**', '粗体'),
+  italic: () => mdWrapSelection('*', '斜体'),
+  code: () => mdWrapSelection('`', 'code'),
+  link: () => mdInsertLink(),
+  h2: () => mdLinePrefix('## '),
+  ul: () => mdLinePrefix('- '),
+  task: () => mdLinePrefix('- [ ] '),
+  quote: () => mdLinePrefix('> '),
+};
+
+if (els.mdToolbar) {
+  els.mdToolbar.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-md-cmd]');
+    if (!btn) return;
+    const fn = MD_TOOLBAR_ACTIONS[btn.dataset.mdCmd];
+    if (fn) fn();
+  });
+  // 按下工具条按钮不要抢走 textarea 的选区
+  els.mdToolbar.addEventListener('mousedown', (e) => {
+    if (e.target.closest('button[data-md-cmd]')) e.preventDefault();
+  });
+}
+
+// 标记"用户真正改过"的顶层块。在 beforeinput 阶段做：那时 DOM 还没变，
+// selection 仍指向原始节点，能稳定定位到所属的顶层块。
+function markMdEditedBlock() {
+  if (!els.mdPreview) return;
+  const sel = document.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const mark = (node) => {
+    let n = node;
+    if (n && n.nodeType === 3) n = n.parentElement;
+    while (n && n.parentElement && n.parentElement !== els.mdPreview) n = n.parentElement;
+    if (n && n.nodeType === 1 && n.parentElement === els.mdPreview) {
+      n.setAttribute('data-md-dirty', '1');
+    }
+  };
+  const range = sel.getRangeAt(0);
+  mark(range.startContainer);
+  if (range.endContainer !== range.startContainer) mark(range.endContainer);
 }
 // 每帧渲染：合并连续输入，视觉上即时更新，不卡输入
 function scheduleMdRender() {
@@ -1303,6 +1787,71 @@ function scheduleMdRender() {
     mdRenderScheduled = false;
     renderMdPreview();
   });
+}
+
+// ---------- 未保存草稿：崩溃 / 误关标签页后可恢复 ----------
+// beforeunload 只能拦住"用户主动关闭"，进程崩溃、断电、强制退出都拦不住。
+// 编辑期间把内容定期写进 localStorage，下次进入同一文件的编辑模式时提示恢复。
+const MD_DRAFT_KEY = 'atlas:mdDrafts';
+const MD_DRAFT_MAX = 8;
+const MD_DRAFT_TTL_MS = 7 * 24 * 3600 * 1000;
+
+function loadMdDrafts() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(MD_DRAFT_KEY) || '{}');
+    if (!raw || typeof raw !== 'object') return {};
+    // 顺手清掉过期条目
+    const now = Date.now();
+    let changed = false;
+    for (const [k, v] of Object.entries(raw)) {
+      if (!v || typeof v.content !== 'string' || now - (v.savedAt || 0) > MD_DRAFT_TTL_MS) {
+        delete raw[k];
+        changed = true;
+      }
+    }
+    if (changed) localStorage.setItem(MD_DRAFT_KEY, JSON.stringify(raw));
+    return raw;
+  } catch { return {}; }
+}
+
+function writeMdDraft(path, content, baseHash) {
+  if (!path) return;
+  try {
+    const all = loadMdDrafts();
+    all[path] = { content, baseHash, savedAt: Date.now() };
+    // 超量时丢掉最旧的
+    const keys = Object.keys(all);
+    if (keys.length > MD_DRAFT_MAX) {
+      keys.sort((a, b) => (all[a].savedAt || 0) - (all[b].savedAt || 0));
+      for (const k of keys.slice(0, keys.length - MD_DRAFT_MAX)) delete all[k];
+    }
+    localStorage.setItem(MD_DRAFT_KEY, JSON.stringify(all));
+  } catch {}
+}
+
+function clearMdDraft(path) {
+  if (!path) return;
+  try {
+    const all = loadMdDrafts();
+    if (all[path]) {
+      delete all[path];
+      localStorage.setItem(MD_DRAFT_KEY, JSON.stringify(all));
+    }
+  } catch {}
+}
+
+let mdDraftTimer = null;
+function scheduleMdDraftSave() {
+  if (!editState.active || editState.kind !== 'md' || !editState.path) return;
+  if (mdDraftTimer) clearTimeout(mdDraftTimer);
+  mdDraftTimer = setTimeout(() => {
+    mdDraftTimer = null;
+    if (!editState.active || editState.kind !== 'md') return;
+    writeMdDraft(editState.path, els.mdSource.value, editState.baseHash);
+  }, 700);
+}
+function cancelMdDraftSave() {
+  if (mdDraftTimer) { clearTimeout(mdDraftTimer); mdDraftTimer = null; }
 }
 
 // 进入 Markdown 编辑模式：拉取源码 → 填入 textarea → 渲染预览 → 显示分栏编辑器
@@ -1319,6 +1868,26 @@ async function enterMdEditMode() {
   } catch (e) {
     showToast({ kind: 'error', text: '无法加载 Markdown 源码：' + e.message });
     return;
+  }
+
+  // 有未保存草稿且与磁盘内容不同 → 问用户要不要恢复
+  let content = data.content || '';
+  let restoredDraft = false;
+  const draft = loadMdDrafts()[filePath];
+  if (draft && typeof draft.content === 'string' && draft.content !== content) {
+    const when = fmtMtime(draft.savedAt);
+    const useDraft = await showConfirm({
+      title: '发现未保存的草稿',
+      body: `这个文件有一份 ${when} 的未保存编辑内容（可能是上次浏览器意外关闭留下的）。\n\n要恢复草稿，还是丢弃它、用磁盘上的当前内容？`,
+      confirmText: '恢复草稿',
+      cancelText: '丢弃草稿',
+    });
+    if (useDraft) {
+      content = draft.content;
+      restoredDraft = true;
+    } else {
+      clearMdDraft(filePath);
+    }
   }
 
   editState.active = true;
@@ -1341,13 +1910,18 @@ async function enterMdEditMode() {
     enterPct = max > 0 ? el.scrollTop / max : 0;
   } catch { enterPct = 0; }
 
-  els.mdSource.value = data.content || '';
+  els.mdSource.value = content;
   renderMdPreview();
+  if (restoredDraft) {
+    markDirty();
+    showToast({ kind: 'info', text: '已恢复未保存的草稿', secondary: '确认无误后按 ⌘S 保存' });
+  }
 
   updateEditToolbar();
   els.emptyState.classList.add('hidden');
   els.preview.classList.add('hidden');   // 隐藏 iframe，显示分栏编辑器
   els.mdEditor.classList.remove('hidden');
+  applyMdOutlineVisibility();            // 恢复上次的大纲显示状态
   // 预览区可直接编辑（所见即所得），编辑后实时同步回源码
   els.mdPreview.setAttribute('contenteditable', 'true');
   els.mdPreview.setAttribute('spellcheck', 'false');
@@ -1365,22 +1939,143 @@ async function enterMdEditMode() {
   });
 }
 
+// ---------- Markdown 源码框编辑辅助 ----------
+// 统一的"改源码"入口：优先走 execCommand('insertText') 以保留浏览器原生撤销栈
+// （直接赋值 textarea.value 会把 ⌘Z 历史清空，长文档编辑时很致命）
+function mdReplaceRange(start, end, text) {
+  const ta = els.mdSource;
+  ta.focus();
+  ta.setSelectionRange(start, end);
+  let ok = false;
+  try { ok = document.execCommand('insertText', false, text); } catch { ok = false; }
+  if (!ok) {
+    const v = ta.value;
+    ta.value = v.slice(0, start) + text + v.slice(end);
+    ta.setSelectionRange(start + text.length, start + text.length);
+  }
+  afterMdSourceEdit();
+}
+function afterMdSourceEdit() {
+  if (editState.active && editState.kind === 'md') markDirty();
+  scheduleMdRender();
+  scheduleMdDraftSave();
+}
+
+// 包裹 / 取消包裹选区（加粗、斜体、行内代码、删除线）
+function mdWrapSelection(marker, placeholder) {
+  const ta = els.mdSource;
+  const s = ta.selectionStart, e = ta.selectionEnd;
+  const v = ta.value;
+  const sel = v.slice(s, e);
+  const m = marker.length;
+  // 选区外侧已有标记 → 取消
+  if (v.slice(Math.max(0, s - m), s) === marker && v.slice(e, e + m) === marker) {
+    mdReplaceRange(s - m, e + m, sel);
+    ta.setSelectionRange(s - m, s - m + sel.length);
+    return;
+  }
+  // 选区内侧已含标记 → 取消
+  if (sel.length >= m * 2 && sel.startsWith(marker) && sel.endsWith(marker)) {
+    const inner = sel.slice(m, sel.length - m);
+    mdReplaceRange(s, e, inner);
+    ta.setSelectionRange(s, s + inner.length);
+    return;
+  }
+  const body = sel || placeholder;
+  mdReplaceRange(s, e, marker + body + marker);
+  ta.setSelectionRange(s + m, s + m + body.length);
+}
+
+// 插入链接：有选区时把选区当链接文字，光标落在 url 上便于直接输入
+function mdInsertLink() {
+  const ta = els.mdSource;
+  const s = ta.selectionStart, e = ta.selectionEnd;
+  const label = ta.value.slice(s, e) || '链接文字';
+  const urlPlaceholder = 'https://';
+  mdReplaceRange(s, e, '[' + label + '](' + urlPlaceholder + ')');
+  const urlStart = s + 1 + label.length + 2;
+  ta.setSelectionRange(urlStart, urlStart + urlPlaceholder.length);
+}
+
+// 列表行解析：缩进 / 标记 / 序号 / 分隔符 / 标记后空白 / 任务框 / 正文
+const MD_LIST_LINE = /^(\s*)(?:([-*+])|(\d+)([.)]))(\s+)(\[[ xX]\][ \t]+)?(.*)$/;
+
+// 回车自动续列表：`- foo` 回车 → 自动补 `- `；有序列表序号自增；
+// 在空列表项上回车 → 结束列表（清掉标记），符合主流编辑器行为
+function handleMdEnter() {
+  const ta = els.mdSource;
+  if (ta.selectionStart !== ta.selectionEnd) return false;
+  const pos = ta.selectionStart;
+  const v = ta.value;
+  const lineStart = v.lastIndexOf('\n', pos - 1) + 1;
+  const line = v.slice(lineStart, pos);
+  const m = line.match(MD_LIST_LINE);
+  if (!m) return false;
+  const indent = m[1];
+  const bullet = m[2];
+  const num = m[3];
+  const delim = m[4];
+  const space = m[5];
+  const task = m[6];
+  const content = m[7];
+  // 空列表项：结束列表
+  if (!content.trim()) {
+    mdReplaceRange(lineStart, pos, indent);
+    return true;
+  }
+  const nextMarker = num ? (String(parseInt(num, 10) + 1) + delim) : bullet;
+  const taskPart = task ? '[ ] ' : '';
+  mdReplaceRange(pos, pos, '\n' + indent + nextMarker + space + taskPart);
+  return true;
+}
+
+// Tab / Shift+Tab：单行插入缩进；跨行选区整体缩进 / 反缩进
+function handleMdTab(shift) {
+  const ta = els.mdSource;
+  const s = ta.selectionStart, e = ta.selectionEnd;
+  const v = ta.value;
+  const multiline = v.slice(s, e).indexOf('\n') >= 0;
+  if (!multiline && !shift) {
+    mdReplaceRange(s, e, '  ');
+    return;
+  }
+  const blockStart = v.lastIndexOf('\n', s - 1) + 1;
+  let blockEnd = v.indexOf('\n', e);
+  if (blockEnd < 0) blockEnd = v.length;
+  const block = v.slice(blockStart, blockEnd);
+  const next = block.split('\n').map(line => {
+    if (shift) return line.replace(/^ {1,2}/, '');
+    return line.trim() ? '  ' + line : line;
+  }).join('\n');
+  mdReplaceRange(blockStart, blockEnd, next);
+  ta.setSelectionRange(blockStart, blockStart + next.length);
+}
+
 // textarea 输入 → 每帧刷新预览 + 标脏（实时）
 if (els.mdSource) {
   els.mdSource.addEventListener('input', () => {
     if (editState.active && editState.kind === 'md') markDirty();
     scheduleMdRender();
+    scheduleMdDraftSave();
   });
-  // Tab 键插入缩进而非切换焦点
   els.mdSource.addEventListener('keydown', (e) => {
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && !e.altKey) {
+      const k = e.key.toLowerCase();
+      // ⌘B 加粗 / ⌘I 斜体 / ⌘K 插链接（⌘S 保存由全局处理器接管）
+      if (k === 'b' && !e.shiftKey) { e.preventDefault(); mdWrapSelection('**', '粗体'); return; }
+      if (k === 'i' && !e.shiftKey) { e.preventDefault(); mdWrapSelection('*', '斜体'); return; }
+      if (k === 'k' && !e.shiftKey) { e.preventDefault(); mdInsertLink(); return; }
+      if (k === 'e' && !e.shiftKey) { e.preventDefault(); mdWrapSelection('`', 'code'); return; }
+      return;
+    }
     if (e.key === 'Tab') {
       e.preventDefault();
-      const s = els.mdSource.selectionStart, en = els.mdSource.selectionEnd;
-      const v = els.mdSource.value;
-      els.mdSource.value = v.slice(0, s) + '  ' + v.slice(en);
-      els.mdSource.selectionStart = els.mdSource.selectionEnd = s + 2;
-      if (editState.active && editState.kind === 'md') markDirty();
-      scheduleMdRender();
+      handleMdTab(e.shiftKey);
+      return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !mod) {
+      if (handleMdEnter()) e.preventDefault();
     }
   });
 
@@ -1396,7 +2091,10 @@ if (els.mdSource) {
     requestAnimationFrame(() => { mdSyncing = false; });
   };
   els.mdSource.addEventListener('scroll', () => syncScroll(els.mdSource, els.mdPreview), { passive: true });
-  els.mdPreview.addEventListener('scroll', () => syncScroll(els.mdPreview, els.mdSource), { passive: true });
+  els.mdPreview.addEventListener('scroll', () => {
+    syncScroll(els.mdPreview, els.mdSource);
+    updateMdOutlineActive();
+  }, { passive: true });
 
   // 预览区（所见即所得）编辑 → 每帧反向序列化回源码 textarea（不回写预览，避免打断输入/光标）
   let mdSerializeScheduled = false;
@@ -1407,10 +2105,18 @@ if (els.mdSource) {
       mdSerializeScheduled = false;
       if (!window.AtlasMarkdown || !window.AtlasMarkdown.htmlToMarkdown) return;
       els.mdSource.value = window.AtlasMarkdown.htmlToMarkdown(els.mdPreview);
+      scheduleMdDraftSave();
     });
   };
+  // beforeinput 先于 DOM 变更触发，此时 selection 还指向原节点，
+  // 用来把"被碰过的块"打上标记
+  els.mdPreview.addEventListener('beforeinput', () => {
+    if (!(editState.active && editState.kind === 'md')) return;
+    markMdEditedBlock();
+  });
   els.mdPreview.addEventListener('input', () => {
     if (!(editState.active && editState.kind === 'md')) return;
+    markMdEditedBlock();   // 兜底：不支持 beforeinput 的场景
     markDirty();
     scheduleMdSerialize();
   });
@@ -1441,6 +2147,8 @@ async function saveMdEdit() {
     const data = await resp.json().catch(() => ({}));
     if (resp.ok && data.ok) {
       const savedPath = editState.path;
+      cancelMdDraftSave();
+      clearMdDraft(savedPath);      // 已落盘，草稿使命结束
       showToast({ kind: 'success', text: '已保存到文件' });
       if (state.files[savedPath]) {
         state.files[savedPath].unread = false;
@@ -1690,6 +2398,12 @@ function markDirty() {
 
 // 退出编辑模式（清理 Sortable / 状态）；restore=true 时把预览切回只读预览
 function exitEditMode({ restore } = { restore: true }) {
+  cancelMdDraftSave();
+  // 退出时如果还有未保存改动（用户选了"放弃"），草稿留在 localStorage 里，
+  // 7 天内下次进入同一文件仍可恢复——比直接丢掉更安全
+  if (editState.kind === 'md' && editState.dirty && editState.path) {
+    writeMdDraft(editState.path, els.mdSource.value, editState.baseHash);
+  }
   for (const s of editState.sortables) {
     try { s.destroy(); } catch {}
   }
@@ -1741,9 +2455,9 @@ function exitEditMode({ restore } = { restore: true }) {
   }
 }
 
-function cancelEdit() {
+async function cancelEdit() {
   if (!editState.active) return;
-  if (!confirmDiscardIfDirty()) return;
+  if (!(await confirmDiscardIfDirty())) return;
   exitEditMode({ restore: true });
 }
 
@@ -1800,16 +2514,18 @@ function updateEditToolbar() {
   els.btnEditSave.textContent = editState.saving ? '保存中…' : '保存';
   els.btnEditCancel.disabled = editState.saving;
   // 编辑态下禁用会冲突的操作
-  [els.btnExportPdf, els.btnShare, els.btnReloadPreview, els.btnMarkUnread].forEach((b) => {
+  [els.btnExportPdf, els.btnShare, els.btnReloadPreview, els.btnMarkUnread, els.btnDiff].forEach((b) => {
     if (b) b.disabled = editing ? true : b.disabled;
   });
+  // 进编辑模式先收掉对比面板：两者都要占满预览区
+  if (editing && diffState.open) closeDiff();
   if (!editing && state.activeFilePath) {
     // 退出编辑后恢复这些按钮可用
-    const activeFile = state.files[state.activeFilePath];
-    els.btnExportPdf.disabled = isMdFile(activeFile);
+    els.btnExportPdf.disabled = false;
     els.btnShare.disabled = false;
     els.btnReloadPreview.disabled = false;
     els.btnMarkUnread.disabled = false;
+    updateDiffButton();
   }
   // 编辑态给主区域一个视觉标识
   document.body.classList.toggle('editing-mode', editing);
@@ -1832,6 +2548,192 @@ window.addEventListener('beforeunload', (e) => {
   }
 });
 
+
+// ==================== Diff：和上次已读版本对比 ====================
+// 未读红点只回答了"AI 动过这个文件"，但用户真正想知道的是"动了什么"。
+// 底本在用户每次打开文件时由 /api/seen 落一份快照，这里做的是把差异呈现出来。
+const diffState = { open: false, path: null, loading: false };
+
+function diffContextValue() {
+  const v = els.diffContext ? parseInt(els.diffContext.value, 10) : 3;
+  return Number.isFinite(v) ? v : 3;
+}
+
+function renderDiffEmpty(html) {
+  els.diffBody.innerHTML = html;
+}
+
+function renderDiffResult(data) {
+  els.diffBody.innerHTML = '';
+  if (!data.hasBaseline) {
+    els.diffStats.textContent = '';
+    renderDiffEmpty(`
+      <div class="diff-empty">
+        <div class="diff-empty-art">🕰️</div>
+        <div>${escapeHtml(data.message || '还没有可对比的底本。')}</div>
+        <div class="diff-empty-hint">底本会在你打开文档时自动记录，之后 AI 再改动就能看到逐行差异。</div>
+      </div>`);
+    return;
+  }
+  const when = data.baselineAt ? fmtMtime(data.baselineAt) : '未知时间';
+  if (!data.changed) {
+    els.diffStats.textContent = `底本记录于 ${when}`;
+    renderDiffEmpty(`
+      <div class="diff-empty">
+        <div class="diff-empty-art">✅</div>
+        <div>和你上次看到的内容完全一致</div>
+        <div class="diff-empty-hint">底本记录于 ${escapeHtml(when)}</div>
+      </div>`);
+    return;
+  }
+  els.diffStats.innerHTML =
+    `<span class="add">+${data.added}</span> / <span class="del">−${data.removed}</span>`
+    + ` · 底本记录于 ${escapeHtml(when)}`;
+
+  const frag = document.createDocumentFragment();
+  for (const hunk of data.hunks) {
+    const box = document.createElement('div');
+    box.className = 'diff-hunk';
+    if (hunk.skipped > 0) {
+      const skip = document.createElement('div');
+      skip.className = 'diff-skip';
+      skip.textContent = `⋯ 省略 ${hunk.skipped} 行未改动内容 ⋯`;
+      box.appendChild(skip);
+    }
+    for (const line of hunk.lines) {
+      const row = document.createElement('div');
+      row.className = 'diff-line ' + line.type;
+      const gutter = document.createElement('div');
+      gutter.className = 'diff-gutter';
+      gutter.innerHTML =
+        `<span>${line.oldLine == null ? '' : line.oldLine}</span>`
+        + `<span>${line.newLine == null ? '' : line.newLine}</span>`;
+      const sign = document.createElement('div');
+      sign.className = 'diff-sign';
+      sign.textContent = line.type === 'add' ? '+' : line.type === 'del' ? '−' : ' ';
+      const text = document.createElement('div');
+      text.className = 'diff-text';
+      text.textContent = line.text === '' ? '\u00a0' : line.text;
+      row.appendChild(gutter);
+      row.appendChild(sign);
+      row.appendChild(text);
+      box.appendChild(row);
+    }
+    frag.appendChild(box);
+  }
+  if (data.truncated) {
+    const more = document.createElement('div');
+    more.className = 'diff-truncated';
+    more.textContent = '差异过多，只显示了前面一部分。';
+    frag.appendChild(more);
+  }
+  els.diffBody.appendChild(frag);
+}
+
+async function loadDiff() {
+  if (!diffState.path || diffState.loading) return;
+  diffState.loading = true;
+  const f = state.files[diffState.path];
+  diffState.mtime = f ? f.mtime : 0;   // 记下这次对比针对的版本
+  els.diffStats.textContent = '正在对比…';
+  try {
+    const url = '/api/diff?path=' + encodeURIComponent(diffState.path)
+      + '&context=' + diffContextValue();
+    const r = await fetch(url);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      els.diffStats.textContent = '';
+      renderDiffEmpty(`<div class="diff-empty"><div class="diff-empty-art">⚠️</div>
+        <div>对比失败：${escapeHtml(data.error || ('HTTP ' + r.status))}</div></div>`);
+      return;
+    }
+    renderDiffResult(data);
+  } catch (e) {
+    els.diffStats.textContent = '';
+    renderDiffEmpty(`<div class="diff-empty"><div class="diff-empty-art">⚠️</div>
+      <div>对比失败：${escapeHtml(e.message)}</div></div>`);
+  } finally {
+    diffState.loading = false;
+  }
+}
+
+function openDiff() {
+  const filePath = state.activeFilePath;
+  if (!filePath) return;
+  // 编辑态下不开对比：两个面板都要占预览区，而且编辑中的内容还没落盘
+  if (editState.active) {
+    showToast({ kind: 'info', text: '请先退出编辑再对比' });
+    return;
+  }
+  diffState.open = true;
+  diffState.path = filePath;
+  els.diffPanel.classList.remove('hidden');
+  els.emptyState.classList.add('hidden');
+  loadDiff();
+}
+
+function closeDiff() {
+  diffState.open = false;
+  diffState.path = null;
+  els.diffPanel.classList.add('hidden');
+  els.diffBody.innerHTML = '';
+}
+
+if (els.btnDiff) {
+  els.btnDiff.addEventListener('click', () => {
+    if (els.btnDiff.disabled) return;
+    if (diffState.open) closeDiff();
+    else openDiff();
+  });
+}
+if (els.diffClose) els.diffClose.addEventListener('click', closeDiff);
+if (els.diffContext) els.diffContext.addEventListener('change', loadDiff);
+if (els.diffAccept) {
+  els.diffAccept.addEventListener('click', async () => {
+    if (!diffState.path) return;
+    const p = diffState.path;
+    els.diffAccept.disabled = true;
+    try {
+      const r = await fetch('/api/diff/accept', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: p }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (state.files[p]) {
+        state.files[p].unread = false;
+        state.files[p].hasBaseline = true;
+        state.files[p].baselineAt = Date.now();
+      }
+      updateUnreadDecorations();
+      updateDiffButton();
+      showToast({ kind: 'success', text: '已更新对比底本' });
+      loadDiff();
+    } catch (e) {
+      showToast({ kind: 'error', text: '操作失败', secondary: e.message });
+    } finally {
+      els.diffAccept.disabled = false;
+    }
+  });
+}
+
+// 按钮可用性：有底本才能对比；文件被改过时给个 accent 色提示
+function updateDiffButton() {
+  if (!els.btnDiff) return;
+  const file = state.activeFilePath && state.files[state.activeFilePath];
+  if (!file) {
+    els.btnDiff.disabled = true;
+    els.btnDiff.classList.remove('has-changes');
+    els.btnDiff.title = '和上次已读版本对比';
+    return;
+  }
+  els.btnDiff.disabled = editState.active;
+  const changed = file.hasBaseline && file.baselineAt && file.mtime > file.baselineAt;
+  els.btnDiff.classList.toggle('has-changes', !!changed);
+  els.btnDiff.title = !file.hasBaseline
+    ? '还没有对比底本（打开一次后即可对比）'
+    : (changed ? '这个文档自上次查看后有改动，点击查看差异' : '和上次已读版本对比');
+}
 
 // ---------- iframe 内高亮搜索命中 ----------
 // 同源（都是 localhost:4321），可直接操作 contentDocument
@@ -1884,10 +2786,35 @@ function highlightInIframe(query) {
   updateMatchBadge(0, 0);
 
   if (!query) return;
-  const q = query.toLowerCase();
-  const ql = q.length;
+  // 多关键词：每个词都单独高亮（搜索是 AND 过滤，但高亮要把所有词都标出来）
+  const terms = parseQueryTerms(query);
+  if (!terms.length) return;
 
   injectHighlightStyle(doc);
+
+  // 在一个文本节点里找出所有关键词的命中区间，按位置排序并去掉重叠
+  const findRanges = (lower) => {
+    const ranges = [];
+    for (const t of terms) {
+      let from = 0;
+      let idx;
+      while ((idx = lower.indexOf(t, from)) !== -1) {
+        ranges.push([idx, idx + t.length]);
+        from = idx + t.length;
+      }
+    }
+    ranges.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+    const merged = [];
+    for (const r of ranges) {
+      const last = merged[merged.length - 1];
+      if (last && r[0] < last[1]) {
+        if (r[1] > last[1]) last[1] = r[1];   // 重叠则合并
+      } else {
+        merged.push(r.slice());
+      }
+    }
+    return merged;
+  };
 
   // 收集所有要拆分的 text node，避免遍历时同时 mutate
   const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
@@ -1899,8 +2826,8 @@ function highlightInIframe(query) {
           p.closest(`[${HIGHLIGHT_MARK_ATTR}]`)) {
         return NodeFilter.FILTER_REJECT;
       }
-      const text = node.nodeValue || '';
-      return text.toLowerCase().indexOf(q) >= 0
+      const lower = (node.nodeValue || '').toLowerCase();
+      return terms.some(t => lower.indexOf(t) >= 0)
         ? NodeFilter.FILTER_ACCEPT
         : NodeFilter.FILTER_REJECT;
     },
@@ -1910,18 +2837,18 @@ function highlightInIframe(query) {
 
   for (const node of todo) {
     const text = node.nodeValue;
-    const lower = text.toLowerCase();
+    const ranges = findRanges(text.toLowerCase());
+    if (!ranges.length) continue;
     const frag = doc.createDocumentFragment();
     let last = 0;
-    let idx = 0;
-    while ((idx = lower.indexOf(q, last)) !== -1) {
-      if (idx > last) frag.appendChild(doc.createTextNode(text.slice(last, idx)));
+    for (const [s, e] of ranges) {
+      if (s > last) frag.appendChild(doc.createTextNode(text.slice(last, s)));
       const mark = doc.createElement('mark');
       mark.setAttribute(HIGHLIGHT_MARK_ATTR, '1');
-      mark.textContent = text.slice(idx, idx + ql);
+      mark.textContent = text.slice(s, e);
       frag.appendChild(mark);
       highlightMatches.push(mark);
-      last = idx + ql;
+      last = e;
     }
     if (last < text.length) frag.appendChild(doc.createTextNode(text.slice(last)));
     if (node.parentNode) node.parentNode.replaceChild(frag, node);
@@ -1997,9 +2924,8 @@ async function doContentSearch(q) {
 
 function shouldSearchContent(q) {
   if (!q) return false;
-  if (q.length >= 2) return true;
-  // 单字符：仅当非 ASCII（中文/日文等）才搜，'a' 这种太宽不搜
-  return /[^\x00-\x7F]/.test(q);
+  // 与 server 的 termIsSearchable 一致：至少要有一个"够具体"的关键词
+  return parseQueryTerms(q).some(t => (/^[\x00-\x7F]+$/.test(t) ? t.length >= 2 : true));
 }
 
 els.search.addEventListener('input', (e) => {
@@ -2020,7 +2946,12 @@ els.onlyUnread.addEventListener('change', (e) => { state.onlyUnread = e.target.c
 els.btnRefresh.addEventListener('click', fetchState);
 
 els.btnNewFolder.addEventListener('click', async () => {
-  const name = prompt('新建顶层分组：', '新分组');
+  const name = await showPrompt({
+    title: '新建顶层分组',
+    label: '分组名称',
+    value: '新分组',
+    confirmText: '创建',
+  });
   if (!name) return;
   const res = await fetch('/api/folders/new', {
     method: 'POST',
@@ -2031,7 +2962,12 @@ els.btnNewFolder.addEventListener('click', async () => {
 });
 
 els.btnMarkAll.addEventListener('click', async () => {
-  if (!confirm('将所有文档标记为已读？')) return;
+  const ok = await showConfirm({
+    title: '全部标为已读？',
+    body: '所有文档的未读红点都会被清掉。',
+    confirmText: '全部标为已读',
+  });
+  if (!ok) return;
   await fetch('/api/seen/all', { method: 'POST' });
   fetchState();
 });
@@ -2119,7 +3055,8 @@ els.btnExportPdf.addEventListener('click', async () => {
   els.btnExportPdf.disabled = true;
   els.btnExportPdf.classList.add('spinning');
 
-  const stem = (file.alias || file.name.replace(/\.html?$/i, '')).trim() || 'export';
+  // 去扩展名要覆盖 .md/.markdown，不能只处理 .html
+  const stem = (file.alias || stripDocExt(file.name)).trim() || 'export';
 
   // 进度 toast——不自动消失，阶段切换时更新文字
   const prog = showToast({
@@ -2246,30 +3183,256 @@ els.btnExportPdf.addEventListener('click', async () => {
 });
 els.btnCopyPath.addEventListener('click', () => {
   if (!state.activeFilePath) return;
+  // 只改按钮里的图标 span，别动按钮自身（否则会把 aria-label 之外的结构冲掉）
+  const icon = els.btnCopyPath.querySelector('span') || els.btnCopyPath;
   navigator.clipboard.writeText(state.activeFilePath).then(() => {
-    const orig = els.btnCopyPath.textContent;
-    els.btnCopyPath.textContent = '✓';
-    setTimeout(() => { els.btnCopyPath.textContent = orig; }, 1000);
+    const orig = icon.textContent;
+    icon.textContent = '✓';
+    setTimeout(() => { icon.textContent = orig; }, 1000);
+  }).catch(() => {
+    showToast({ kind: 'error', text: '复制失败', secondary: '浏览器拒绝了剪贴板访问' });
   });
 });
 
+// 判断焦点是否落在"正在输入文字"的元素上。
+// 注意 <input> / <textarea> 的 isContentEditable 是 false——只判 isContentEditable
+// 会让全局单键快捷键（比如 `/`）把用户正在输入的字符抢走：在设置里手输
+// 扫描根路径 `/Users/...` 时每个 `/` 都会把焦点弹到搜索框，路径根本打不进去。
+function isTypingTarget(el) {
+  if (!el) return false;
+  if (el.isContentEditable) return true;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+}
+
+// 焦点是否在 Markdown 编辑器内部（源码框或可编辑预览区）
+function isInMdEditor(el) {
+  if (!el || !editState.active || editState.kind !== 'md') return false;
+  return el === els.mdSource || (els.mdPreview && els.mdPreview.contains(el));
+}
+
 document.addEventListener('keydown', (e) => {
-  // Cmd+B / Ctrl+B 切换侧边栏
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b' && !e.altKey && !e.shiftKey) {
+  const active = document.activeElement;
+  const mod = e.metaKey || e.ctrlKey;
+
+  // ⌘S / Ctrl+S：编辑态下保存到文件，而不是让浏览器弹"保存网页"
+  if (mod && e.key.toLowerCase() === 's' && !e.altKey && !e.shiftKey) {
+    if (editState.active) {
+      e.preventDefault();
+      saveEdit();
+      return;
+    }
+  }
+
+  // ⌘K / Ctrl+K：快速打开。在 Markdown 编辑器里让位给"插入链接"
+  if (mod && e.key.toLowerCase() === 'k' && !e.altKey && !e.shiftKey) {
+    if (isInMdEditor(active)) return;
+    e.preventDefault();
+    if (qoEntry) closeQuickOpen();
+    else openQuickOpen();
+    return;
+  }
+
+  // ⌘B / Ctrl+B：Markdown 编辑器里是"加粗"，其余场景才是切换侧边栏
+  if (mod && e.key.toLowerCase() === 'b' && !e.altKey && !e.shiftKey) {
+    if (isInMdEditor(active)) return;   // 交给编辑器自己的处理器
     e.preventDefault();
     toggleSidebar();
     return;
   }
-  if (e.key === '/' && document.activeElement !== els.search && !document.activeElement.isContentEditable) {
+
+  // 单键快捷键：焦点在输入框 / 可编辑区里时一律不抢
+  if (e.key === '/' && !isTypingTarget(active)) {
     e.preventDefault();
     els.search.focus();
+    return;
   }
-  if (e.key === 'Escape' && document.activeElement === els.search) {
+  if (e.key === 'Escape' && active === els.search) {
     els.search.value = '';
     state.search = '';
+    state.contentMatches = new Map();
     render();
+    updateIframeHighlight();
   }
 });
+
+// ==================== ⌘K 快速打开 ====================
+// 原来切文件只能走「搜索框 → ↓ → Enter」，而搜索框还兼着"过滤目录树"和
+// "iframe 内高亮"两个职责。快速打开是纯导航：敲几个字，Enter 走。
+const qoEls = {
+  root: document.getElementById('quickopen'),
+  input: document.getElementById('quickopen-input'),
+  list: document.getElementById('quickopen-list'),
+  count: document.getElementById('quickopen-count'),
+};
+const QO_LIMIT = 50;
+let qoEntry = null;
+let qoResults = [];
+let qoActive = 0;
+
+// 子序列模糊匹配：'aprt' 能命中 'api-report'。
+// 返回 { score, hits }，hits 是命中字符在原串里的下标（用于高亮）；不匹配返回 null。
+function fuzzyMatch(text, query) {
+  const t = text.toLowerCase();
+  const q = query.toLowerCase();
+  if (!q) return { score: 0, hits: [] };
+  const hits = [];
+  let ti = 0;
+  let score = 0;
+  let streak = 0;
+  for (let qi = 0; qi < q.length; qi++) {
+    const ch = q[qi];
+    const found = t.indexOf(ch, ti);
+    if (found < 0) return null;
+    hits.push(found);
+    // 连续命中、词首命中都加分——让 'aprt' 更倾向匹配 'api-report' 而不是零散撞上
+    if (found === ti && qi > 0) { streak++; score += 6 + streak * 2; }
+    else { streak = 0; score += 1; }
+    if (found === 0 || /[\s\-_./\\]/.test(t[found - 1] || '')) score += 4;
+    ti = found + 1;
+  }
+  score -= (t.length - q.length) * 0.05;   // 同等命中下更短的更相关
+  return { score, hits };
+}
+
+function qoHighlight(text, hits) {
+  if (!hits || !hits.length) return escapeHtml(text);
+  const set = new Set(hits);
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = escapeHtml(text[i]);
+    out += set.has(i) ? `<mark>${c}</mark>` : c;
+  }
+  return out;
+}
+
+function qoSearch(query) {
+  const files = Object.values(state.files);
+  const q = query.trim();
+  if (!q) {
+    // 空查询：最近打开优先，其次按修改时间
+    const recentSet = new Map((state.recent || []).map((p, i) => [p, i]));
+    return files
+      .slice()
+      .sort((a, b) => {
+        const ra = recentSet.has(a.path) ? recentSet.get(a.path) : Infinity;
+        const rb = recentSet.has(b.path) ? recentSet.get(b.path) : Infinity;
+        if (ra !== rb) return ra - rb;
+        return (b.mtime || 0) - (a.mtime || 0);
+      })
+      .slice(0, QO_LIMIT)
+      .map(f => ({ file: f, hits: [], label: f.alias || stripDocExt(f.name) }));
+  }
+  const scored = [];
+  for (const f of files) {
+    const label = f.alias || stripDocExt(f.name);
+    // 分别打分：文件名/备注权重最高，其次项目名，最后整条相对路径
+    const byLabel = fuzzyMatch(label, q);
+    const byProject = fuzzyMatch(f.projectName || '', q);
+    const byPath = fuzzyMatch(f.relPath || '', q);
+    let best = null;
+    if (byLabel) best = { score: byLabel.score + 30, hits: byLabel.hits };
+    if (byProject && (!best || byProject.score + 10 > best.score)) {
+      best = { score: byProject.score + 10, hits: [] };
+    }
+    if (byPath && (!best || byPath.score > best.score)) {
+      best = { score: byPath.score, hits: [] };
+    }
+    if (!best) continue;
+    if (f.unread) best.score += 3;   // 未读的略微靠前——它更可能是你要找的
+    scored.push({ file: f, score: best.score, hits: best.hits, label });
+  }
+  scored.sort((a, b) => b.score - a.score || (b.file.mtime || 0) - (a.file.mtime || 0));
+  return scored.slice(0, QO_LIMIT);
+}
+
+function qoRender() {
+  qoResults = qoSearch(qoEls.input.value);
+  qoActive = 0;
+  qoEls.list.innerHTML = '';
+  if (!qoResults.length) {
+    const empty = document.createElement('div');
+    empty.className = 'quickopen-empty';
+    empty.textContent = '没有匹配的文档';
+    qoEls.list.appendChild(empty);
+    qoEls.count.textContent = '';
+    return;
+  }
+  qoResults.forEach((r, idx) => {
+    const f = r.file;
+    const dtype = isMdFile(f) ? 'md' : 'html';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'quickopen-item' + (idx === 0 ? ' active' : '');
+    btn.setAttribute('role', 'option');
+    btn.setAttribute('aria-selected', String(idx === 0));
+    btn.dataset.idx = String(idx);
+    btn.innerHTML = `
+      <span class="qo-icon" aria-hidden="true">${dtype === 'md' ? '📝' : '🌐'}</span>
+      <span class="qo-main">
+        <span class="qo-name">${qoHighlight(r.label, r.hits)}</span>
+        <span class="qo-path">${escapeHtml(f.relPath)}</span>
+      </span>
+      <span class="qo-badge">${dtype === 'md' ? 'MD' : 'HTML'}</span>
+      ${f.unread ? '<span class="qo-unread" title="未读"></span>' : ''}
+    `;
+    btn.addEventListener('click', () => qoOpen(idx));
+    btn.addEventListener('mousemove', () => qoSetActive(idx));
+    qoEls.list.appendChild(btn);
+  });
+  qoEls.count.textContent = `${qoResults.length}${qoResults.length >= QO_LIMIT ? '+' : ''} 个结果`;
+}
+
+function qoSetActive(idx) {
+  if (!qoResults.length) return;
+  qoActive = (idx + qoResults.length) % qoResults.length;
+  const items = [...qoEls.list.querySelectorAll('.quickopen-item')];
+  items.forEach((el, i) => {
+    const on = i === qoActive;
+    el.classList.toggle('active', on);
+    el.setAttribute('aria-selected', String(on));
+    if (on) el.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+function qoOpen(idx) {
+  const r = qoResults[typeof idx === 'number' ? idx : qoActive];
+  if (!r) return;
+  closeQuickOpen();
+  openFile(r.file.path);
+}
+
+function openQuickOpen() {
+  if (!qoEls.root || qoEntry) return;
+  qoEls.root.classList.remove('hidden');
+  qoEls.input.value = '';
+  qoRender();
+  qoEntry = pushModal({
+    panel: qoEls.root.querySelector('.modal-panel'),
+    close: closeQuickOpen,
+    initialFocus: qoEls.input,
+  });
+}
+
+function closeQuickOpen() {
+  if (!qoEls.root) return;
+  qoEls.root.classList.add('hidden');
+  if (qoEntry) { popModal(qoEntry); qoEntry = null; }
+}
+
+if (qoEls.root) {
+  qoEls.root.addEventListener('click', (e) => {
+    if (e.target.dataset && e.target.dataset.close !== undefined) closeQuickOpen();
+  });
+  qoEls.input.addEventListener('input', qoRender);
+  qoEls.input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); qoSetActive(qoActive + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); qoSetActive(qoActive - 1); }
+    else if (e.key === 'Enter') { e.preventDefault(); qoOpen(); }
+    else if (e.key === 'Home') { e.preventDefault(); qoSetActive(0); }
+    else if (e.key === 'End') { e.preventDefault(); qoSetActive(qoResults.length - 1); }
+  });
+}
 
 // ---------- 键盘导航：搜索框 ↓ 进列表，列表 ↑↓ Enter Esc ----------
 function visibleFilesInOrder() {
@@ -2338,6 +3501,12 @@ async function openSettings() {
   els.doctypeRadios.forEach(cb => { cb.checked = enabled.includes(cb.value); });
   lastDocTypes = enabled.slice();
   els.modal.classList.remove('hidden');
+  if (!settingsModalEntry) {
+    settingsModalEntry = pushModal({
+      panel: els.modal.querySelector('.modal-panel'),
+      close: closeSettings,
+    });
+  }
 }
 
 // 记录上一次的勾选，用于失败/非法回滚
@@ -2410,11 +3579,24 @@ function renderShareList() {
     li.innerHTML = `
       <span class="share-list-name"></span>
       <span class="share-list-url"></span>
+      <span class="share-list-meta"></span>
       <button class="share-list-stop" type="button">停止</button>
     `;
     li.querySelector('.share-list-name').textContent = display;
     li.querySelector('.share-list-url').textContent = url;
     li.querySelector('.share-list-url').title = url;
+    // 有效期 + 范围：一眼看出哪条链接还开着、开得多大
+    const metaParts = [];
+    if (item.expiresAt) {
+      const mins = Math.ceil((item.expiresAt - Date.now()) / 60_000);
+      metaParts.push(mins > 60 ? `${Math.floor(mins / 60)}h 后过期` : (mins > 0 ? `${mins}m 后过期` : '已过期'));
+    } else {
+      metaParts.push('不过期');
+    }
+    metaParts.push(item.scope === 'dir' ? '同目录全开' : '仅引用资源');
+    const metaEl = li.querySelector('.share-list-meta');
+    metaEl.textContent = metaParts.join(' · ');
+    metaEl.title = metaParts.join(' · ');
     li.querySelector('.share-list-stop').addEventListener('click', async () => {
       try {
         const r = await fetch('/api/share/stop', {
@@ -2438,7 +3620,13 @@ function renderShareList() {
 els.shareStopAllBtn.addEventListener('click', async () => {
   const count = state.sharesByPath.size;
   if (count === 0) return;
-  if (!confirm(`停止全部 ${count} 个分享？\n\n所有链接立即失效。`)) return;
+  const ok = await showConfirm({
+    title: `停止全部 ${count} 个分享？`,
+    body: '所有链接立即失效，已经打开的页面刷新会看到 404。',
+    confirmText: '全部停止',
+    danger: true,
+  });
+  if (!ok) return;
   try {
     const r = await fetch('/api/share/stop-all', { method: 'POST' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -2506,7 +3694,13 @@ function renderArchiveList() {
     els.archiveList.appendChild(li);
   });
 }
-function closeSettings() { els.modal.classList.add('hidden'); }
+// 接入弹窗栈：Esc 关闭 + Tab 焦点锁在面板内 + 关闭后焦点还给触发按钮
+let settingsModalEntry = null;
+function closeSettings() {
+  els.modal.classList.add('hidden');
+  if (els.dirPicker) els.dirPicker.classList.add('hidden');
+  if (settingsModalEntry) { popModal(settingsModalEntry); settingsModalEntry = null; }
+}
 els.btnSettings.addEventListener('click', openSettings);
 els.modal.addEventListener('click', (e) => {
   if (e.target.dataset.close !== undefined) closeSettings();
@@ -2526,7 +3720,13 @@ function renderRootList(roots) {
         showToast({ kind: 'error', text: '至少保留一个扫描根目录' });
         return;
       }
-      if (!confirm(`移除扫描根：\n${p}\n\n（不会删除磁盘上的任何文件）`)) return;
+      const ok0 = await showConfirm({
+        title: '移除这个扫描根？',
+        body: `${p}\n\n只是不再扫描这个目录，磁盘上的文件一个都不会删。`,
+        confirmText: '移除',
+        danger: true,
+      });
+      if (!ok0) return;
       const ok = await updateConfig({ scanRoots: next });
       if (ok) {
         const cfg = await (await fetch('/api/config')).json();
@@ -3081,16 +4281,110 @@ function renderQrCode(container, text) {
   });
 }
 
+// 记住上次选的有效期 / 范围
+const SHARE_TTL_KEY = 'atlas:shareTtl';
+const SHARE_SCOPE_KEY = 'atlas:shareScope';
+
+function shareTtlValue() {
+  const v = els.shareTtl ? els.shareTtl.value : '120';
+  return Number.isFinite(Number(v)) ? Number(v) : 120;
+}
+function shareScopeValue() {
+  return els.shareScope && els.shareScope.value === 'dir' ? 'dir' : 'refs';
+}
+
+// 剩余时间文案 + 到期前变红提醒
+let shareExpiryTimer = null;
+function renderShareExpiry() {
+  if (!els.shareExpiry) return;
+  const exp = shareCurrent && shareCurrent.expiresAt;
+  if (!exp) {
+    els.shareExpiry.textContent = '不会自动过期';
+    els.shareExpiry.classList.remove('expiring');
+    return;
+  }
+  const left = exp - Date.now();
+  if (left <= 0) {
+    els.shareExpiry.textContent = '已过期';
+    els.shareExpiry.classList.add('expiring');
+    return;
+  }
+  const mins = Math.ceil(left / 60_000);
+  const text = mins >= 60
+    ? `${Math.floor(mins / 60)} 小时 ${mins % 60} 分后过期`
+    : `${mins} 分钟后过期`;
+  els.shareExpiry.textContent = text;
+  els.shareExpiry.classList.toggle('expiring', mins <= 5);
+}
+
+function renderShareScopeHint() {
+  if (!els.shareScopeHint) return;
+  els.shareScopeHint.textContent = shareScopeValue() === 'dir'
+    ? '同目录全部资源：该文件所在目录及其子目录下的所有文件，拿到链接的人都能访问。方便，但范围大——评审完记得停掉。'
+    : '仅引用到的资源：只放行文档里出现过的图片 / CSS / 脚本。如果页面在 JS 里动态拼接资源路径，可能缺图，这时再切到「同目录全部资源」。';
+}
+
+if (els.shareScope) {
+  els.shareScope.addEventListener('change', () => {
+    localStorage.setItem(SHARE_SCOPE_KEY, shareScopeValue());
+    renderShareScopeHint();
+    if (shareCurrent) reissueShare();
+  });
+}
+if (els.shareTtl) {
+  els.shareTtl.addEventListener('change', () => {
+    localStorage.setItem(SHARE_TTL_KEY, String(shareTtlValue()));
+    if (shareCurrent) reissueShare();
+  });
+}
+
+// 改了有效期 / 范围 → 用同一个 token 重新签发（URL 不变，条件更新）
+async function reissueShare() {
+  if (!shareCurrent) return;
+  try {
+    const r = await fetch('/api/share/start', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        path: shareCurrent.path,
+        ttlMinutes: shareTtlValue(),
+        scope: shareScopeValue(),
+      }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    shareCurrent = await r.json();
+    state.sharesByPath.set(shareCurrent.path, shareCurrent);
+    renderShareExpiry();
+    renderShareList();
+    showToast({ kind: 'success', text: '分享设置已更新' });
+  } catch (e) {
+    showToast({ kind: 'error', text: '更新分享设置失败', secondary: e.message });
+  }
+}
+
 async function openShareModal(filePath) {
   const file = state.files[filePath];
   if (!file) return;
+  // 恢复上次选择
+  const savedTtl = localStorage.getItem(SHARE_TTL_KEY);
+  if (els.shareTtl && savedTtl !== null && [...els.shareTtl.options].some(o => o.value === savedTtl)) {
+    els.shareTtl.value = savedTtl;
+  }
+  const savedScope = localStorage.getItem(SHARE_SCOPE_KEY);
+  if (els.shareScope && (savedScope === 'refs' || savedScope === 'dir')) {
+    els.shareScope.value = savedScope;
+  }
   // 调后端：已存在则复用 token，不存在则新建
   let entry;
   try {
     const r = await fetch('/api/share/start', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: filePath }),
+      body: JSON.stringify({
+        path: filePath,
+        ttlMinutes: shareTtlValue(),
+        scope: shareScopeValue(),
+      }),
     });
     if (!r.ok) {
       // 404 → 大概率是 server 进程是旧版（npm i -g 升级了文件但没 atlas restart）
@@ -3119,16 +4413,29 @@ async function openShareModal(filePath) {
   els.shareFilename.textContent = file.alias ? `${file.alias}（${file.name}）` : file.name;
   renderShareUrls(els.shareUrls, entry.urls);
   renderQrCode(els.shareQr, pickPreferredUrl(entry.urls));
+  renderShareScopeHint();
+  renderShareExpiry();
+  if (shareExpiryTimer) clearInterval(shareExpiryTimer);
+  shareExpiryTimer = setInterval(renderShareExpiry, 30_000);
   els.shareModal.classList.remove('hidden');
+  if (!shareModalEntry) {
+    shareModalEntry = pushModal({
+      panel: els.shareModal.querySelector('.modal-panel'),
+      close: closeShareModal,
+    });
+  }
 
   // 同步 sharesByPath 状态（角标 + 设置面板列表）
   state.sharesByPath.set(filePath, entry);
   render();
 }
 
+let shareModalEntry = null;
 function closeShareModal() {
   els.shareModal.classList.add('hidden');
   shareCurrent = null;
+  if (shareExpiryTimer) { clearInterval(shareExpiryTimer); shareExpiryTimer = null; }
+  if (shareModalEntry) { popModal(shareModalEntry); shareModalEntry = null; }
 }
 
 els.shareModal.addEventListener('click', (e) => {
@@ -3140,7 +4447,13 @@ els.shareOpenBtn.addEventListener('click', () => {
 });
 els.shareStopBtn.addEventListener('click', async () => {
   if (!shareCurrent) return;
-  if (!confirm(`停止分享「${shareCurrent.name}」？\n\n停止后链接立即失效，已经打开的页面刷新会 404。`)) return;
+  const ok = await showConfirm({
+    title: `停止分享「${shareCurrent.name}」？`,
+    body: '停止后链接立即失效，已经打开的页面刷新会看到 404。',
+    confirmText: '停止分享',
+    danger: true,
+  });
+  if (!ok) return;
   try {
     const r = await fetch('/api/share/stop', {
       method: 'POST',

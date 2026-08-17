@@ -29,11 +29,11 @@
         </div>
       </div>
       <div class="actions">
-        <button id="btn-refresh" title="重新扫描磁盘">
+        <button id="btn-refresh" title="重新扫描磁盘" aria-label="重新扫描磁盘">
           <svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M8 3a5 5 0 0 0-4.546 2.916.75.75 0 1 1-1.362-.633A6.5 6.5 0 0 1 14.5 7.75v.5l1.22-1.22a.75.75 0 1 1 1.06 1.06l-2.5 2.5a.75.75 0 0 1-1.06 0l-2.5-2.5a.75.75 0 1 1 1.06-1.06l1.22 1.22v-.5A5 5 0 0 0 8 3Zm0 10a5 5 0 0 0 4.546-2.916.75.75 0 1 1 1.362.633A6.5 6.5 0 0 1 1.5 8.25v-.5L.28 8.97a.75.75 0 0 1-1.06-1.06l2.5-2.5a.75.75 0 0 1 1.06 0l2.5 2.5a.75.75 0 0 1-1.06 1.06L3 7.75v.5A5 5 0 0 0 8 13Z"/></svg>
         </button>
-        <button id="btn-new-folder" title="新建顶层分组">＋</button>
-        <button id="btn-mark-all" title="全部标为已读">✓</button>
+        <button id="btn-new-folder" title="新建顶层分组" aria-label="新建顶层分组"><span aria-hidden="true">＋</span></button>
+        <button id="btn-mark-all" title="全部标为已读" aria-label="全部标为已读"><span aria-hidden="true">✓</span></button>
         <button id="btn-settings" title="设置" aria-label="设置">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="8" cy="8" r="2"/>
@@ -62,7 +62,7 @@
     <div id="recent-bar" class="recent-bar hidden">
       <div class="recent-bar-header">
         <span>最近</span>
-        <button id="recent-toggle" type="button" title="收起 / 展开" aria-label="收起 / 展开最近">▾</button>
+        <button id="recent-toggle" type="button" title="收起 / 展开" aria-label="收起或展开最近打开列表"><span aria-hidden="true">▾</span></button>
       </div>
       <div id="recent-list" class="recent-list"></div>
     </div>
@@ -102,6 +102,13 @@
             <path fill="currentColor" d="M8 3a5 5 0 0 0-4.546 2.916.75.75 0 1 1-1.362-.633A6.5 6.5 0 0 1 14.5 7.75v.5l1.22-1.22a.75.75 0 1 1 1.06 1.06l-2.5 2.5a.75.75 0 0 1-1.06 0l-2.5-2.5a.75.75 0 1 1 1.06-1.06l1.22 1.22v-.5A5 5 0 0 0 8 3Zm0 10a5 5 0 0 0 4.546-2.916.75.75 0 1 1 1.362.633A6.5 6.5 0 0 1 1.5 8.25v-.5L.28 8.97a.75.75 0 0 1-1.06-1.06l2.5-2.5a.75.75 0 0 1 1.06 0l2.5 2.5a.75.75 0 0 1-1.06 1.06L3 7.75v.5A5 5 0 0 0 8 13Z"/>
           </svg>
         </button>
+        <button id="btn-diff" disabled title="和上次已读版本对比" aria-label="和上次已读版本对比">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 2.5v7"/><circle cx="4" cy="11.5" r="1.6"/>
+            <path d="M12 13.5v-7"/><circle cx="12" cy="4.5" r="1.6"/>
+            <path d="M5.6 4.5H9a1 1 0 0 1 1 1v1"/>
+          </svg>
+        </button>
         <button id="btn-edit" disabled title="编辑此文档（改文案 / 拖动列表）" aria-label="编辑此文档">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M11.5 2.5l2 2L6 12l-2.5.5L4 10z"/>
@@ -125,7 +132,7 @@
           </svg>
         </button>
         <button id="btn-mark-unread" disabled title="标为未读">未读</button>
-        <button id="btn-reveal" disabled title="在访达中显示">📂</button>
+        <button id="btn-reveal" disabled title="在访达中显示" aria-label="在访达中显示"><span aria-hidden="true">📂</span></button>
         <button id="btn-open-external" disabled title="在浏览器新标签打开" aria-label="在浏览器新标签打开">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M9 3h4v4"/>
@@ -133,7 +140,7 @@
             <path d="M12 9v3.5a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-7a.5.5 0 0 1 .5-.5H8"/>
           </svg>
         </button>
-        <button id="btn-copy-path" disabled title="复制文件路径">📋</button>
+        <button id="btn-copy-path" disabled title="复制文件路径" aria-label="复制文件路径"><span aria-hidden="true">📋</span></button>
       </div>
     </header>
 
@@ -199,19 +206,66 @@
       <!-- Markdown 编辑器：源码 + 实时预览分栏（默认隐藏，编辑 md 文件时显示） -->
       <div class="md-editor hidden" id="md-editor">
         <div class="md-editor-pane">
-          <div class="md-pane-label">Markdown 源码</div>
-          <textarea id="md-source" class="md-source" spellcheck="false" placeholder="在此编辑 Markdown…"></textarea>
+          <div class="md-pane-label">
+            <span class="md-pane-title">Markdown 源码</span>
+            <div class="md-toolbar" role="toolbar" aria-label="Markdown 格式">
+              <button type="button" data-md-cmd="bold" title="加粗（⌘B）" aria-label="加粗"><b>B</b></button>
+              <button type="button" data-md-cmd="italic" title="斜体（⌘I）" aria-label="斜体"><i>I</i></button>
+              <button type="button" data-md-cmd="code" title="行内代码（⌘E）" aria-label="行内代码">&lt;/&gt;</button>
+              <button type="button" data-md-cmd="link" title="插入链接（⌘K）" aria-label="插入链接">链接</button>
+              <span class="md-toolbar-sep" aria-hidden="true"></span>
+              <button type="button" data-md-cmd="h2" title="二级标题" aria-label="二级标题">H2</button>
+              <button type="button" data-md-cmd="ul" title="无序列表" aria-label="无序列表">列表</button>
+              <button type="button" data-md-cmd="task" title="任务列表" aria-label="任务列表">待办</button>
+              <button type="button" data-md-cmd="quote" title="引用" aria-label="引用">引用</button>
+            </div>
+          </div>
+          <textarea id="md-source" class="md-source" spellcheck="false" placeholder="在此编辑 Markdown…" aria-label="Markdown 源码"></textarea>
         </div>
-        <div class="md-editor-split" aria-hidden="true"></div>
+        <div class="md-editor-split" id="md-editor-split" role="separator" aria-orientation="vertical"
+             tabindex="0" aria-label="拖拽调整源码与预览的宽度（方向键可微调）" title="拖拽调整宽度，双击复位"></div>
         <div class="md-preview-pane-wrap">
-          <div class="md-pane-label">预览（可直接编辑）</div>
+          <div class="md-pane-label">
+            <span class="md-pane-title">预览（可直接编辑）</span>
+            <button type="button" id="md-outline-toggle" class="md-outline-toggle"
+                    title="显示 / 隐藏大纲" aria-label="显示或隐藏大纲" aria-pressed="false">大纲</button>
+          </div>
           <div id="md-preview" class="md-body md-preview-pane"></div>
         </div>
+        <nav class="md-outline hidden" id="md-outline" aria-label="文档大纲">
+          <div class="md-outline-title">大纲</div>
+          <div class="md-outline-list" id="md-outline-list"></div>
+        </nav>
       </div>
+      <!-- Diff 面板：和上次已读版本对比（默认隐藏） -->
+      <div class="diff-panel hidden" id="diff-panel">
+        <div class="diff-header">
+          <div class="diff-title">
+            <span class="diff-title-main">和上次已读版本对比</span>
+            <span class="diff-stats" id="diff-stats"></span>
+          </div>
+          <div class="diff-actions">
+            <label class="diff-ctx">
+              <span>上下文</span>
+              <select id="diff-context" aria-label="上下文行数">
+                <option value="0">0</option>
+                <option value="3" selected>3</option>
+                <option value="8">8</option>
+              </select>
+            </label>
+            <button type="button" id="diff-accept" class="diff-btn-primary"
+                    title="把当前内容设为新的对比底本">标记为已看过</button>
+            <button type="button" id="diff-close" class="diff-btn"
+                    title="关闭对比" aria-label="关闭对比">关闭</button>
+          </div>
+        </div>
+        <div class="diff-body" id="diff-body" tabindex="0" aria-label="差异内容"></div>
+      </div>
+
       <div class="empty" id="empty-state">
         <div class="empty-art">📄</div>
         <div>选中左侧目录中的任意文档即可预览</div>
-        <div class="empty-tip">提示：按 <kbd>/</kbd> 聚焦搜索框，hover 文件可编辑备注名</div>
+        <div class="empty-tip">提示：<kbd>⌘K</kbd> 快速打开 · <kbd>/</kbd> 聚焦搜索框 · hover 文件可改备注名和文件名</div>
       </div>
     </div>
   </main>
@@ -222,7 +276,7 @@
     <div class="modal-panel">
       <header class="modal-header">
         <h2>设置</h2>
-        <button class="modal-close" data-close>✕</button>
+        <button class="modal-close" data-close aria-label="关闭设置"><span aria-hidden="true">✕</span></button>
       </header>
       <section class="modal-section">
         <h3>扫描根目录</h3>
@@ -236,8 +290,8 @@
         <!-- 目录浏览器（默认隐藏，点"浏览..."后展开） -->
         <div id="dir-picker" class="dir-picker hidden">
           <div class="dir-picker-bar">
-            <button id="dir-up" type="button" title="上级目录">↑</button>
-            <button id="dir-home" type="button" title="主目录">⌂</button>
+            <button id="dir-up" type="button" title="上级目录" aria-label="上级目录"><span aria-hidden="true">↑</span></button>
+            <button id="dir-home" type="button" title="主目录" aria-label="回到主目录"><span aria-hidden="true">⌂</span></button>
             <input id="dir-current" type="text" class="dir-current" spellcheck="false" />
           </div>
           <div id="dir-list" class="dir-list">
@@ -305,13 +359,34 @@
     <div class="modal-panel share-panel">
       <header class="modal-header">
         <h2>分享到局域网</h2>
-        <button class="modal-close" data-close aria-label="关闭">✕</button>
+        <button class="modal-close" data-close aria-label="关闭分享面板"><span aria-hidden="true">✕</span></button>
       </header>
       <section class="share-body">
         <div class="share-meta">
           <div class="share-filename" id="share-filename">—</div>
           <div class="share-hint">同事在同一网络下用浏览器打开任一链接，或扫码用手机看：</div>
         </div>
+
+        <div class="share-options">
+          <label class="share-option">
+            <span class="share-option-label">有效期</span>
+            <select id="share-ttl" aria-label="分享有效期">
+              <option value="30">30 分钟</option>
+              <option value="120" selected>2 小时</option>
+              <option value="1440">24 小时</option>
+              <option value="0">不过期</option>
+            </select>
+          </label>
+          <label class="share-option">
+            <span class="share-option-label">范围</span>
+            <select id="share-scope" aria-label="分享范围">
+              <option value="refs" selected>仅文档引用到的资源</option>
+              <option value="dir">同目录全部资源</option>
+            </select>
+          </label>
+          <div class="share-expiry" id="share-expiry" aria-live="polite"></div>
+        </div>
+        <p class="share-scope-hint" id="share-scope-hint"></p>
 
         <div class="share-qr-wrap">
           <div id="share-qr" class="share-qr"></div>
@@ -327,6 +402,26 @@
           <button id="share-stop-btn" type="button" class="share-btn-danger">停止分享</button>
         </div>
       </section>
+    </div>
+  </div>
+
+  <!-- ⌘K 快速打开：模糊匹配文件名 / 备注 / 项目，Enter 直接打开 -->
+  <div class="modal hidden" id="quickopen">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel quickopen-panel" role="dialog" aria-modal="true" aria-label="快速打开文档">
+      <div class="quickopen-inputwrap">
+        <span class="quickopen-icon" aria-hidden="true">⌕</span>
+        <input id="quickopen-input" type="text" spellcheck="false" autocomplete="off"
+               placeholder="输入文件名 / 备注 / 项目名…" aria-label="快速打开：输入关键词"
+               aria-controls="quickopen-list" aria-expanded="true" />
+        <kbd class="quickopen-hint" aria-hidden="true">esc</kbd>
+      </div>
+      <div id="quickopen-list" class="quickopen-list" role="listbox" aria-label="匹配的文档"></div>
+      <div class="quickopen-footer">
+        <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+        <span><kbd>enter</kbd> 打开</span>
+        <span class="quickopen-count" id="quickopen-count"></span>
+      </div>
     </div>
   </div>
 
