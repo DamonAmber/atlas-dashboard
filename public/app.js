@@ -106,6 +106,9 @@ const els = {
   mdEditor: document.getElementById('md-editor'),
   mdSource: document.getElementById('md-source'),
   mdPreview: document.getElementById('md-preview'),
+  mdSourceWrap: document.getElementById('md-source-wrap'),
+  mdSourceHl: document.getElementById('md-source-hl'),
+  mdSourceMirror: document.getElementById('md-source-mirror'),
   mdEditorSplit: document.getElementById('md-editor-split'),
   mdToolbar: document.querySelector('.md-toolbar'),
   mdOutline: document.getElementById('md-outline'),
@@ -1573,7 +1576,10 @@ function renderMdPreview() {
   // 只有被改过的块会重新序列化，其余原样吐回——这样"改一个字"不会把
   // 表格对齐、段落软换行这些渲染器无法完整往返的东西一起改掉。
   els.mdPreview.innerHTML = window.AtlasMarkdown.renderBody(els.mdSource.value, { annotateRaw: true });
+  rebuildMdBlockMap();     // innerHTML 换了，块 → 源码行的映射要重建
   scheduleMdOutline();
+  // 重渲染会抹掉标记，按当前光标位置立刻补回来，避免高亮闪断
+  if (document.activeElement === els.mdSource) scheduleMdSync('source');
 }
 
 // 大纲重建比渲染重（要建 DOM 按钮），单独用一个更慢的节流，不跟着每帧渲染跑
@@ -1586,6 +1592,271 @@ function scheduleMdOutline() {
     renderMdOutline();
   }, 250);
 }
+
+// ==================== 源码 ↔ 预览 的对应区域高亮 ====================
+//
+// 目标：光标 / 选区落在一边，另一边同步标出对应的内容。
+// 映射靠渲染时写在每个顶层块上的 data-md-line / data-md-endline（1 基闭区间）。
+//
+// 粒度是"块"而不是"字符"：Markdown → HTML 之后字符级对应关系并不成立
+// （在源码里选中 `**粗` 这半截，HTML 里没有任何东西与之对应），块级才是
+// 稳定且有意义的单位。
+//
+// 源码侧的高亮不能靠 textarea 自己——它无法承载任何装饰，而且不聚焦时
+// 原生选区根本不绘制。所以垫一层色带，位置由一个与 textarea 同盒模型的
+// 镜像元素量出来（这样软换行也能对齐）。
+
+const SYNC_ACTIVE = 'md-sync-active';
+const SYNC_SELECTED = 'md-sync-selected';
+
+let mdBlockMap = [];        // [{ el, start, end }]，按源码行升序
+let mdLineStarts = null;    // 每行起始字符偏移，随内容失效
+let mdLineStartsFor = null; // mdLineStarts 对应的内容快照长度+首尾特征，用于廉价失效判断
+let mdSyncLock = false;     // 防止程序化改动再触发同步
+
+// 预览渲染后重建块映射
+function rebuildMdBlockMap() {
+  if (!els.mdPreview) { mdBlockMap = []; return; }
+  mdBlockMap = [];
+  for (const el of els.mdPreview.children) {
+    const start = parseInt(el.getAttribute('data-md-line'), 10);
+    const end = parseInt(el.getAttribute('data-md-endline'), 10);
+    if (Number.isFinite(start) && Number.isFinite(end)) {
+      mdBlockMap.push({ el, start, end });
+    }
+  }
+  mdBlockMap.sort((a, b) => a.start - b.start);
+}
+
+// 每行起始偏移（0 基行号 → 字符偏移）
+function mdLineStartOffsets() {
+  const v = els.mdSource.value;
+  const sig = v.length + '|' + v.slice(0, 32) + '|' + v.slice(-32);
+  if (mdLineStarts && mdLineStartsFor === sig) return mdLineStarts;
+  const offsets = [0];
+  for (let i = 0; i < v.length; i++) {
+    if (v.charCodeAt(i) === 10) offsets.push(i + 1);
+  }
+  mdLineStarts = offsets;
+  mdLineStartsFor = sig;
+  return offsets;
+}
+
+// 字符偏移 → 1 基行号（二分）
+function mdOffsetToLine(off) {
+  const starts = mdLineStartOffsets();
+  let lo = 0, hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (starts[mid] <= off) lo = mid; else hi = mid - 1;
+  }
+  return lo + 1;
+}
+
+// 1 基行范围 → [起始偏移, 结束偏移)（结束偏移落在 endLine 行末，不含换行）
+function mdLineRangeToOffsets(startLine, endLine) {
+  const v = els.mdSource.value;
+  const starts = mdLineStartOffsets();
+  const s = starts[Math.max(0, Math.min(starts.length - 1, startLine - 1))];
+  const endIdx = Math.max(0, Math.min(starts.length - 1, endLine - 1));
+  let e = endIdx + 1 < starts.length ? starts[endIdx + 1] - 1 : v.length;
+  if (e < s) e = s;
+  return [s, e];
+}
+
+// ---------- 源码侧色带 ----------
+// 镜像元素的盒模型必须和 textarea 一致，否则量出来的软换行位置会漂
+function syncMirrorMetrics() {
+  const ta = els.mdSource, mirror = els.mdSourceMirror;
+  if (!ta || !mirror) return;
+  const cs = getComputedStyle(ta);
+  // 宽度用 clientWidth：已扣掉纵向滚动条，和文本实际可用宽度一致
+  mirror.style.width = ta.clientWidth + 'px';
+  mirror.style.padding = cs.padding;
+  mirror.style.font = cs.font;
+  mirror.style.letterSpacing = cs.letterSpacing;
+  mirror.style.tabSize = cs.tabSize;
+}
+
+// 量出某段字符范围在源码区里占的每一个视觉行矩形（已处理软换行）
+function measureSourceRects(startOff, endOff) {
+  const ta = els.mdSource, mirror = els.mdSourceMirror;
+  if (!ta || !mirror) return [];
+  syncMirrorMetrics();
+  const lineHeight = parseFloat(getComputedStyle(ta).lineHeight) || 0;
+  const v = ta.value;
+  mirror.textContent = '';
+  mirror.appendChild(document.createTextNode(v.slice(0, startOff)));
+  const span = document.createElement('span');
+  // 空范围用零宽字符占位，否则拿不到矩形
+  span.textContent = v.slice(startOff, endOff) || '\u200b';
+  mirror.appendChild(span);
+  // 末尾补一个换行，保证最后一行的高度被计入布局
+  mirror.appendChild(document.createTextNode(v.slice(endOff) + '\n'));
+  const base = mirror.getBoundingClientRect();
+  // getClientRects() 给的是「内联盒」（13px 字体约 15px 高），不是「行盒」
+  // （line-height 21.45px）。内联盒在行盒里垂直居中，直接拿来画会整体偏下
+  // 约 (21.45-15)/2 ≈ 3px、且高度只有半行。这里按行高把它还原成行盒。
+  const rects = [...span.getClientRects()].map(r => {
+    const halfLeading = lineHeight > r.height ? (lineHeight - r.height) / 2 : 0;
+    return {
+      top: Math.round(r.top - base.top - halfLeading),
+      height: Math.max(Math.round(lineHeight || r.height), 1),
+    };
+  });
+  mirror.textContent = '';   // 量完就清，别留着占内存
+  // 合并纵向相邻/重叠的矩形，避免一行画出好几条带
+  const merged = [];
+  for (const r of rects) {
+    const last = merged[merged.length - 1];
+    if (last && r.top <= last.top + last.height + 1) {
+      last.height = Math.max(last.height, r.top + r.height - last.top);
+    } else {
+      merged.push({ ...r });
+    }
+  }
+  return merged;
+}
+
+function clearSourceBands() {
+  if (els.mdSourceHl) els.mdSourceHl.textContent = '';
+}
+
+// 在源码区画色带。ranges: [{ startLine, endLine, kind: 'active'|'selected' }]
+function paintSourceBands(ranges) {
+  if (!els.mdSourceHl) return;
+  const inner = document.createElement('div');
+  inner.className = 'md-source-hl-inner';
+  inner.style.transform = `translateY(${-els.mdSource.scrollTop}px)`;
+  for (const r of ranges) {
+    const [s, e] = mdLineRangeToOffsets(r.startLine, r.endLine);
+    for (const rect of measureSourceRects(s, e)) {
+      const band = document.createElement('div');
+      band.className = 'md-source-band' + (r.kind === 'active' ? ' active' : '');
+      band.style.top = rect.top + 'px';
+      band.style.height = rect.height + 'px';
+      inner.appendChild(band);
+    }
+  }
+  els.mdSourceHl.textContent = '';
+  els.mdSourceHl.appendChild(inner);
+}
+
+// 源码滚动时色带跟着走（只改 transform，不重新测量）
+function offsetSourceBands() {
+  const inner = els.mdSourceHl && els.mdSourceHl.firstElementChild;
+  if (inner) inner.style.transform = `translateY(${-els.mdSource.scrollTop}px)`;
+}
+
+// ---------- 预览侧块标记 ----------
+function clearPreviewMarks() {
+  if (!els.mdPreview) return;
+  els.mdPreview.querySelectorAll('.' + SYNC_ACTIVE + ', .' + SYNC_SELECTED)
+    .forEach(el => el.classList.remove(SYNC_ACTIVE, SYNC_SELECTED));
+}
+
+function markPreviewBlocks(startLine, endLine, isRange) {
+  clearPreviewMarks();
+  const cls = isRange ? SYNC_SELECTED : SYNC_ACTIVE;
+  for (const b of mdBlockMap) {
+    // 行范围有交集就标上
+    if (b.end >= startLine && b.start <= endLine) b.el.classList.add(cls);
+  }
+}
+
+function clearMdSync() {
+  clearPreviewMarks();
+  clearSourceBands();
+}
+
+// ---------- 源码 → 预览 ----------
+function syncFromSource() {
+  if (mdSyncLock) return;
+  if (!editState.active || editState.kind !== 'md') return;
+  const ta = els.mdSource;
+  const l1 = mdOffsetToLine(ta.selectionStart);
+  const l2 = mdOffsetToLine(ta.selectionEnd);
+  const isRange = ta.selectionEnd > ta.selectionStart;
+  markPreviewBlocks(Math.min(l1, l2), Math.max(l1, l2), isRange);
+  // 源码侧自己不画带：光标和原生选区已经是最清楚的指示了
+  clearSourceBands();
+}
+
+// ---------- 预览 → 源码 ----------
+// 找出某个节点所属的顶层块。必须先确认节点在预览面板内——否则一路 parentElement
+// 会爬出面板、爬到 body，返回一个毫无关系的祖先。
+function topLevelBlockOf(node) {
+  let n = node;
+  if (n && n.nodeType === 3) n = n.parentElement;
+  if (!n || n === els.mdPreview || !els.mdPreview.contains(n)) return null;
+  while (n.parentElement && n.parentElement !== els.mdPreview) n = n.parentElement;
+  return n.parentElement === els.mdPreview ? n : null;
+}
+
+// Range 的边界容器可能就是预览面板本身（带 offset 指向某个子块），
+// 典型来源：全选、跨块鼠标拖选、setStartBefore/setEndAfter。
+// 这种情况要按 offset 取出真正的子节点。
+function resolveBoundaryNode(container, offset) {
+  if (container === els.mdPreview) {
+    const kids = container.childNodes;
+    if (!kids.length) return null;
+    return kids[Math.min(offset, kids.length - 1)];
+  }
+  return container;
+}
+
+function syncFromPreview() {
+  if (mdSyncLock) return;
+  if (!editState.active || editState.kind !== 'md') return;
+  const sel = document.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  // 选区必须落在预览面板内
+  const anc = range.commonAncestorContainer;
+  if (anc !== els.mdPreview && !els.mdPreview.contains(anc)) return;
+
+  let hit;
+  if (sel.isCollapsed) {
+    // 光标：只认它所在的那一个块
+    const el = topLevelBlockOf(resolveBoundaryNode(range.startContainer, range.startOffset));
+    hit = el ? mdBlockMap.filter(x => x.el === el) : [];
+  } else {
+    // 选区：用 intersectsNode 判断，比只看首尾容器可靠得多
+    // （首尾容器可能是面板本身，也可能是空白文本节点）
+    hit = mdBlockMap.filter((x) => {
+      try { return range.intersectsNode(x.el); } catch { return false; }
+    });
+  }
+  if (!hit.length) { clearMdSync(); return; }
+
+  const startLine = Math.min(...hit.map(x => x.start));
+  const endLine = Math.max(...hit.map(x => x.end));
+  const isRange = !sel.isCollapsed;
+
+  markPreviewBlocks(startLine, endLine, isRange);
+  paintSourceBands([{ startLine, endLine, kind: isRange ? 'selected' : 'active' }]);
+}
+
+// ---------- 事件接线 ----------
+// selectionchange 是唯一能可靠覆盖"鼠标拖选 / 键盘移动 / 双击选词"的事件；
+// 它挂在 document 上，所以要自己判断当前焦点在哪一侧。
+let mdSyncScheduled = false;
+function scheduleMdSync(source) {
+  if (mdSyncScheduled) return;
+  mdSyncScheduled = true;
+  requestAnimationFrame(() => {
+    mdSyncScheduled = false;
+    if (source === 'preview') syncFromPreview();
+    else syncFromSource();
+  });
+}
+
+document.addEventListener('selectionchange', () => {
+  if (!editState.active || editState.kind !== 'md') return;
+  const active = document.activeElement;
+  if (active === els.mdSource) scheduleMdSync('source');
+  else if (els.mdPreview && els.mdPreview.contains(active)) scheduleMdSync('preview');
+});
 
 // ---------- 编辑器大纲（第三栏） ----------
 // 只读预览页早就有可折叠 TOC，但一进编辑模式就没了，长文档定位全靠滚。
@@ -1953,6 +2224,8 @@ async function enterMdEditMode() {
   // 预览区可直接编辑（所见即所得），编辑后实时同步回源码
   els.mdPreview.setAttribute('contenteditable', 'true');
   els.mdPreview.setAttribute('spellcheck', 'false');
+  rebuildMdBlockMap();
+  clearMdSync();
 
   // 光标置顶，避免 focus 把 textarea 滚到末尾
   els.mdSource.focus();
@@ -2086,6 +2359,15 @@ if (els.mdSource) {
     scheduleMdRender();
     scheduleMdDraftSave();
   });
+  // 点击 / 聚焦源码区也要立刻同步一次（selectionchange 在某些路径下不触发）
+  els.mdSource.addEventListener('click', () => scheduleMdSync('source'));
+  els.mdSource.addEventListener('focus', () => scheduleMdSync('source'));
+  els.mdPreview.addEventListener('click', () => scheduleMdSync('preview'));
+  // 分栏宽度变了 → 软换行位置变了，已画的色带需要重新测量
+  window.addEventListener('resize', () => {
+    if (editState.active && editState.kind === 'md') scheduleMdSync('preview');
+  });
+
   els.mdSource.addEventListener('keydown', (e) => {
     const mod = e.metaKey || e.ctrlKey;
     if (mod && !e.altKey) {
@@ -2118,7 +2400,10 @@ if (els.mdSource) {
     toEl.scrollTop = pct * tMax;
     requestAnimationFrame(() => { mdSyncing = false; });
   };
-  els.mdSource.addEventListener('scroll', () => syncScroll(els.mdSource, els.mdPreview), { passive: true });
+  els.mdSource.addEventListener('scroll', () => {
+    syncScroll(els.mdSource, els.mdPreview);
+    offsetSourceBands();   // 色带跟着滚，只改 transform
+  }, { passive: true });
   els.mdPreview.addEventListener('scroll', () => {
     syncScroll(els.mdPreview, els.mdSource);
     updateMdOutlineActive();
@@ -2448,6 +2733,7 @@ function exitEditMode({ restore } = { restore: true }) {
   updateEditToolbar();
 
   if (wasMd) {
+    clearMdSync();   // 清掉对应区域高亮，别留到下次进编辑
     // 退出前记录编辑器预览面板的滚动百分比，重载 iframe 后按同比例恢复，避免跳回顶部
     if (restore && rawUrl) {
       try {

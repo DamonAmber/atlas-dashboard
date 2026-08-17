@@ -43,6 +43,12 @@
     return { meta: m[1], raw: m[0], body: s.slice(m[0].length) };
   }
 
+  // front matter 在源码里占的行数（raw 结尾通常带一个换行，先剥掉再数）
+  function frontMatterLineCount(raw) {
+    if (!raw) return 0;
+    return String(raw).replace(/\n$/, '').split('\n').length;
+  }
+
   function frontMatterHtml(meta, raw) {
     var rows = [];
     meta.split(/\r?\n/).forEach(function (line) {
@@ -57,7 +63,9 @@
         + (r.k ? '<span class="md-fm-key">' + escapeHtml(r.k) + '</span>' : '')
         + '<span class="md-fm-val">' + escapeHtml(r.v) + '</span></div>';
     }).join('');
-    return '<div class="md-frontmatter" data-md-raw="' + escapeHtml(raw) + '">'
+    var span = frontMatterLineCount(raw);
+    return '<div class="md-frontmatter" data-md-raw="' + escapeHtml(raw) + '"'
+      + ' data-md-line="1" data-md-endline="' + span + '">'
       + '<div class="md-fm-label">文档信息</div>' + items + '</div>';
   }
 
@@ -211,10 +219,14 @@
   // gap = 本块之前的空行数。也一起记下来，回写时按原样还原块间距——
   // 否则 `## 标题` 紧跟正文（无空行）这种写法每次保存都会被塞进一个空行，
   // 对 git 版本化的文档就是无意义的 diff。
-  function withRaw(html, raw, gap) {
+  //
+  // line / endLine（1 基，闭区间）= 本块在源码里占的行范围。编辑器靠它做
+  // 「左边光标在哪 → 右边高亮哪一块」的双向映射。
+  function withRaw(html, raw, gap, line, endLine) {
     if (!raw) return html;
     var attr = ' data-md-raw="' + escapeHtml(raw) + '"'
-      + (gap == null ? '' : ' data-md-gap="' + gap + '"');
+      + (gap == null ? '' : ' data-md-gap="' + gap + '"')
+      + (line == null ? '' : ' data-md-line="' + line + '" data-md-endline="' + endLine + '"');
     return html.replace(/^<([a-zA-Z][a-zA-Z0-9]*)(\s|>|\/>)/, function (m, tag, tail) {
       if (tail === '>') return '<' + tag + attr + '>';
       if (tail === '/>') return '<' + tag + attr + ' />';
@@ -228,15 +240,25 @@
   function render(src, opts) {
     src = String(src == null ? '' : src).replace(/\r\n?/g, '\n');
     var annotate = !!(opts && opts.annotateRaw);
+    // lineOffset：本次 render 的输入在整篇源码里的起始偏移。
+    // front matter 被 renderBody 剥掉后，正文的行号要整体后移，否则
+    // 编辑器算出来的"这一块对应源码第几行"会全部偏掉。
+    var lineOffset = (opts && opts.lineOffset) || 0;
     var lines = src.split('\n');
     var out = [];
     var i = 0, n = lines.length;
     var blockStart = 0;
     var prevEnd = 0;      // 上一个块结束后的行号，用来算块之间的空行数
-    // 把刚生成的块推入 out，需要时带上原始源码与块间距
+    // 把刚生成的块推入 out，需要时带上原始源码、块间距与源码行范围
     var push = function (html) {
       if (annotate) {
-        out.push(withRaw(html, lines.slice(blockStart, i).join('\n'), blockStart - prevEnd));
+        out.push(withRaw(
+          html,
+          lines.slice(blockStart, i).join('\n'),
+          blockStart - prevEnd,
+          blockStart + 1 + lineOffset,   // 1 基起始行
+          i + lineOffset,                // 1 基结束行（闭区间）
+        ));
       } else {
         out.push(html);
       }
@@ -351,7 +373,14 @@
   function renderBody(src, opts) {
     var fm = splitFrontMatter(src);
     var head = fm.meta != null ? frontMatterHtml(fm.meta, fm.raw) : '';
-    var body = render(fm.body, opts);
+    // 正文的行号要跳过 front matter 占掉的那几行
+    var bodyOpts = opts || {};
+    if (fm.meta != null) {
+      bodyOpts = Object.assign({}, bodyOpts, {
+        lineOffset: (bodyOpts.lineOffset || 0) + frontMatterLineCount(fm.raw),
+      });
+    }
+    var body = render(fm.body, bodyOpts);
     return head ? head + '\n' + body : body;
   }
 

@@ -111,13 +111,13 @@ for spec in tests/*.spec.js; do
 done
 ```
 
-> 验证过：把本机 Atlas 完全停掉，全套 29 个 spec 依然全绿，且 `~/.atlas/config.json`
+> 验证过：把本机 Atlas 完全停掉，全套 30 个 spec 依然全绿，且 `~/.atlas/config.json`
 > 与 `store.json` 校验和逐字节未变。若将来某个 spec 在服务停止时失败，说明它偷偷依赖了
 > 你的真实实例，按下面的约定改掉。
 
 **要求所有 spec 都"失败 0 项"**。任意一个失败必须先修才能发版。
 
-当前 spec 清单（29 个）。除 `landing-demo`（`file://`）与 `diff-algorithm`（纯函数单测）
+当前 spec 清单（30 个）。除 `landing-demo`（`file://`）与 `diff-algorithm`（纯函数单测）
 外，其余都通过
 `tests/helpers/isolated-atlas.js` 的 `startAtlas()` 起独立实例：临时 `ATLAS_HOME`
 （自带 config/store）+ 临时扫描根 + 临时 fixture + 随机端口，结束即删。
@@ -133,6 +133,7 @@ done
 > - `share-security.spec.js` — 局域网分享的安全边界：默认只放行文档引用到的资源、同目录未引用文件 403、显式 `scope=dir` 逃生口、路径穿越、有效期到期 410 与过期条目清理（42 项）
 > - `diff-algorithm.spec.js` — 行级 diff 算法单测：上限必须卡在编辑距离而非 N+M、trace 切片边界、大文件性能（33 项，纯函数，不起服务）
 > - `diff-view.spec.js` — 和上次已读版本对比：底本生命周期（打开即记录·内容相同去重·数量上限·删文件即清理）/ hunk 与统计 / 上下文行数 / 标记为已看过 / 改名后底本迁移 / 前端面板与编辑态互斥（41 项）
+> - `md-sync-highlight.spec.js` — 源码 ↔ 预览的对应区域高亮：行号映射（含 front matter 偏移）、光标所在块标 active、跨块选区把覆盖到的块全标 selected、预览侧点/选时源码画出对齐到行的色带（含软换行折行）、色带随滚动移动、内容变化后映射更新、退出编辑清干净（24 项）
 > - `modal-close.spec.js` — 每个弹窗的每条关闭路径：✕ 按钮（含精确点在图标 span 上）、遮罩、Esc、关闭后焦点归还、以及"点弹窗内部不会误关"（22 项）
 > - `misc-hardening.spec.js` — 杂项加固：编辑备份扩展名跟随源文件 / 请求体上限与可读错误 / `/raw` 路由不依赖 `app._router.stack`（扫描根运行时增删后序号重排仍正确）（26 项）
 > - `toast.spec.js` — 扫描根增删与反馈 toast（12 项，含隔离性断言）
@@ -430,6 +431,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.9.0** (2026-08-17) — 新功能：**Markdown 编辑器的源码 ↔ 预览对应区域高亮**。此前左右两栏只有百分比滚动同步，光标落在源码某一段时，右边预览里对应哪块内容全靠自己数——文档一长就完全对不上。现在光标 / 选区落在任一侧，另一侧会同步标出对应内容：光标所在块用细高亮（左侧竖条 + 淡背景），跨块选区把覆盖到的块全部标成更明显的选中态，两个方向都生效。① 映射复用 0.8.0 为保真往返而建的块级锚点：`withRaw()` 除 `data-md-raw` / `data-md-gap` 外再写入 `data-md-line` / `data-md-endline`（1 基闭区间）；`render()` 新增 `opts.lineOffset`，`renderBody()` 把 front matter 占掉的行数作为偏移传下去，否则带 front matter 的文档整篇行号都会偏。② 源码侧的高亮不能靠 textarea 本身——它承载不了任何装饰，而且不聚焦时原生选区根本不绘制。所以在 textarea 下面垫一层色带（`.md-source-hl`，textarea 背景改透明），位置由一个与 textarea 同盒模型的隐藏镜像元素量出来，因此**软换行折出的多个视觉行也能完整覆盖**。踩到的坑：`getClientRects()` 返回的是「内联盒」（13px 字体约 15px 高）而不是「行盒」（line-height 21.45px），内联盒在行盒里垂直居中，直接拿来画会整体偏下约 3px 且高度只有半行；现在按行高把半行距还原回去，实测对齐偏差 ≤1px。③ 预览 → 源码的选区解析用 `range.intersectsNode()` 而不是只看首尾容器——全选、跨块鼠标拖选、`setStartBefore/setEndAfter` 产生的 Range，边界容器往往是预览面板本身（带 offset 指向子块）或空白文本节点，只看首尾容器会漏判；`topLevelBlockOf()` 也加了"节点必须在面板内"的前置判断，避免一路 `parentElement` 爬出面板返回无关祖先。④ 粒度是块而非字符：Markdown → HTML 之后字符级对应关系并不成立（源码里选中 `**粗` 这半截，HTML 里没有任何东西与之对应），块级才是稳定且有意义的单位。⑤ 色带随源码滚动只改 `transform`、不重新测量；分栏宽度变化会重新测量（软换行位置变了）。⑥ 顺带把源码区结构从「textarea 直接做 flex 子项」改成「`.md-source-wrap` 三层叠放（色带 / textarea / 测量镜像）」。新增 spec `md-sync-highlight.spec.js`（24 项），已挂进 `npm test`。全套 30 个 spec 全绿。
 
 - **0.8.1** (2026-08-17) — Bug 修复：**分享弹窗与设置弹窗右上角的 ✕ 关闭按钮点击无效**（0.8.0 引入的回归）。成因是 0.8.0 为可访问性把 ✕ 的图标包进了 `<span aria-hidden="true">`（避免屏幕阅读器去读符号本身），但关闭判断仍写作 `e.target.dataset.close !== undefined` —— 点在图标上时 `e.target` 是那个 span，它没有 `data-close` 属性，于是判断失效、按钮完全没反应，用户只能靠点遮罩或按 Esc 退出。现在抽出 `isCloseTarget()` 统一用 `closest('[data-close]')` 往上找，四处调用点（设置弹窗 / 分享弹窗 / ⌘K 面板 / 应用内确认框）全部改用它，未来再嵌套图标也不会重犯。② 顺带修掉一个相邻问题：`openShareModal()` 结尾调的是全量 `render()`，会把用户刚点的那个分享按钮连同整行 DOM 一起销毁重建，导致弹窗关闭时焦点无处可还（记下的 `prevFocus` 已成游离节点），几百篇文档时还白白重排一遍侧栏。新增 `updateSharedDecorations()` 只切换受影响文件行的 `.shared` 标记与角标，替换掉 6 处为了刷分享角标而做的全量 `render()`。③ 新增回归 spec `modal-close.spec.js`（22 项），把每个弹窗的每条关闭路径都钉住——✕ 按钮（含精确点在图标 span 上）、遮罩、Esc、关闭后焦点归还，以及"点弹窗内部标题不会误关"；已挂进 `npm test`。全套 29 个 spec 全绿。
 

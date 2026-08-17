@@ -1775,20 +1775,70 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
   font-size: 11px;
   color: var(--text-faint);
 }
-.md-source {
+/* 源码区三层叠放：高亮带（底） / textarea（中，背景透明） / 测量镜像（不可见） */
+.md-source-wrap {
+  position: relative;
   flex: 1 1 auto;
+  min-height: 0;
+  background: var(--bg-elev);
+  overflow: hidden;
+}
+.md-source {
+  position: absolute;
+  inset: 0;
   width: 100%;
+  height: 100%;
   box-sizing: border-box;
   border: 0;
   outline: none;
   resize: none;
   padding: 16px 18px;
-  background: var(--bg-elev);
+  background: transparent;   /* 让下面的高亮带透出来 */
   color: var(--text);
   font: 13px/1.65 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   tab-size: 2;
+  overflow-wrap: break-word;
+  z-index: 2;
 }
 .md-source::placeholder { color: var(--text-faint); }
+.md-source-hl {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  overflow: hidden;
+}
+.md-source-hl-inner {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  will-change: transform;
+}
+.md-source-band {
+  position: absolute;
+  left: 0; right: 0;
+  background: var(--sync-selected-bg);
+  border-left: 2px solid var(--sync-selected-bar);
+}
+.md-source-band.active {
+  background: var(--sync-active-bg);
+  border-left-color: var(--sync-active-bar);
+}
+/* 镜像层：盒模型必须和 textarea 完全一致，才能量出正确的软换行位置。
+   用 visibility:hidden 而不是 display:none —— 后者量不到几何 */
+.md-source-mirror {
+  position: absolute;
+  top: 0; left: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: -1;
+  box-sizing: border-box;
+  padding: 16px 18px;
+  font: 13px/1.65 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
 /* 预览面板跟随系统主题，与只读 iframe 渲染效果一致。
    （原来硬编码 #fff：深色模式下编辑器会变成左半深色 + 右半纯白的割裂观感） */
 .md-preview-pane-wrap { background: #ffffff; }
@@ -2246,3 +2296,39 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
 }
 /* 有底本且文件被改过时，工具栏按钮给个提示色 */
 #btn-diff.has-changes { color: var(--accent); }
+
+/* ==================== 源码 ↔ 预览 的对应区域高亮 ==================== */
+/* 两种强度：active = 光标所在块（细），selected = 选区覆盖的块（明显） */
+:root {
+  --sync-active-bg: rgba(91, 156, 255, 0.10);
+  --sync-active-bar: rgba(91, 156, 255, 0.55);
+  --sync-selected-bg: rgba(91, 156, 255, 0.20);
+  --sync-selected-bar: #5b9cff;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --sync-active-bg: rgba(37, 99, 235, 0.07);
+    --sync-active-bar: rgba(37, 99, 235, 0.45);
+    --sync-selected-bg: rgba(37, 99, 235, 0.14);
+    --sync-selected-bar: #2563eb;
+  }
+}
+
+/* 预览侧：块级对应标识。用 box-shadow 画左侧竖条，不占布局、不引起重排 */
+.md-preview-pane .md-sync-active,
+.md-preview-pane .md-sync-selected {
+  border-radius: 3px;
+  transition: background-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+.md-preview-pane .md-sync-active {
+  background-color: var(--sync-active-bg);
+  box-shadow: -8px 0 0 0 var(--sync-active-bg), inset 2px 0 0 0 var(--sync-active-bar);
+}
+.md-preview-pane .md-sync-selected {
+  background-color: var(--sync-selected-bg);
+  box-shadow: -8px 0 0 0 var(--sync-selected-bg), inset 2px 0 0 0 var(--sync-selected-bar);
+}
+@media (prefers-reduced-motion: reduce) {
+  .md-preview-pane .md-sync-active,
+  .md-preview-pane .md-sync-selected { transition: none; }
+}

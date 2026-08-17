@@ -220,7 +220,13 @@
               <button type="button" data-md-cmd="quote" title="引用" aria-label="引用">引用</button>
             </div>
           </div>
-          <textarea id="md-source" class="md-source" spellcheck="false" placeholder="在此编辑 Markdown…" aria-label="Markdown 源码"></textarea>
+          <div class="md-source-wrap" id="md-source-wrap">
+            <!-- 高亮层：画"对应区域"的色带，垫在 textarea 后面 -->
+            <div class="md-source-hl" id="md-source-hl" aria-hidden="true"></div>
+            <textarea id="md-source" class="md-source" spellcheck="false" placeholder="在此编辑 Markdown…" aria-label="Markdown 源码"></textarea>
+            <!-- 镜像层：和 textarea 同字体同宽度，用来测出带软换行的真实行位置。不可见 -->
+            <div class="md-source-mirror" id="md-source-mirror" aria-hidden="true"></div>
+          </div>
         </div>
         <div class="md-editor-split" id="md-editor-split" role="separator" aria-orientation="vertical"
              tabindex="0" aria-label="拖拽调整源码与预览的宽度（方向键可微调）" title="拖拽调整宽度，双击复位"></div>
