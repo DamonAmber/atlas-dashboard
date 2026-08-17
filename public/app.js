@@ -190,6 +190,17 @@ function showToast({ kind = 'info', text = '', secondary = '', duration = 2800, 
   return { close, setText, setSecondary, el: t };
 }
 
+// 点击是否落在「关闭」元素上（遮罩、✕ 按钮，或它们内部的图标）。
+//
+// 必须用 closest() 往上找，不能只看 e.target 自己：✕ 按钮的图标包在
+// <span aria-hidden="true"> 里（为了不让屏幕阅读器去读符号本身），点在图标上时
+// e.target 是那个 span，它没有 data-close 属性。0.8.0 就是这么把分享弹窗和
+// 设置弹窗的关闭按钮弄失效的——按钮点了完全没反应，只能靠遮罩或 Esc 退出。
+function isCloseTarget(target, attr = 'data-close') {
+  if (!target || typeof target.closest !== 'function') return false;
+  return !!target.closest(`[${attr}]`);
+}
+
 // ---------- 弹窗基础设施：Esc 关闭 / 焦点陷阱 / 焦点归还 ----------
 // 所有弹窗（设置、分享、确认框）共用一个栈。原来的弹窗既不能按 Esc 关闭，
 // 也没有 role=dialog / aria-modal，Tab 会跑到弹窗背后的侧边栏按钮上。
@@ -306,7 +317,7 @@ function showDialog({
     };
     const close = () => finish(input ? null : false);
     root.addEventListener('click', (e) => {
-      if (e.target.dataset && e.target.dataset.dialogCancel !== undefined) close();
+      if (isCloseTarget(e.target, 'data-dialog-cancel')) close();
     });
     okBtn.addEventListener('click', () => finish(input ? (inputEl.value.trim() || null) : true));
     cancelBtn.addEventListener('click', close);
@@ -1333,6 +1344,23 @@ async function openFile(filePath) {
     }).catch(() => {});
   }
   renderRecent();
+}
+
+// 只更新「已分享」的视觉标记，不重建整棵树。
+// 原来这里调的是全量 render()——那会把用户刚点的那个分享按钮连同整行 DOM
+// 一起销毁重建，于是弹窗关闭时焦点无处可还（记下的 prevFocus 已经是游离节点），
+// 而且几百篇文档时白白重排一遍侧栏。
+function updateSharedDecorations() {
+  const shared = state.sharesByPath || new Map();
+  els.tree.querySelectorAll('.file').forEach((fileEl) => {
+    const isShared = shared.has(fileEl.dataset.path);
+    fileEl.classList.toggle('shared', isShared);
+    const badge = fileEl.querySelector('.share-badge');
+    if (badge) badge.setAttribute('aria-hidden', isShared ? 'false' : 'true');
+  });
+  if (state.activeFilePath) {
+    els.btnShare.classList.toggle('shared', shared.has(state.activeFilePath));
+  }
 }
 
 function updateUnreadDecorations() {
@@ -3422,7 +3450,7 @@ function closeQuickOpen() {
 
 if (qoEls.root) {
   qoEls.root.addEventListener('click', (e) => {
-    if (e.target.dataset && e.target.dataset.close !== undefined) closeQuickOpen();
+    if (isCloseTarget(e.target)) closeQuickOpen();
   });
   qoEls.input.addEventListener('input', qoRender);
   qoEls.input.addEventListener('keydown', (e) => {
@@ -3607,7 +3635,7 @@ function renderShareList() {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         state.sharesByPath.delete(item.path);
         renderShareList();
-        render();
+        updateSharedDecorations();
         showToast({ kind: 'success', text: '已停止分享', secondary: display });
       } catch (err) {
         showToast({ kind: 'error', text: '停止失败', secondary: err.message });
@@ -3633,7 +3661,7 @@ els.shareStopAllBtn.addEventListener('click', async () => {
     const data = await r.json();
     state.sharesByPath = new Map();
     renderShareList();
-    render();
+    updateSharedDecorations();
     showToast({ kind: 'success', text: `✓ 已停止 ${data.count} 个分享` });
   } catch (err) {
     showToast({ kind: 'error', text: '停止失败', secondary: err.message });
@@ -3703,7 +3731,7 @@ function closeSettings() {
 }
 els.btnSettings.addEventListener('click', openSettings);
 els.modal.addEventListener('click', (e) => {
-  if (e.target.dataset.close !== undefined) closeSettings();
+  if (isCloseTarget(e.target)) closeSettings();
 });
 
 function renderRootList(roots) {
@@ -4220,8 +4248,8 @@ async function refreshSharesState() {
       state.sharesByPath.set(s.path, s);
     }
     state.lanIps = data.lanIps || [];
-    // 重新渲染让"已分享"角标更新
-    render();
+    // 只刷角标，不重建整棵树
+    updateSharedDecorations();
     return data;
   } catch {
     return null;
@@ -4427,7 +4455,7 @@ async function openShareModal(filePath) {
 
   // 同步 sharesByPath 状态（角标 + 设置面板列表）
   state.sharesByPath.set(filePath, entry);
-  render();
+  updateSharedDecorations();
 }
 
 let shareModalEntry = null;
@@ -4439,7 +4467,7 @@ function closeShareModal() {
 }
 
 els.shareModal.addEventListener('click', (e) => {
-  if (e.target.dataset.close !== undefined) closeShareModal();
+  if (isCloseTarget(e.target)) closeShareModal();
 });
 els.shareOpenBtn.addEventListener('click', () => {
   if (!shareCurrent) return;
@@ -4464,7 +4492,7 @@ els.shareStopBtn.addEventListener('click', async () => {
     state.sharesByPath.delete(shareCurrent.path);
     showToast({ kind: 'success', text: '已停止分享', secondary: shareCurrent.name });
     closeShareModal();
-    render();
+    updateSharedDecorations();
   } catch (err) {
     showToast({ kind: 'error', text: '停止失败', secondary: err.message });
   }
@@ -4490,7 +4518,7 @@ els.shareStopBtn.addEventListener('click', async () => {
       state.sharesByPath = new Map();
       for (const s of data.shares || []) state.sharesByPath.set(s.path, s);
       state.lanIps = data.lanIps || [];
-      render();
+      updateSharedDecorations();
     }
   } catch {}
 })();

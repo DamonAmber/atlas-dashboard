@@ -111,13 +111,13 @@ for spec in tests/*.spec.js; do
 done
 ```
 
-> 验证过：把本机 Atlas 完全停掉，全套 28 个 spec 依然全绿，且 `~/.atlas/config.json`
+> 验证过：把本机 Atlas 完全停掉，全套 29 个 spec 依然全绿，且 `~/.atlas/config.json`
 > 与 `store.json` 校验和逐字节未变。若将来某个 spec 在服务停止时失败，说明它偷偷依赖了
 > 你的真实实例，按下面的约定改掉。
 
 **要求所有 spec 都"失败 0 项"**。任意一个失败必须先修才能发版。
 
-当前 spec 清单（28 个）。除 `landing-demo`（`file://`）与 `diff-algorithm`（纯函数单测）
+当前 spec 清单（29 个）。除 `landing-demo`（`file://`）与 `diff-algorithm`（纯函数单测）
 外，其余都通过
 `tests/helpers/isolated-atlas.js` 的 `startAtlas()` 起独立实例：临时 `ATLAS_HOME`
 （自带 config/store）+ 临时扫描根 + 临时 fixture + 随机端口，结束即删。
@@ -133,6 +133,7 @@ done
 > - `share-security.spec.js` — 局域网分享的安全边界：默认只放行文档引用到的资源、同目录未引用文件 403、显式 `scope=dir` 逃生口、路径穿越、有效期到期 410 与过期条目清理（42 项）
 > - `diff-algorithm.spec.js` — 行级 diff 算法单测：上限必须卡在编辑距离而非 N+M、trace 切片边界、大文件性能（33 项，纯函数，不起服务）
 > - `diff-view.spec.js` — 和上次已读版本对比：底本生命周期（打开即记录·内容相同去重·数量上限·删文件即清理）/ hunk 与统计 / 上下文行数 / 标记为已看过 / 改名后底本迁移 / 前端面板与编辑态互斥（41 项）
+> - `modal-close.spec.js` — 每个弹窗的每条关闭路径：✕ 按钮（含精确点在图标 span 上）、遮罩、Esc、关闭后焦点归还、以及"点弹窗内部不会误关"（22 项）
 > - `misc-hardening.spec.js` — 杂项加固：编辑备份扩展名跟随源文件 / 请求体上限与可读错误 / `/raw` 路由不依赖 `app._router.stack`（扫描根运行时增删后序号重排仍正确）（26 项）
 > - `toast.spec.js` — 扫描根增删与反馈 toast（12 项，含隔离性断言）
 > - `inline-edit.spec.js` — 编辑文件名 / 备注（18 项，含隔离性断言）
@@ -429,6 +430,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.8.1** (2026-08-17) — Bug 修复：**分享弹窗与设置弹窗右上角的 ✕ 关闭按钮点击无效**（0.8.0 引入的回归）。成因是 0.8.0 为可访问性把 ✕ 的图标包进了 `<span aria-hidden="true">`（避免屏幕阅读器去读符号本身），但关闭判断仍写作 `e.target.dataset.close !== undefined` —— 点在图标上时 `e.target` 是那个 span，它没有 `data-close` 属性，于是判断失效、按钮完全没反应，用户只能靠点遮罩或按 Esc 退出。现在抽出 `isCloseTarget()` 统一用 `closest('[data-close]')` 往上找，四处调用点（设置弹窗 / 分享弹窗 / ⌘K 面板 / 应用内确认框）全部改用它，未来再嵌套图标也不会重犯。② 顺带修掉一个相邻问题：`openShareModal()` 结尾调的是全量 `render()`，会把用户刚点的那个分享按钮连同整行 DOM 一起销毁重建，导致弹窗关闭时焦点无处可还（记下的 `prevFocus` 已成游离节点），几百篇文档时还白白重排一遍侧栏。新增 `updateSharedDecorations()` 只切换受影响文件行的 `.shared` 标记与角标，替换掉 6 处为了刷分享角标而做的全量 `render()`。③ 新增回归 spec `modal-close.spec.js`（22 项），把每个弹窗的每条关闭路径都钉住——✕ 按钮（含精确点在图标 span 上）、遮罩、Esc、关闭后焦点归还，以及"点弹窗内部标题不会误关"；已挂进 `npm test`。全套 29 个 spec 全绿。
 
 - **0.8.0** (2026-08-17) — 一轮系统性评审后的集中修复与增强。**① 修掉三个实测确认的交互 bug**：全局单键快捷键只排除了 `isContentEditable`，而 `<input>`/`<textarea>` 的该属性是 `false`，于是每敲一个 `/` 焦点就被弹到搜索框——设置里的「扫描根路径」输入框实测输入 `/Users/x` 得到空字符串，绝对路径根本打不进去；现在统一用 `isTypingTarget()` 排除 INPUT/TEXTAREA/SELECT。⌘B 在 Markdown 编辑器里会去收侧边栏而不是加粗、⌘S 完全没被接管（触发浏览器"保存网页"），两者都已按上下文分流。**② 修掉 Markdown 渲染的四处硬伤**：`renderPage` 不注入 `<base href>`，预览页 URL 是 `/api/render-md?path=...`，导致 `![](./assets/x.png)` 被解析成 `/api/assets/x.png` → md 里的本地图片全部 404（修法就在隔壁：HTML 编辑文档早已注入 base）；YAML front matter 被当成「分割线+段落+分割线」渲染成乱码；正文里手写的 `#锚点` 链接被加 `target="_blank"` 每点一次开一个新标签页；表格 `display:block` 脱离正常流让宽表格的滚动条很难发现。**③ 修掉所见即所得编辑的信息丢失**：过去在预览里改一个字会重新序列化整篇文档，表格对齐 `:---:` 退化成 `---`、软换行段落被压成一行——对 git 版本化的文档就是满屏无意义 diff。现在 `render()` 给每个顶层块记下原始源码（`data-md-raw`）与块间距（`data-md-gap`），只有真正被碰过的块（`data-md-dirty`）才重新序列化，实测改一个标题后全文逐字节不变（唯一规范化是文件末尾补一个换行符）。**④ Markdown 呈现增强**：深色模式（配色全面改为 CSS 变量驱动，此前预览页硬编码白底，深色壳子里嵌一块刺眼白板，编辑器更是左半深色右半纯白）、代码块语言标签 + 一键复制、GFM 任务列表渲染成真复选框、标题 hover 锚点、宽表格横向滚动层。**⑤ Markdown 编辑器**：分栏可拖拽（此前 50/50 写死）+ 双击复位 + 方向键微调、回车自动续列表（无序/有序序号自增/任务）、Tab 多行缩进与反缩进、格式工具条、可折叠大纲、⌘B/⌘I/⌘K/⌘E、崩溃后可恢复的本地草稿（此前只有 `beforeunload`，进程崩了就没了）、支持导出 PDF（此前按钮直接 disabled）。**⑥ 可访问性**：弹窗支持 Esc 关闭、`role=dialog`/`aria-modal`、Tab 焦点陷阱、关闭后焦点归还（此前一个都没有，Tab 会跑到弹窗背后）；全部 6 处 `confirm()` 与 2 处 `prompt()` 换成应用内对话框；emoji 图标按钮补 `aria-label`（此前屏幕阅读器只会读出 emoji 名字）。**⑦ 新功能**：⌘K 快速打开（模糊子序列匹配文件名/备注/项目）、重命名磁盘文件（此前只能改显示用的备注名）、**和上次已读版本对比**——未读红点只回答了"AI 动过这个文件"，这个功能补上"动了什么"：用户每次打开文档时把内容存一份底本到 `~/.atlas/versions/`，之后可逐行 diff（新增 `lib/diff.js`，Myers O((N+M)·D)）。**⑧ 性能**：`/api/state` 与 `/api/search` 原来每次请求都全盘递归 walk，而前者每 60s + 每次切回前台 + 每个文件事件都会被调用；改为 chokidar 增量维护的内存索引后，603 篇文档下 `/api/state` 从 18~28ms 降到 4.7ms、搜索冷启动从 528ms 降到 22ms，且不再每分钟无意义重写 `store.json`。搜索支持多关键词 AND 与引号短语，内容缓存从"按 mtime 淘汰"改成真正的 LRU。**⑨ 安全**：局域网分享此前服务的是被分享文件所在目录的整棵子树——分享 `~/Documents/report.html` 等于把整个 `~/Documents/` 开放给拿到 token 的人；现在默认只放行文档真正引用到的资源（HTML 属性 + srcset + CSS `url()` + md 图片，跟一层引用），并保留 `scope=dir` 逃生口给在 JS 里动态拼路径的页面。token 也不再永久有效（默认 2 小时，可选 30 分钟 / 24 小时 / 不过期），过期返回 410 并自动从 store 清理。**⑩ 杂项**：编辑备份的扩展名跟随源文件（此前 `.md` 被备份成 `.html`，且 pruneOld 只筛 `.html` 导致 md 备份永不淘汰）；请求体上限提到 8MB 使路由自己的 5MB 提示可达，并把 body parser 错误翻译成 JSON；`/raw` 路由不再 splice `app._router.stack`（依赖 Express 内部结构，Express 5 已移除该字段）。**新增 9 个 spec 共 287 项断言**：`md-render-and-roundtrip` / `md-editor-ux` / `quickopen-a11y-rename` / `md-pdf-export` / `index-perf-and-search` / `share-security` / `diff-algorithm` / `diff-view` / `misc-hardening`，全部挂进 `npm test`；同时修了 `toast.spec.js` 与 `preview-live-edit.spec.js`——它们靠 `page.on('dialog')` 应答原生 confirm，弹窗改成应用内后失效，新增 `autoAcceptDialogs()` helper 顶上。全套 28 个 spec 全绿。
 
