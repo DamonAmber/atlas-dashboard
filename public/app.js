@@ -146,6 +146,36 @@ function previewUrlFor(file) {
   return file.url;
 }
 
+// 重载预览 iframe，使其停在 canonicalUrl 这份文档上。
+//
+// 不能无脑 contentWindow.location.reload()：iframe 里的文档可能已经把自己的 URL
+// 改掉了（预览页注入了 <base href="/raw/…/">，页内脚本 replaceState("#id") 的
+// 相对 URL 是按 base 解析的，文档 URL 会变成 /raw/…/ 目录），此时 reload 会去
+// GET 一个目录 → Cannot GET /raw/0/xxx/。所以先比对实际地址，跑偏了就重新赋 src。
+function reloadPreviewDoc(canonicalUrl) {
+  const ifr = els.preview;
+  if (!ifr || !canonicalUrl) return;
+  const canonical = new URL(canonicalUrl, location.href);
+  const reassign = (url) => {
+    ifr.src = 'about:blank';
+    requestAnimationFrame(() => { ifr.src = url; });
+  };
+  try {
+    const loc = ifr.contentWindow && ifr.contentWindow.location;
+    if (!loc) throw new Error('no contentWindow');
+    if (loc.pathname !== canonical.pathname || loc.search !== canonical.search) {
+      // 保留 hash，重载后仍能定位到原来的章节
+      reassign(canonical.pathname + canonical.search + (loc.hash || ''));
+    } else {
+      // 同一份文档：用 reload 而非 src 重赋值，hash / search 不被重置
+      loc.reload();
+    }
+  } catch {
+    // 跨源等拿不到 contentWindow 时只能重新赋 src
+    reassign(canonical.href);
+  }
+}
+
 // ---------- Toast 通知 ----------
 // showToast({ kind, text, secondary, duration, progress })
 //   - progress: true → 不自动消失（duration 被忽略）+ 内部 indeterminate 进度条
@@ -2749,11 +2779,7 @@ function exitEditMode({ restore } = { restore: true }) {
     if (restore && rawUrl) {
       els.preview.classList.add('loading');
       // 强制重载（源可能未变，用 reload 保证刷新渲染结果）
-      if (els.preview.src === new URL(rawUrl, location.href).href && els.preview.contentWindow) {
-        try { els.preview.contentWindow.location.reload(); } catch { els.preview.src = rawUrl; }
-      } else {
-        els.preview.src = rawUrl;
-      }
+      reloadPreviewDoc(rawUrl);
     }
     return;
   }
@@ -3319,21 +3345,11 @@ els.btnReloadPreview.addEventListener('click', () => {
   if (!ifr || !ifr.src) return;
   const filePath = state.activeFilePath;
   els.btnReloadPreview.classList.add('spinning');
-  // 用 contentWindow.location.reload 而非 src 重赋值——保留 hash / location.search 不重置
-  try {
-    if (ifr.contentWindow && ifr.contentWindow.location) {
-      ifr.contentWindow.location.reload();
-    } else {
-      // 兜底：跨源等无法访问 contentWindow 时用 src 重赋值
-      const u = ifr.src;
-      ifr.src = 'about:blank';
-      requestAnimationFrame(() => { ifr.src = u; });
-    }
-  } catch {
-    const u = ifr.src;
-    ifr.src = 'about:blank';
-    requestAnimationFrame(() => { ifr.src = u; });
-  }
+
+  // canonical 地址：md 走 /api/render-md，html 走 /raw/。
+  // 不直接信任 iframe 当前 URL——详见 reloadPreviewDoc 的注释
+  const file = state.files[filePath];
+  reloadPreviewDoc(file ? previewUrlFor(file) : ifr.src);
   // load 事件 = 加载完成；超时 1.5s 兜底防止动画卡住
   let cleared = false;
   const stop = () => {
@@ -3345,7 +3361,6 @@ els.btnReloadPreview.addEventListener('click', () => {
   setTimeout(stop, 1500);
 
   // 文件外部更新时会被自动标回未读；reload 等同于"再次查看"，标为已读
-  const file = state.files[filePath];
   if (file && file.unread) {
     file.unread = false;
     file.seenAt = Date.now();

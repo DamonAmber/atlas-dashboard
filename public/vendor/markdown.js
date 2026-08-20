@@ -757,7 +757,11 @@
     + 'var caret=e.target.closest?e.target.closest(".toc-caret"):null;'
     + 'if(caret&&caret.tagName==="BUTTON"){var li=caret.closest(".toc-li");if(li)li.classList.toggle("collapsed");return;}'
     + 'var a=e.target.closest?e.target.closest("a[data-target]"):null;if(!a)return;e.preventDefault();'
-    + 'var el=document.getElementById(a.getAttribute("data-target"));if(el){el.scrollIntoView({behavior:"smooth",block:"start"});try{history.replaceState(null,"","#"+a.getAttribute("data-target"));}catch(_){}}'
+    // 注意：replaceState 的相对 URL 是按「文档 base URL」解析的，本页注入了
+    // <base href="/raw/…/">，直接传 "#id" 会把文档 URL 改写成 /raw/…/#id，
+    // 之后刷新 iframe 就变成 GET 目录 → Cannot GET /raw/0/xxx/。必须带上真实路径。
+    + 'var el=document.getElementById(a.getAttribute("data-target"));if(el){el.scrollIntoView({behavior:"smooth",block:"start"});'
+    + 'try{history.replaceState(null,"",location.pathname+location.search+"#"+a.getAttribute("data-target"));}catch(_){}}'
     + 'if(window.matchMedia&&window.matchMedia("(max-width:900px)").matches)document.body.classList.add("toc-collapsed");});'
     + 'var links={};Array.prototype.forEach.call(document.querySelectorAll(".toc-ul a[data-target]"),function(a){links[a.getAttribute("data-target")]=a;});'
     + 'function expandTo(a){var li=a.closest(".toc-li");while(li){if(li.classList.contains("has-children"))li.classList.remove("collapsed");li=li.parentElement?li.parentElement.closest(".toc-li"):null;}}'
@@ -775,6 +779,21 @@
   // 特意只在 iframe 预览页里做、不写进 render() 的输出——编辑器右侧的所见即所得
   // 预览面板要靠 htmlToMarkdown() 反解析回源码，DOM 里多出按钮会污染结果。
   var enhanceScript = '(function(){'
+    // 页内锚点：本页注入了 <base href="/raw/…/">，href="#id" 会被解析成
+    // /raw/…/#id —— 点一下标题锚点或 md 里的 [x](#y) 就整页跳走变 404。
+    // 统统自己接管：滚动到目标 + 只改 hash（保持文档 URL 不变，刷新才不会 404）。
+    + 'function setHash(id){try{history.replaceState(null,"",location.pathname+location.search+(id?"#"+id:""));}catch(_){}}'
+    + 'document.addEventListener("click",function(e){'
+    + 'var a=(e.target&&e.target.closest)?e.target.closest("a"):null;if(!a)return;'
+    + 'if(a.hasAttribute("data-target"))return;'   // TOC 链接由 tocScript 处理
+    + 'var raw=a.getAttribute("href")||"";if(raw.charAt(0)!=="#")return;'
+    + 'e.preventDefault();'
+    + 'var id="";try{id=decodeURIComponent(raw.slice(1));}catch(_){id=raw.slice(1);}'
+    + 'if(!id){window.scrollTo({top:0,behavior:"smooth"});setHash("");return;}'
+    + 'var el=document.getElementById(id)||document.getElementsByName(id)[0];'
+    + 'if(el)el.scrollIntoView({behavior:"smooth",block:"start"});'
+    + 'setHash(id);'
+    + '});'
     + 'function fallbackCopy(text,done){try{var ta=document.createElement("textarea");ta.value=text;'
     + 'ta.setAttribute("aria-hidden","true");ta.style.position="fixed";ta.style.top="-1000px";ta.style.opacity="0";'
     + 'document.body.appendChild(ta);ta.select();document.execCommand("copy");document.body.removeChild(ta);done();}catch(e){}}'

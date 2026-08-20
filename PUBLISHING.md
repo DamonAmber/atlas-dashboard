@@ -117,6 +117,14 @@ done
 
 **要求所有 spec 都"失败 0 项"**。任意一个失败必须先修才能发版。
 
+> ⚠️ 两个"假绿"陷阱，看到这两行输出别当成通过：
+> - `e2e-install.spec.js` 打印 `没有 tgz，先运行 npm pack` 就退出（**exit code 仍是 0**，循环里看不出来）。它需要项目根有 `atlas-dashboard-*.tgz`。跑法：
+>   ```bash
+>   npm pack >/dev/null && node tests/e2e-install.spec.js | tail -5 && rm -f atlas-dashboard-*.tgz
+>   ```
+>   期望末行 `总计 10 项，失败 0 项`。**记得删掉 tgz**，否则会被 `git add -A` 带进 commit。
+> - `scroll-after-toggle.spec.js` 在 iframe 还没加载出内容时打印 `!! HTML 不够长，没法测试` 并跳过（也是 exit 0）。这是它长期的既有行为，不是本次改动引入的；判断是否回归的办法是 `git stash` 后对比同一行输出。
+
 当前 spec 清单（30 个）。除 `landing-demo`（`file://`）与 `diff-algorithm`（纯函数单测）
 外，其余都通过
 `tests/helpers/isolated-atlas.js` 的 `startAtlas()` 起独立实例：临时 `ATLAS_HOME`
@@ -319,6 +327,7 @@ curl -sL "https://damonamber.github.io/atlas-dashboard/?_=$(date +%s)" | grep -q
 | 现象 | 原因 / 修复 |
 |---|---|
 | `npm publish` → 401 Unauthorized | token 过期或被 revoke。重新生成 Granular Token（勾 bypass 2FA），写回 `~/.npmrc`：`npm config set //registry.npmjs.org/:_authToken <new_token>` |
+| `npm publish` → **E404 `PUT https://registry.npmjs.org/atlas-dashboard - Not found`** | **同样是 token 失效**，不是包不存在。npm 对无效凭据的 publish 会返回 404 而不是 401（避免泄漏包是否存在）。先跑 `npm whoami` 确认：401 就是 token 问题，按上一行重新生成。注意 `npm publish --dry-run` **不校验凭据**，dry-run 通过不代表能发。<br>快速判定（不打印 token）：<br>`TOKEN=$(node -e "process.stdout.write(require('fs').readFileSync(process.env.HOME+'/.npmrc','utf8').match(/_authToken=(.+)/)[1].trim())")`<br>`curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOKEN" https://registry.npmjs.org/-/whoami`<br>200 = token 有效，401 = 该换了。<br>**此时不要 push tag**：Release 说明里会带 npm 链接，npm 上没有对应版本就是坏链。先修 token → publish 成功 → 再 commit/push/tag。 |
 | `npm publish` → 403 Two-factor authentication | token 没勾 bypass-2FA。重生成时确保勾上 **"Bypass two-factor authentication when publishing packages"** |
 | `npm publish` → `You cannot publish over the previously published versions` | 同一版本号重复发。`npm version` 已经升过版本号，你忘了改 `package.json`。重新 step 2 |
 | `git push origin v*` 后 release workflow 失败 | 看 `gh run view <run-id> --log-failed`。最常见：PUBLISHING.md 格式不对，awk 抽不到内容。确保版本行格式严格是 `- **X.Y.Z** (...)` |
@@ -431,6 +440,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.9.1** (2026-08-20) — Bug 修复：**Markdown 文档点过目录 / 标题锚点后，右上角刷新按钮报 `Cannot GET /raw/<n>/<目录>/`**（0.8.0 引入的隐性回归）。根因是 `<base href>` 同时改变了「相对 URL」的解析基准：0.8.0 为了让 md 里 `![](./assets/x.png)` 这类相对图片能加载，给 `/api/render-md` 渲染出的预览页注入了 `<base href="/raw/<n>/<md 所在目录>/">`；但这个 base 也是 `history.replaceState()` 和 `href="#锚点"` 的解析基准 —— 点一下 TOC 项，`replaceState(null,"","#第二节")` 会被解析成 `/raw/<n>/<目录>/#第二节`，iframe 里文档的 URL 就悄悄从 `/api/render-md?path=…` 漂移成了那个**目录**；随后刷新按钮的 `contentWindow.location.reload()` 去 GET 一个目录，`express.static` 找不到 index 就落到 404。① `public/vendor/markdown.js` 的 tocScript 把 `replaceState` 的相对 hash 改成带真实路径（`location.pathname + location.search + "#id"`），不再经 base 解析。② 同一个坑还有更直接的一条路：标题 hover 锚点 `.md-anchor` 与 md 正文里手写的 `[x](#y)`，`href="#id"` 同样按 base 解析，**点一下就整页跳到 `/raw/…/` 404，根本不用按刷新**（0.8.0 只修掉了这类链接被加 `target="_blank"` 的问题，没意识到 base 会让它们跳出本页）。现在 enhanceScript 统一接管：凡 `href` 原始值以 `#` 开头的链接都 `preventDefault` + 自行 `scrollIntoView` + 只安全改 hash，TOC 链接（带 `data-target`）交回 tocScript 处理不重复。③ `public/app.js` 新增 `reloadPreviewDoc(canonicalUrl)`：刷新前先比对 iframe 实际 `pathname/search` 与 canonical 地址（md → `/api/render-md`，html → `/raw/`），一致才 `reload()`（保留 hash / search），跑偏了就重新赋 `src` 并带上原 hash 以便仍定位到原章节；刷新按钮与退出编辑恢复只读预览（`exitEditMode`）两处都收敛到它 —— 即使将来再有别的原因让内层文档 URL 漂移，刷新也不会 404。顺带修掉 `exitEditMode` 里用 `els.preview.src`（DOM 属性，内层文档导航后不会变）判断"是否同一份文档"这个失效判据。全套 30 个 spec 全绿。
 
 - **0.9.0** (2026-08-17) — 新功能：**Markdown 编辑器的源码 ↔ 预览对应区域高亮**。此前左右两栏只有百分比滚动同步，光标落在源码某一段时，右边预览里对应哪块内容全靠自己数——文档一长就完全对不上。现在光标 / 选区落在任一侧，另一侧会同步标出对应内容：光标所在块用细高亮（左侧竖条 + 淡背景），跨块选区把覆盖到的块全部标成更明显的选中态，两个方向都生效。① 映射复用 0.8.0 为保真往返而建的块级锚点：`withRaw()` 除 `data-md-raw` / `data-md-gap` 外再写入 `data-md-line` / `data-md-endline`（1 基闭区间）；`render()` 新增 `opts.lineOffset`，`renderBody()` 把 front matter 占掉的行数作为偏移传下去，否则带 front matter 的文档整篇行号都会偏。② 源码侧的高亮不能靠 textarea 本身——它承载不了任何装饰，而且不聚焦时原生选区根本不绘制。所以在 textarea 下面垫一层色带（`.md-source-hl`，textarea 背景改透明），位置由一个与 textarea 同盒模型的隐藏镜像元素量出来，因此**软换行折出的多个视觉行也能完整覆盖**。踩到的坑：`getClientRects()` 返回的是「内联盒」（13px 字体约 15px 高）而不是「行盒」（line-height 21.45px），内联盒在行盒里垂直居中，直接拿来画会整体偏下约 3px 且高度只有半行；现在按行高把半行距还原回去，实测对齐偏差 ≤1px。③ 预览 → 源码的选区解析用 `range.intersectsNode()` 而不是只看首尾容器——全选、跨块鼠标拖选、`setStartBefore/setEndAfter` 产生的 Range，边界容器往往是预览面板本身（带 offset 指向子块）或空白文本节点，只看首尾容器会漏判；`topLevelBlockOf()` 也加了"节点必须在面板内"的前置判断，避免一路 `parentElement` 爬出面板返回无关祖先。④ 粒度是块而非字符：Markdown → HTML 之后字符级对应关系并不成立（源码里选中 `**粗` 这半截，HTML 里没有任何东西与之对应），块级才是稳定且有意义的单位。⑤ 色带随源码滚动只改 `transform`、不重新测量；分栏宽度变化会重新测量（软换行位置变了）。⑥ 顺带把源码区结构从「textarea 直接做 flex 子项」改成「`.md-source-wrap` 三层叠放（色带 / textarea / 测量镜像）」。新增 spec `md-sync-highlight.spec.js`（24 项），已挂进 `npm test`。全套 30 个 spec 全绿。
 
