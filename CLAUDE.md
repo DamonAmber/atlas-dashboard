@@ -30,4 +30,4 @@
 - 不要主动新建 `.md` 文档（除非用户明确要求或 PUBLISHING.md 要求）
 - 不要在用户没要求时跑 `npm publish` —— 先确认版本号、跑过测试、改过 PUBLISHING.md
 - 不要 `git push --force` 或 `git push --no-verify` —— 这是个公开仓库
-- 不要修改 `~/.atlas/store.json`（用户的虚拟分组、备注、已读状态都在里面，破坏会让用户体验受损）
+- 不要修改 `~/.atlas/store.json`（用户的虚拟分组、备注、已读状态、收藏、标签都在里面，破坏会让用户体验受损）

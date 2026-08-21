@@ -98,6 +98,10 @@ function emptyStore() {
     archivedProjects: [], shares: {},
     // path → { file, hash, at }：用户上次看过的那一版内容的底本，供 diff 用
     seenVersions: {},
+    // path → epochMs（收藏时间）。存时间而不是 true，收藏夹才能按"最近收藏"排序
+    favorites: {},
+    // path → string[]（标签，已去重、保持用户输入顺序）
+    tags: {},
   };
 }
 
@@ -120,6 +124,8 @@ function migrateStore(raw) {
     raw.archivedProjects = Array.isArray(raw.archivedProjects) ? raw.archivedProjects : [];
     raw.shares = (raw.shares && typeof raw.shares === 'object') ? raw.shares : {};
     raw.seenVersions = (raw.seenVersions && typeof raw.seenVersions === 'object') ? raw.seenVersions : {};
+    raw.favorites = (raw.favorites && typeof raw.favorites === 'object') ? raw.favorites : {};
+    raw.tags = (raw.tags && typeof raw.tags === 'object') ? raw.tags : {};
     return raw;
   }
   // 旧版 {folders: [{id,name,files:[]}], seen}
@@ -131,9 +137,53 @@ function migrateStore(raw) {
       collapsed: false,
       children: (f.files || []).map(p => ({ type: 'file', path: p })),
     }));
-    return { tree, seen: raw.seen || {}, aliases: raw.aliases || {}, recent: [], archivedProjects: [] };
+    // 递归一次让上面那个分支把其余字段补齐（shares / seenVersions / favorites / tags）。
+    // 原来这里返回手写字面量，缺的字段全靠各处 `store.x && store.x[p]` 防御式访问兜着
+    return migrateStore({ tree, seen: raw.seen || {}, aliases: raw.aliases || {}, recent: [], archivedProjects: [] });
   }
   return emptyStore();
+}
+
+// ---------- 标签规范化 ----------
+// 标签是纯用户输入，前端传的是"逗号分隔的一行字"拆出来的数组。这里做唯一一次
+// 规范化，之后 store 里的值就可以当作干净数据用（前端筛选直接按字符串比较）。
+//
+// 大小写：统一按小写去重但保留用户第一次输入的写法——用户输入 "AI" 就显示 "AI"，
+// 之后再输 "ai" 不会多出一个看起来重复的标签。
+const TAG_MAX_LEN = 24;
+const TAGS_MAX_COUNT = 12;
+function normalizeTags(input) {
+  const list = Array.isArray(input)
+    ? input
+    : String(input == null ? '' : input).split(/[,，]/);   // 中英文逗号都认
+  const out = [];
+  const seenLower = new Set();
+  for (const raw of list) {
+    // 内部空白压成单空格：标签是用来点的，不该出现看不见的差异
+    const t = String(raw == null ? '' : raw).replace(/\s+/g, ' ').trim().slice(0, TAG_MAX_LEN);
+    if (!t) continue;
+    const lower = t.toLowerCase();
+    if (seenLower.has(lower)) continue;
+    seenLower.add(lower);
+    out.push(t);
+    if (out.length >= TAGS_MAX_COUNT) break;   // 超限截断而不报错（对齐 alias 的 slice 风格）
+  }
+  return out;
+}
+
+// 全量标签表：{ name, count }，按用量倒序、同用量按名称。供筛选条渲染用。
+// 只统计当前磁盘上还在的文件，否则删掉文件后标签条上会留下点不出东西的死标签。
+function collectTagCounts(store, livePaths) {
+  const counts = new Map();
+  for (const [p, tags] of Object.entries(store.tags || {})) {
+    if (!livePaths.has(p) || !Array.isArray(tags)) continue;
+    for (const t of tags) {
+      counts.set(t, (counts.get(t) || 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name, 'zh'));
 }
 
 const RECENT_MAX = 10;
@@ -764,6 +814,9 @@ app.get('/api/state', async (_req, res) => {
         hasBaseline: !!(store.seenVersions && store.seenVersions[f.path]),
         baselineAt: (store.seenVersions && store.seenVersions[f.path]
           && store.seenVersions[f.path].at) || 0,
+        favorite: !!(store.favorites && store.favorites[f.path]),
+        favoritedAt: (store.favorites && store.favorites[f.path]) || 0,
+        tags: (store.tags && Array.isArray(store.tags[f.path])) ? store.tags[f.path] : [],
       };
     }
 
@@ -776,7 +829,36 @@ app.get('/api/state', async (_req, res) => {
         storeDirty = true;
       }
     }
+    // 收藏 / 标签的惰性清理：文件被删掉时 chokidar 的 unlink 回调不动这两个字段
+    // （那样每个 unlink 都要 loadStore+saveStore，批量删除会连着打很多次盘），
+    // 统一在这里剪。
+    //
+    // 关于 syscall：上面 fileMap 那圈明确不许 stat，这里的 existsSync 不违背它——
+    // 遍历的是"用户手工收藏 / 打过标签的条目"（十几到几十条），而且只有条目不在
+    // 本次扫描结果里时才会真的落到 existsSync。稳定状态下一次 syscall 都不发生。
+    for (const field of ['favorites', 'tags']) {
+      const map = store[field];
+      if (!map || typeof map !== 'object') continue;
+      let changed = false;
+      for (const p of Object.keys(map)) {
+        if (allPaths.has(p)) continue;
+        // 不在扫描结果里有两种可能：文件真被删了（该清），或只是当前 docTypes
+        // 没启用它（不该清——用户在设置里取消勾选 Markdown，不代表要丢掉 md 的收藏）。
+        // 收藏和标签是用户手工投入的信息，误删的代价远高于留一条僵尸记录。
+        if (fs.existsSync(p)) continue;
+        delete map[p];
+        changed = true;
+      }
+      if (changed) storeDirty = true;
+    }
     if (storeDirty) saveStore(store);
+
+    // 收藏夹：按收藏时间倒序（最近收藏的在最前），只含当前可见的文件
+    const favorites = Object.entries(store.favorites || {})
+      .filter(([p]) => allPaths.has(p))
+      .sort((a, b) => (b[1] || 0) - (a[1] || 0))
+      .map(([p]) => p);
+    const allTags = collectTagCounts(store, allPaths);
 
     // 归档列表：给每个归档的 projectName 附带磁盘上的实际文件数（让用户决定要不要恢复）
     const projCounts = countByProject(scanned);
@@ -789,6 +871,8 @@ app.get('/api/state', async (_req, res) => {
       tree: store.tree,
       files: fileMap,
       recent: store.recent || [],
+      favorites,
+      allTags,
       scanRoots: getScanRoots(),
       scannedCount: scanned.length,
       docTypes: getEnabledDocTypes(),
@@ -1229,7 +1313,8 @@ app.post('/api/rename', async (req, res) => {
   } catch (e) {
     return res.status(500).json({ error: '重命名失败：' + (e && e.message || e) });
   }
-  // 迁移 store 里挂在旧路径上的状态：已读时间、备注名、最近打开、分享、树节点
+  // 迁移 store 里挂在旧路径上的状态：已读时间、备注名、diff 底本、收藏、标签、
+  // 最近打开、分享、树节点。漏一个用户就会觉得"改个名字东西就丢了"
   const store = loadStore();
   if (store.seen[filePath] != null) {
     store.seen[nextPath] = store.seen[filePath];
@@ -1242,6 +1327,14 @@ app.post('/api/rename', async (req, res) => {
   if (store.seenVersions && store.seenVersions[filePath]) {
     store.seenVersions[nextPath] = store.seenVersions[filePath];
     delete store.seenVersions[filePath];
+  }
+  if (store.favorites && store.favorites[filePath] != null) {
+    store.favorites[nextPath] = store.favorites[filePath];
+    delete store.favorites[filePath];
+  }
+  if (store.tags && store.tags[filePath] != null) {
+    store.tags[nextPath] = store.tags[filePath];
+    delete store.tags[filePath];
   }
   store.recent = (store.recent || []).map(p => (p === filePath ? nextPath : p));
   for (const [token, entry] of Object.entries(store.shares || {})) {
@@ -1272,6 +1365,49 @@ app.post('/api/alias', (req, res) => {
   else delete store.aliases[filePath];
   saveStore(store);
   res.json({ ok: true, alias: store.aliases[filePath] || null });
+});
+
+// ---------- 收藏 ----------
+// 收藏是"从不同文件夹里挑出常看的那几篇"，所以它必须独立于 store.tree 的分组结构。
+// 存成 path → 收藏时间，收藏夹就能按"最近收藏"排在前面。
+app.post('/api/favorite', (req, res) => {
+  const { path: filePath, favorite } = req.body || {};
+  if (!filePath || !isPathInScanRoots(filePath)) {
+    return res.status(400).json({ error: '路径非法' });
+  }
+  const store = loadStore();
+  store.favorites = store.favorites || {};
+  // 不传 favorite 就当"切换"，传了就按传的值——前端点星标用切换语义最省事
+  const next = favorite === undefined ? !store.favorites[filePath] : !!favorite;
+  if (next) {
+    // 已收藏时重复收藏不刷新时间戳，否则收藏夹顺序会被误触打乱
+    if (!store.favorites[filePath]) store.favorites[filePath] = Date.now();
+  } else {
+    delete store.favorites[filePath];
+  }
+  saveStore(store);
+  res.json({
+    ok: true,
+    favorite: !!store.favorites[filePath],
+    favoritedAt: store.favorites[filePath] || 0,
+  });
+});
+
+// ---------- 标签 ----------
+// 整组覆盖式写入（不做单个 add/remove）：编辑入口是一个"逗号分隔"的输入框，
+// 用户看到的就是全集，覆盖语义和界面一致，也省掉一半端点。
+app.post('/api/tags', (req, res) => {
+  const { path: filePath, tags } = req.body || {};
+  if (!filePath || !isPathInScanRoots(filePath)) {
+    return res.status(400).json({ error: '路径非法' });
+  }
+  const store = loadStore();
+  store.tags = store.tags || {};
+  const normalized = normalizeTags(tags);
+  if (normalized.length) store.tags[filePath] = normalized;
+  else delete store.tags[filePath];   // 清空即删 key，同 alias
+  saveStore(store);
+  res.json({ ok: true, tags: store.tags[filePath] || [] });
 });
 
 // 跨平台「在文件管理器中显示」

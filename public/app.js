@@ -6,8 +6,16 @@ const state = {
   search: '',
   contentMatches: new Map(),       // path → snippet（全文搜索结果）
   onlyUnread: false,
+  // 收藏：路径数组，服务端按收藏时间倒序给（最近收藏的在最前）
+  favorites: [],
+  // 全量标签表 [{ name, count }]，服务端按用量倒序给——驱动标签筛选条
+  allTags: [],
+  // 已选中的筛选标签（多选按 AND：与搜索多关键词的语义一致，逐步收窄）。
+  // 故意不持久化，和 onlyUnread 一致——否则刷新后"文档凭空少了一半"很难自查
+  tagFilter: new Set(),
   collapsed: new Set(JSON.parse(localStorage.getItem('atlas:collapsed') || '[]')),
   recentCollapsed: localStorage.getItem('atlas:recentCollapsed') === '1',
+  favCollapsed: localStorage.getItem('atlas:favCollapsed') === '1',
   notifyEnabled: localStorage.getItem('atlas:notify') === '1',
   // 'name' | 'mtime' | 'custom'：folder.children 排序模式
   // 默认按名称——一系列文档（v1/v2/v3）会自动聚合在一起
@@ -95,6 +103,13 @@ const els = {
   recentBar: document.getElementById('recent-bar'),
   recentList: document.getElementById('recent-list'),
   recentToggle: document.getElementById('recent-toggle'),
+  favBar: document.getElementById('fav-bar'),
+  favList: document.getElementById('fav-list'),
+  favToggle: document.getElementById('fav-toggle'),
+  btnFavorite: document.getElementById('btn-favorite'),
+  tagBar: document.getElementById('tag-bar'),
+  tagBarChips: document.getElementById('tag-bar-chips'),
+  tagBarClear: document.getElementById('tag-bar-clear'),
   updateBadge: document.getElementById('update-badge'),
   updateBanner: document.getElementById('update-banner'),
   segButtons: document.querySelectorAll('.seg-btn[data-sort]'),
@@ -297,8 +312,15 @@ document.addEventListener('keydown', (e) => {
 // ---------- 应用内确认 / 输入对话框 ----------
 // 替代原生 confirm() / prompt()：原生弹窗与整体设计语言割裂，而且浏览器可能
 // 出现"阻止此页面创建更多对话框"从而让操作彻底点不动。
+// input 模式下的返回值约定：
+//   默认            —— 取消、或者清空后确定，都返回 null（调用方多半只想拿到"新名字"）
+//   allowEmpty:true —— 取消返回 null，确定返回 trim 后的字符串（可以是空串）
+// 后者是"可清空的字段"必需的：标签 / 备注这类东西，用户清空输入框再确定
+// 表达的是"删掉它"，和"我不改了"必须能区分开——否则要么点取消把内容清了，
+// 要么永远清不掉。
 function showDialog({
   title, body, confirmText = '确定', cancelText = '取消', danger = false, input = null,
+  allowEmpty = false,
 } = {}) {
   return new Promise((resolve) => {
     const root = document.createElement('div');
@@ -352,13 +374,18 @@ function showDialog({
     root.addEventListener('click', (e) => {
       if (isCloseTarget(e.target, 'data-dialog-cancel')) close();
     });
-    okBtn.addEventListener('click', () => finish(input ? (inputEl.value.trim() || null) : true));
+    const confirmValue = () => {
+      if (!input) return true;
+      const v = inputEl.value.trim();
+      return allowEmpty ? v : (v || null);
+    };
+    okBtn.addEventListener('click', () => finish(confirmValue()));
     cancelBtn.addEventListener('click', close);
     if (inputEl) {
       inputEl.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
-          finish(inputEl.value.trim() || null);
+          finish(confirmValue());
         }
       });
     }
@@ -371,9 +398,12 @@ function showDialog({
 function showConfirm(opts) {
   return showDialog(opts);
 }
-// 返回 trim 后的字符串，取消 / 空输入返回 null
-function showPrompt({ title, body, label, value, placeholder, confirmText = '确定' } = {}) {
-  return showDialog({ title, body, confirmText, input: { label, value, placeholder } });
+// 返回 trim 后的字符串，取消 / 空输入返回 null。
+// 需要区分"取消"和"清空后确定"时传 allowEmpty:true（确定返回 ''，取消返回 null）
+function showPrompt({
+  title, body, label, value, placeholder, confirmText = '确定', allowEmpty = false,
+} = {}) {
+  return showDialog({ title, body, confirmText, allowEmpty, input: { label, value, placeholder } });
 }
 
 // ---------- 侧边栏宽度 / 收起 ----------
@@ -540,12 +570,23 @@ async function fetchState() {
     state.tree = data.tree;
     state.files = data.files;
     state.recent = Array.isArray(data.recent) ? data.recent : [];
+    state.favorites = Array.isArray(data.favorites) ? data.favorites : [];
+    state.allTags = Array.isArray(data.allTags) ? data.allTags : [];
+    // 标签可能在别处被删掉了（比如另一个标签页清空了它），把已失效的筛选撤掉，
+    // 否则树里一片空白而筛选条上没有 chip 可点，看起来像文档全丢了
+    const liveTags = new Set(state.allTags.map(t => t.name.toLowerCase()));
+    for (const t of [...state.tagFilter]) {
+      if (!liveTags.has(t.toLowerCase())) state.tagFilter.delete(t);
+    }
     state.archivedProjects = Array.isArray(data.archivedProjects) ? data.archivedProjects : [];
     const unread = Object.values(data.files).filter(f => f.unread).length;
     els.stats.textContent = `${Object.keys(data.files).length} 个文档 · ${unread} 未读`;
     setSaveStatus('idle');
+    renderTagBar();
     render();
     renderRecent();
+    renderFavorites();
+    updateFavButton();
     // 对比面板开着的时候，如果当前文件在磁盘上又被改了，自动刷新差异
     if (diffState.open && diffState.path) {
       const f = state.files[diffState.path];
@@ -609,8 +650,26 @@ function parseQueryTerms(q) {
   return terms;
 }
 
+// 文件是否带齐了所有被选中的筛选标签（AND）。
+// 比较按小写：服务端保留用户输入的大小写写法，但 "AI" 与 "ai" 视为同一个标签
+function matchesTagFilter(file) {
+  if (!state.tagFilter.size) return true;
+  const owned = new Set((file.tags || []).map(t => String(t).toLowerCase()));
+  for (const t of state.tagFilter) {
+    if (!owned.has(t.toLowerCase())) return false;
+  }
+  return true;
+}
+
+// 是否存在任何"会让部分文件从树里消失"的筛选。render / renderFolder 都要用它做守卫：
+// 没有任何筛选时直接跳过 nodeMatches，几百篇文档下省掉一次全树递归
+function hasActiveFilter() {
+  return !!state.search || state.onlyUnread || state.tagFilter.size > 0;
+}
+
 function fileMatches(file) {
   if (state.onlyUnread && !file.unread) return false;
+  if (!matchesTagFilter(file)) return false;
   if (!state.search) return true;
   const terms = parseQueryTerms(state.search);
   if (!terms.length) return true;
@@ -649,8 +708,9 @@ function countDescendants(node) {
 // ---------- 渲染 ----------
 function render() {
   els.tree.innerHTML = '';
+  const filtering = hasActiveFilter();
   for (const node of state.tree) {
-    if (state.search || state.onlyUnread) {
+    if (filtering) {
       if (!nodeMatches(node)) continue;
     }
     els.tree.appendChild(renderNode(node));
@@ -689,6 +749,203 @@ function renderRecent() {
     `;
     div.addEventListener('click', () => openFile(p));
     els.recentList.appendChild(div);
+  }
+}
+
+// ---------- 收藏夹 ----------
+// 跨文件夹的平铺列表：收藏的意义就是把散落在各个分组里的常看文档聚到一处，
+// 所以这里刻意不体现目录结构，只给「文档名 + 所属项目」。
+//
+// 和 recent-item 一样用普通 click：SortableJS 只挂在 #tree 和 .folder-children 上，
+// 这个列表在 tree 外面，不会被 forceFallback 吞掉 click。
+function renderFavorites() {
+  if (!els.favBar) return;
+  // 服务端已按收藏时间倒序，这里只过滤掉已经不在 state.files 里的
+  const usable = (state.favorites || []).filter(p => !!state.files[p]);
+  if (usable.length === 0) {
+    els.favBar.classList.add('hidden');
+    els.favList.innerHTML = '';
+    return;
+  }
+  els.favBar.classList.remove('hidden');
+  els.favBar.classList.toggle('collapsed', state.favCollapsed);
+  els.favList.innerHTML = '';
+  for (const p of usable) {
+    const file = state.files[p];
+    const div = document.createElement('div');
+    div.className = 'fav-item'
+      + (file.unread ? ' unread' : '')
+      + (file.alias ? ' has-alias' : '')
+      + (p === state.activeFilePath ? ' active' : '');
+    div.dataset.path = p;
+    div.title = file.alias ? `${file.alias}\n${file.relPath}` : file.relPath;
+    div.innerHTML = `
+      <span class="fav-icon">${isMdFile(file) ? '📝' : '🌐'}</span>
+      <span class="fav-name">${escapeHtml(file.alias || stripDocExt(file.name))}</span>
+      <span class="fav-project">${escapeHtml(file.projectName)}</span>
+      <button class="fav-remove" type="button" title="取消收藏" aria-label="取消收藏「${escapeHtml(file.alias || stripDocExt(file.name))}」"><span aria-hidden="true">✕</span></button>
+    `;
+    div.addEventListener('click', (e) => {
+      if (e.target.closest('.fav-remove')) return;   // 由下面的按钮自己处理
+      openFile(p);
+    });
+    div.querySelector('.fav-remove').addEventListener('click', (e) => {
+      e.stopPropagation();
+      setFavorite(p, false);
+    });
+    els.favList.appendChild(div);
+  }
+}
+
+// ---------- 标签筛选条 ----------
+// 只在真的有标签时出现，避免给没用过这功能的用户凭空多一行界面。
+function renderTagBar() {
+  if (!els.tagBar) return;
+  const tags = state.allTags || [];
+  if (tags.length === 0) {
+    els.tagBar.classList.add('hidden');
+    els.tagBarChips.innerHTML = '';
+    return;
+  }
+  els.tagBar.classList.remove('hidden');
+  els.tagBarChips.innerHTML = '';
+  const selectedLower = new Set([...state.tagFilter].map(t => t.toLowerCase()));
+  for (const { name, count } of tags) {
+    const on = selectedLower.has(name.toLowerCase());
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tag-chip' + (on ? ' on' : '');
+    // aria-pressed 而不是 aria-checked：这是一组可独立开关的过滤开关，不是单选项
+    btn.setAttribute('aria-pressed', String(on));
+    btn.dataset.tag = name;
+    btn.title = on ? `取消筛选「${name}」` : `只看带「${name}」标签的文档（多选为「同时具备」）`;
+    btn.innerHTML = `<span class="tag-chip-name"></span><span class="tag-chip-count">${count}</span>`;
+    btn.querySelector('.tag-chip-name').textContent = name;
+    btn.addEventListener('click', () => toggleTagFilter(name));
+    els.tagBarChips.appendChild(btn);
+  }
+  els.tagBarClear.classList.toggle('hidden', state.tagFilter.size === 0);
+}
+
+function toggleTagFilter(name) {
+  // 用原始写法存进 Set，但去重按小写——避免同时选中 "AI" 和 "ai" 两个 chip
+  const lower = name.toLowerCase();
+  const existing = [...state.tagFilter].find(t => t.toLowerCase() === lower);
+  if (existing !== undefined) state.tagFilter.delete(existing);
+  else state.tagFilter.add(name);
+  renderTagBar();
+  render();
+}
+
+function clearTagFilter() {
+  if (!state.tagFilter.size) return;
+  state.tagFilter.clear();
+  renderTagBar();
+  render();
+}
+
+// ---------- 收藏 / 标签的写入 ----------
+// 乐观更新：先改本地 state 再发请求，点星标的反馈必须是即时的。
+// 失败就回滚并 toast——静默失败会让用户以为收藏成功了，下次刷新才发现没了。
+async function setFavorite(filePath, next) {
+  const file = state.files[filePath];
+  if (!file) return;
+  const before = !!file.favorite;
+  const target = typeof next === 'boolean' ? next : !before;
+  if (before === target) return;
+
+  file.favorite = target;
+  if (target) {
+    file.favoritedAt = Date.now();
+    state.favorites = [filePath, ...(state.favorites || []).filter(p => p !== filePath)];
+  } else {
+    file.favoritedAt = 0;
+    state.favorites = (state.favorites || []).filter(p => p !== filePath);
+  }
+  updateFavoriteDecorations();
+  renderFavorites();
+
+  try {
+    const r = await fetch('/api/favorite', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: filePath, favorite: target }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    // 以服务端的时间戳为准，保证刷新前后收藏夹顺序一致
+    file.favorite = !!data.favorite;
+    file.favoritedAt = data.favoritedAt || 0;
+  } catch (e) {
+    file.favorite = before;
+    file.favoritedAt = before ? (file.favoritedAt || Date.now()) : 0;
+    if (before) state.favorites = [filePath, ...(state.favorites || []).filter(p => p !== filePath)];
+    else state.favorites = (state.favorites || []).filter(p => p !== filePath);
+    updateFavoriteDecorations();
+    renderFavorites();
+    showToast({ kind: 'error', text: '收藏没保存成功', secondary: e.message });
+  }
+}
+
+// 编辑标签：一个逗号分隔的输入框。用现成的 showPrompt 而不是新做一个标签编辑器——
+// 标签就是几个短词，输入框是最快的路径，也不用再实现一遍弹窗的焦点陷阱那套。
+async function editTags(file) {
+  const current = (file.tags || []).join(', ');
+  const displayName = file.alias || stripDocExt(file.name);
+  const nextRaw = await showPrompt({
+    title: `「${displayName}」的标签`,
+    body: '逗号分隔，例如：周报, 待评审, AI。\n清空并确定即删除全部标签。',
+    label: '标签',
+    value: current,
+    placeholder: '周报, 待评审',
+    confirmText: '保存',
+    // 必须区分"点取消"（null，什么都不做）和"清空后确定"（''，删掉全部标签）
+    allowEmpty: true,
+  });
+  if (nextRaw === null) return;                       // 取消
+  if (nextRaw.trim() === current.trim()) return;      // 没改动
+
+  const before = file.tags || [];
+  try {
+    const r = await fetch('/api/tags', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      // 拆分交给服务端的 normalizeTags 做，前端不重复实现一遍规则
+      body: JSON.stringify({ path: file.path, tags: nextRaw.split(/[,，]/) }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    file.tags = Array.isArray(data.tags) ? data.tags : [];
+    recomputeAllTags();
+    renderTagBar();
+    // 标签影响文件行内容，也可能影响当前筛选下的可见性 → 这里需要全量重绘
+    render();
+    const removed = before.length && !file.tags.length;
+    showToast({
+      kind: 'success',
+      text: removed ? '标签已清除' : '标签已保存',
+      secondary: file.tags.length ? file.tags.join(' · ') : '',
+    });
+  } catch (e) {
+    showToast({ kind: 'error', text: '标签没保存成功', secondary: e.message });
+  }
+}
+
+// 从 state.files 重算全量标签表。服务端每次 /api/state 也会给一份，但改完一个
+// 文件的标签后不该为了刷新筛选条再拉一次全量状态。
+function recomputeAllTags() {
+  const counts = new Map();
+  for (const f of Object.values(state.files)) {
+    for (const t of f.tags || []) counts.set(t, (counts.get(t) || 0) + 1);
+  }
+  state.allTags = [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name, 'zh'));
+  // 标签被删光后，筛选里那个已经不存在的标签要一起撤掉，否则树里空空如也
+  // 而筛选条上已经没有对应 chip 可以取消 —— 用户会以为文档全丢了
+  const live = new Set(state.allTags.map(t => t.name.toLowerCase()));
+  for (const t of [...state.tagFilter]) {
+    if (!live.has(t.toLowerCase())) state.tagFilter.delete(t);
   }
 }
 
@@ -752,7 +1009,7 @@ function renderFolder(folder) {
 
   const counts = countDescendants(folder);
   const visibleChildren = sortChildren(folder.children.filter(c => {
-    if (!state.search && !state.onlyUnread) return true;
+    if (!hasActiveFilter()) return true;
     return nodeMatches(c);
   }), state.sortMode);
 
@@ -863,6 +1120,7 @@ function renderFile(file, node) {
     + (file.unread ? ' unread' : '')
     + (file.alias ? ' has-alias' : '')
     + (file.path === state.activeFilePath ? ' active' : '')
+    + (file.favorite ? ' favorite' : '')
     + (contentOnly ? ' content-match' : '');
   fileEl.dataset.nodeType = 'file';
   fileEl.dataset.path = file.path;
@@ -872,16 +1130,36 @@ function renderFile(file, node) {
   if (file.alias) titleParts.push(file.alias);
   titleParts.push(file.name);
   titleParts.push(file.relPath);
+  // 行上只显示前两个标签，剩下的靠 title 补全（悬停能看到完整列表）
+  if ((file.tags || []).length) titleParts.push('🏷 ' + file.tags.join(' · '));
   if (snippet) titleParts.push('🔍 ' + snippet);
   fileEl.title = titleParts.join('\n');
   const displayName = file.alias || stripDocExt(file.name);
   const isShared = state.sharesByPath && state.sharesByPath.has(file.path);
   if (isShared) fileEl.classList.add('shared');
   const typeIcon = dtype === 'md' ? '📝' : '🌐';
+  // 星标是常驻按钮（不在 .file-actions 里）：收藏是高频二元操作，不该藏在 hover
+  // 才出现的那排按钮里。代价是它落在拖拽把手区内，必须同时做两件事——
+  //   ① 加进 initSortables 的 filter，否则按下星标会启动拖拽
+  //   ② 加进本行 pointerdown/pointerup 的守卫，否则点它会顺带打开文档
+  const favLabel = file.favorite ? `取消收藏「${escapeHtml(displayName)}」` : `收藏「${escapeHtml(displayName)}」`;
+  // 行上最多两个标签，超出显示 +N（侧边栏宽度有限，标签不该把文件名挤没）
+  const shownTags = (file.tags || []).slice(0, 2);
+  const restTags = (file.tags || []).length - shownTags.length;
+  const tagsHtml = (file.tags || []).length
+    ? `<span class="file-tags">`
+      + shownTags.map(t => `<span class="file-tag">${escapeHtml(t)}</span>`).join('')
+      + (restTags > 0 ? `<span class="file-tag more">+${restTags}</span>` : '')
+      + `</span>`
+    : '';
   fileEl.innerHTML = `
     <span class="unread-dot"></span>
+    <button class="fav-btn" type="button" title="${file.favorite ? '取消收藏' : '收藏'}" aria-label="${favLabel}" aria-pressed="${file.favorite ? 'true' : 'false'}">
+      <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2l1.85 3.9 4.15.56-3.05 2.86.79 4.18L8 11.5l-3.74 2 .79-4.18L2 6.46l4.15-.56z"/></svg>
+    </button>
     <span class="folder-icon file-type-icon">${typeIcon}</span>
     <span class="file-name" data-path="${escapeHtml(file.path)}">${escapeHtml(displayName)}</span>
+    ${tagsHtml}
     <span class="file-type-badge type-${dtype}">${dtype === 'md' ? 'MD' : 'HTML'}</span>
     <span class="share-badge" title="正在分享到局域网" aria-hidden="${isShared ? 'false' : 'true'}">
       <svg viewBox="0 0 12 12" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7L7 5M4 8a2 2 0 0 1 0-3l1-1M8 4a2 2 0 0 1 0 3l-1 1"/></svg>
@@ -890,6 +1168,9 @@ function renderFile(file, node) {
     <span class="file-actions">
       <button data-act="share" title="分享到局域网（生成可访问链接 + 二维码）" aria-label="分享「${escapeHtml(displayName)}」到局域网">
         <svg viewBox="0 0 14 14" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 8L9 5M5 8a2 2 0 0 1-2-2 2 2 0 0 1 4 0M9 5a2 2 0 0 1 2-2 2 2 0 0 1 0 4 2 2 0 0 1-2-2M5 8a2 2 0 0 0-2 2 2 2 0 0 0 4 0 2 2 0 0 0-2-2"/></svg>
+      </button>
+      <button data-act="tags" title="编辑标签（逗号分隔）" aria-label="编辑「${escapeHtml(displayName)}」的标签">
+        <svg viewBox="0 0 14 14" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.2 6.3V3a.8.8 0 0 1 .8-.8h3.3c.2 0 .4.1.6.2l4.7 4.7a.8.8 0 0 1 0 1.2l-3.2 3.2a.8.8 0 0 1-1.2 0L2.4 6.9a.8.8 0 0 1-.2-.6z"/><circle cx="4.8" cy="4.8" r=".9"/></svg>
       </button>
       <button data-act="rename-file" title="重命名磁盘文件" aria-label="重命名文件「${escapeHtml(file.name)}」"><span aria-hidden="true">Aa</span></button>
       <button data-act="alias" title="备注名（不改源文件名）" aria-label="给「${escapeHtml(displayName)}」起备注名"><span aria-hidden="true">✎</span></button>
@@ -903,14 +1184,14 @@ function renderFile(file, node) {
   let pdX = 0, pdY = 0, pdDown = false;
   fileEl.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
-    if (e.target.closest('.file-actions')) return;
+    if (e.target.closest('.file-actions') || e.target.closest('.fav-btn')) return;
     if (e.target.classList.contains('file-name') && e.target.isContentEditable) return;
     pdX = e.clientX; pdY = e.clientY; pdDown = true;
   });
   fileEl.addEventListener('pointerup', (e) => {
     if (!pdDown || e.button !== 0) return;
     pdDown = false;
-    if (e.target.closest('.file-actions')) return;
+    if (e.target.closest('.file-actions') || e.target.closest('.fav-btn')) return;
     if (e.target.classList.contains('file-name') && e.target.isContentEditable) return;
     const dx = Math.abs(e.clientX - pdX);
     const dy = Math.abs(e.clientY - pdY);
@@ -942,6 +1223,14 @@ function renderFile(file, node) {
   fileEl.querySelector('[data-act="share"]').addEventListener('click', (e) => {
     e.stopPropagation();
     openShareModal(file.path);
+  });
+  fileEl.querySelector('[data-act="tags"]').addEventListener('click', (e) => {
+    e.stopPropagation();
+    editTags(file);
+  });
+  fileEl.querySelector('.fav-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    setFavorite(file.path);
   });
   return fileEl;
 }
@@ -1218,7 +1507,9 @@ function initSortables() {
       group: 'atlas-nodes',
       animation: 150,
       ghostClass: 'dragging-ghost',
-      filter: '[contenteditable="true"], .folder-actions, .folder-actions *, .file-actions, .file-actions *',
+      // .fav-btn 也要排除：它是常驻按钮、位置就在拖拽把手区里，不排除的话
+      // 按下星标会被当成开始拖这一行
+      filter: '[contenteditable="true"], .folder-actions, .folder-actions *, .file-actions, .file-actions *, .fav-btn, .fav-btn *',
       preventOnFilter: false,
       fallbackOnBody: true,
       // forceFallback: 不用 native HTML5 drag，统一走 mouse 事件路径
@@ -1377,6 +1668,7 @@ async function openFile(filePath) {
     }).catch(() => {});
   }
   renderRecent();
+  renderFavorites();   // 同 recent：active 高亮靠整体重画同步
 }
 
 // 只更新「已分享」的视觉标记，不重建整棵树。
@@ -1394,6 +1686,35 @@ function updateSharedDecorations() {
   if (state.activeFilePath) {
     els.btnShare.classList.toggle('shared', shared.has(state.activeFilePath));
   }
+}
+
+// 只更新收藏的视觉标记，不重建整棵树——同 updateSharedDecorations 的理由：
+// 全量 render() 会把用户刚点的那个星标按钮连同整行 DOM 销毁重建，焦点丢失，
+// 几百篇文档时还白白重排一遍侧栏。收藏不影响可见性，所以不需要重绘。
+function updateFavoriteDecorations() {
+  els.tree.querySelectorAll('.file').forEach((fileEl) => {
+    const f = state.files[fileEl.dataset.path];
+    if (!f) return;
+    const on = !!f.favorite;
+    fileEl.classList.toggle('favorite', on);
+    const btn = fileEl.querySelector('.fav-btn');
+    if (btn) {
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      btn.title = on ? '取消收藏' : '收藏';
+    }
+  });
+  updateFavButton();
+}
+
+// 顶栏收藏按钮：跟随当前预览文件的收藏态
+function updateFavButton() {
+  if (!els.btnFavorite) return;
+  const f = state.activeFilePath ? state.files[state.activeFilePath] : null;
+  const on = !!(f && f.favorite);
+  els.btnFavorite.disabled = !f;
+  els.btnFavorite.classList.toggle('on', on);
+  els.btnFavorite.setAttribute('aria-pressed', on ? 'true' : 'false');
+  els.btnFavorite.title = !f ? '收藏此文档' : (on ? '取消收藏' : '收藏此文档');
 }
 
 function updateUnreadDecorations() {
@@ -1459,6 +1780,7 @@ function setActiveFile(filePath, doNavigate) {
   els.btnEdit.disabled = false;
   // 已在分享中的文件，让顶栏 share 按钮高亮提示状态
   els.btnShare.classList.toggle('shared', state.sharesByPath && state.sharesByPath.has(file.path));
+  updateFavButton();
   updateDiffButton();
 
   if (doNavigate) {
@@ -3247,6 +3569,16 @@ els.recentToggle.addEventListener('click', () => {
   state.recentCollapsed = !state.recentCollapsed;
   localStorage.setItem('atlas:recentCollapsed', state.recentCollapsed ? '1' : '0');
   els.recentBar.classList.toggle('collapsed', state.recentCollapsed);
+});
+els.favToggle.addEventListener('click', () => {
+  state.favCollapsed = !state.favCollapsed;
+  localStorage.setItem('atlas:favCollapsed', state.favCollapsed ? '1' : '0');
+  els.favBar.classList.toggle('collapsed', state.favCollapsed);
+});
+els.tagBarClear.addEventListener('click', clearTagFilter);
+els.btnFavorite.addEventListener('click', () => {
+  if (!state.activeFilePath) return;
+  setFavorite(state.activeFilePath);
 });
 
 let contentSearchSeq = 0;

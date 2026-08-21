@@ -70,10 +70,14 @@ const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
   console.log('\n[step 2] 把根级 file 拖到第一个 folder 内');
   const t = await page.evaluate(() => {
     const f = [...document.querySelectorAll('#tree > .file')][0];
-    const fr = f && f.getBoundingClientRect();
+    // 起拖点必须落在 .file-name 上：行首那几十像素是 unread-dot / 收藏星标 /
+    // 类型 icon，星标是按钮且被 SortableJS 的 filter 排除（按它是收藏而非拖拽），
+    // 按行的固定 +30px 偏移会按在星标上，拖拽根本不启动 —— 而本 spec 只断言
+    // "页面仍响应"，于是会静默地变成假通过
+    const fr = f && (f.querySelector('.file-name') || f).getBoundingClientRect();
     const fol = document.querySelector('.folder-children');
     const fr2 = fol && fol.getBoundingClientRect();
-    return f && fol ? { fx: fr.x + 30, fy: fr.y + fr.height / 2, tx: fr2.x + 30, ty: fr2.y + 10 } : null;
+    return f && fol ? { fx: fr.x + Math.min(30, fr.width / 2), fy: fr.y + fr.height / 2, tx: fr2.x + 30, ty: fr2.y + 10 } : null;
   });
   if (t) {
     await page.mouse.move(t.fx, t.fy);
@@ -93,7 +97,7 @@ const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
       const fs = [...document.querySelectorAll('.file')];
       const f = fs[Math.floor(Math.random() * fs.length)];
       if (!f) return null;
-      const fr = f.getBoundingClientRect();
+      const fr = (f.querySelector('.file-name') || f).getBoundingClientRect();   // 见 step 2 的说明
       const dropToRoot = Math.random() < 0.5;
       let target;
       if (dropToRoot) {
@@ -105,7 +109,7 @@ const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
         const tr = fc.getBoundingClientRect();
         target = { x: tr.x + 30, y: tr.y + 10 };
       }
-      return { fx: fr.x + 30, fy: fr.y + fr.height / 2, tx: target.x, ty: target.y };
+      return { fx: fr.x + Math.min(30, fr.width / 2), fy: fr.y + fr.height / 2, tx: target.x, ty: target.y };
     });
     if (!t) break;
     await page.mouse.move(t.fx, t.fy);
@@ -125,9 +129,9 @@ const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
       const fs = [...document.querySelectorAll('#tree > .file')];
       if (!fs.length) return null;
       const f = fs[0];
-      const fr = f.getBoundingClientRect();
+      const fr = (f.querySelector('.file-name') || f).getBoundingClientRect();   // 见 step 2 的说明
       const tr = document.getElementById('tree').getBoundingClientRect();
-      return { fx: fr.x + 30, fy: fr.y + fr.height / 2, tx: tr.x + 20, ty: tr.y + 10 };
+      return { fx: fr.x + Math.min(30, fr.width / 2), fy: fr.y + fr.height / 2, tx: tr.x + 20, ty: tr.y + 10 };
     });
     if (!t) break;
     await page.mouse.move(t.fx, t.fy);

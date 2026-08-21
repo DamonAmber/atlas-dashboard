@@ -9,8 +9,13 @@
   --text-dim: #8b95a7;
   --text-faint: #5b6478;
   --accent: #5b9cff;
+  /* accent 的淡填充（标签 chip 选中态这类需要"底色也表态"的地方） */
+  --accent-soft: rgba(91, 156, 255, 0.16);
   --unread: #ff5b5b;
   --ok: #4ade80;
+  /* 收藏星标：金色。刻意不用 accent——收藏和"选中 / 激活"是两回事，
+   * 同色会让一行里出现两种含义相同的蓝 */
+  --fav: #f0b429;
   /* 布局变量（JS 动态改 --sidebar-w） */
   --sidebar-w: 320px;
   --resizer-w: 5px;
@@ -37,8 +42,11 @@
     --text-dim: #5b657a;
     --text-faint: #99a2b3;
     --accent: #2563eb;
+    --accent-soft: rgba(37, 99, 235, 0.10);
     --unread: #e63946;
     --ok: #16a34a;
+    /* 浅色底上金色要压深一点才有足够对比度 */
+    --fav: #c2870a;
   }
 }
 
@@ -533,8 +541,8 @@ body.resizing iframe { pointer-events: none; }
   opacity: 0;
   transition: width .12s, opacity .12s;
 }
-/* 4 个按钮 × 18px + 3 个 1px 间隙 = 75px（新增了「重命名磁盘文件」） */
-.file:hover .file-actions { width: 75px; opacity: 1; }
+/* 5 个按钮 × 18px + 4 个 1px 间隙 = 94px（新增了「编辑标签」） */
+.file:hover .file-actions { width: 94px; opacity: 1; }
 /* 分享态的 share button 用 accent 蓝标识（已分享中再点是再次打开 modal） */
 .file.shared .file-actions [data-act="share"] { color: var(--accent); }
 
@@ -553,6 +561,222 @@ body.resizing iframe { pointer-events: none; }
   color: var(--accent);
   border-color: var(--accent);
 }
+
+/* ==================== 收藏与标签 ==================== */
+
+/* 文件行上的星标：常驻按钮（不在 .file-actions 里）——收藏是高频二元操作，
+ * 不该藏在 hover 才出现的那排按钮后面。
+ * 未收藏时几乎透明，只在 hover 行 / 键盘聚焦时浮出来；已收藏则常亮。 */
+.fav-btn {
+  width: 14px; height: 14px;
+  flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity var(--dur-fast), color var(--dur-fast), background var(--dur-fast);
+}
+.file:hover .fav-btn { opacity: 0.75; }
+.fav-btn:hover { opacity: 1; color: var(--fav); background: var(--bg-elev-2); }
+.fav-btn:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* 已收藏：实心填充 + 常亮，不受 hover 影响 */
+.file.favorite .fav-btn {
+  opacity: 1;
+  color: var(--fav);
+}
+.file.favorite .fav-btn svg { fill: var(--fav); }
+
+/* 文件行上的标签：最多两个 + “+N”，宽度受限、优先让文件名占空间 */
+.file-tags {
+  display: flex; align-items: center; gap: 3px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.file-tag {
+  flex: none;
+  max-width: 72px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 9.5px;
+  line-height: 1.5;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.file-tag.more {
+  color: var(--text-faint);
+  padding: 0 4px;
+}
+/* hover 时把标签让给操作按钮：侧栏默认只有 320px，标签 chip 和展开后的
+ * 5 个按钮同时占位会把文件名压成「留…」。标签是"平时用来认"的信息，
+ * hover 是"现在要操作"，让位是正确的取舍（完整标签仍在 title 里） */
+.file:hover .file-tags { display: none; }
+
+/* 标签筛选条：紧跟 sort-bar 的又一行。沿用 sort-bar 的 inline 工具栏风格 */
+.tag-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 0 12px 8px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.tag-bar.hidden { display: none; }
+.tag-bar-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  /* 标签多了不无限撑高侧边栏，超出可滚 */
+  max-height: 66px;
+  overflow-y: auto;
+}
+.tag-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 100%;
+  transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast);
+}
+.tag-chip:hover { background: var(--bg-hover); color: var(--text); }
+.tag-chip-name { overflow: hidden; text-overflow: ellipsis; }
+.tag-chip-count {
+  font-size: 9.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* 选中态：accent 描边 + 淡填充。比纯文字色变化更容易在一堆 chip 里辨认 */
+.tag-chip.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 500;
+}
+.tag-chip.on .tag-chip-count { color: var(--accent); }
+.tag-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tag-bar-clear {
+  flex: none;
+  height: 20px;
+  padding: 0 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.tag-bar-clear:hover { color: var(--text); background: var(--bg-hover); }
+.tag-bar-clear.hidden { display: none; }
+
+/* 收藏夹：结构与「最近打开」一致（跨文件夹的平铺列表） */
+.fav-bar {
+  border-bottom: 1px solid var(--border);
+  padding: 6px 8px 8px;
+  flex: none;
+}
+.fav-bar.hidden { display: none; }
+.fav-bar-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 2px 6px 4px;
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  user-select: none;
+}
+.fav-bar-header button {
+  width: 16px; height: 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0;
+  border-radius: 3px;
+  transition: transform .15s var(--ease, ease), color .12s;
+}
+.fav-bar-header button:hover { color: var(--text); }
+.fav-bar.collapsed .fav-bar-header button { transform: rotate(-90deg); }
+.fav-bar.collapsed .fav-list { display: none; }
+
+.fav-list {
+  display: flex; flex-direction: column; gap: 1px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.fav-list .fav-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+  user-select: none;
+  transition: background var(--dur-fast, 120ms);
+}
+.fav-list .fav-item:hover { background: var(--bg-hover); }
+.fav-list .fav-item.active { background: var(--bg-active); }
+.fav-list .fav-icon { font-size: 11px; opacity: 0.7; flex: none; }
+.fav-list .fav-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fav-list .fav-project {
+  font-size: 10px;
+  color: var(--text-faint);
+  flex: none;
+}
+.fav-list .fav-item.unread .fav-name { font-weight: 600; }
+.fav-list .fav-item.has-alias .fav-name { font-style: italic; }
+/* 取消收藏按钮：hover 该行才出现，避免一列 ✕ 造成视觉噪音 */
+.fav-list .fav-remove {
+  flex: none;
+  width: 15px; height: 15px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 9px;
+  cursor: pointer;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity var(--dur-fast), background var(--dur-fast), color var(--dur-fast);
+}
+.fav-list .fav-item:hover .fav-remove { opacity: 1; }
+.fav-list .fav-remove:hover { background: var(--bg-elev-2); color: var(--text); }
+.fav-list .fav-remove:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* 顶栏收藏按钮：当前文件已收藏时 → 星星本身填成金色。
+ * 刻意不像 #btn-share.shared 那样连边框一起变色：星形 fill 之后在 28px 按钮里
+ * 几乎占满，再加一圈金边整个按钮会变成一块"金砖"，在一排线性图标里过分抢戏 */
+#btn-favorite.on { color: var(--fav); }
+#btn-favorite.on svg { fill: var(--fav); }
 
 /* ---------- 分享 modal ---------- */
 .share-panel {

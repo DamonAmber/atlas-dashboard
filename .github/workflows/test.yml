@@ -51,6 +51,7 @@ jobs:
           set -e
           for spec in \
             preview-live-edit \
+            favorites-and-tags \
             toast \
             inline-edit \
             v0.2-features \

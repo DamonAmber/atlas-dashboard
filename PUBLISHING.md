@@ -111,7 +111,7 @@ for spec in tests/*.spec.js; do
 done
 ```
 
-> 验证过：把本机 Atlas 完全停掉，全套 30 个 spec 依然全绿，且 `~/.atlas/config.json`
+> 验证过：把本机 Atlas 完全停掉，全套 31 个 spec 依然全绿，且 `~/.atlas/config.json`
 > 与 `store.json` 校验和逐字节未变。若将来某个 spec 在服务停止时失败，说明它偷偷依赖了
 > 你的真实实例，按下面的约定改掉。
 
@@ -125,7 +125,7 @@ done
 >   期望末行 `总计 10 项，失败 0 项`。**记得删掉 tgz**，否则会被 `git add -A` 带进 commit。
 > - `scroll-after-toggle.spec.js` 在 iframe 还没加载出内容时打印 `!! HTML 不够长，没法测试` 并跳过（也是 exit 0）。这是它长期的既有行为，不是本次改动引入的；判断是否回归的办法是 `git stash` 后对比同一行输出。
 
-当前 spec 清单（30 个）。除 `landing-demo`（`file://`）与 `diff-algorithm`（纯函数单测）
+当前 spec 清单（31 个）。除 `landing-demo`（`file://`）与 `diff-algorithm`（纯函数单测）
 外，其余都通过
 `tests/helpers/isolated-atlas.js` 的 `startAtlas()` 起独立实例：临时 `ATLAS_HOME`
 （自带 config/store）+ 临时扫描根 + 临时 fixture + 随机端口，结束即删。
@@ -133,6 +133,7 @@ done
 不再依赖你本机那几百篇真实文档。
 
 > - `preview-live-edit.spec.js` — 预览区轻量编辑：edit-doc 标注 / 进入编辑 / 文案改+保存 / 列表重排 / 取消恢复 / 冲突 / 安全（32 项）
+> - `favorites-and-tags.spec.js` — 收藏与标签：星标点击不误触"打开文档"、不被 SortableJS 当拖拽把手；收藏夹跨文件夹聚合、按收藏时间倒序、可取消、折叠态持久化；顶栏收藏按钮联动；标签去重与大小写合并、超量截断、行上最多 2 个 +N、"取消"不会清标签、清空即删 key；标签筛选条按用量倒序、多选为 AND、与搜索/仅未读正确叠加；重命名后收藏与标签跟随新路径（72 项）
 > - `md-render-and-roundtrip.spec.js` — Markdown 渲染与往返保真：`<base href>`（相对图片能加载）/ front matter / 锚点链接不新开标签页 / 任务列表复选框 / 代码块语言标签+复制 / 标题锚点 / 表格横向滚动 / 深色模式；以及所见即所得改一处后源码逐字节保真（表格对齐、段落软换行、块间距都不被顺手改掉）（28 项）
 > - `md-editor-ux.spec.js` — Markdown 编辑器交互：`/` 键不再被全局快捷键抢走（设置里能手输绝对路径）/ ⌘B ⌘I ⌘E ⌘K ⌘S / 回车续列表（无序·有序·任务）/ Tab 多行缩进与反缩进 / 格式工具条 / 分栏拖拽与持久化 / 大纲 / 未保存草稿恢复（41 项）
 > - `quickopen-a11y-rename.spec.js` — ⌘K 快速打开（模糊匹配 + 键盘导航）/ 弹窗可访问性（Esc 关闭 · role=dialog · 焦点陷阱 · 焦点归还 · 嵌套只关最上层）/ 重命名磁盘文件与 store 状态迁移 + 输入校验（30 项）
@@ -290,7 +291,7 @@ atlas restart      # 让本机服务也用新版
 
 | 触发 | Workflow | 做什么 |
 |---|---|---|
-| `git push` 到 main | `.github/workflows/test.yml` | CLI smoke + landing demo + e2e install + 15 个隔离 spec（各自起实例，无需预置 fixture 与共享服务）+ 帧率非阻塞观测 |
+| `git push` 到 main | `.github/workflows/test.yml` | CLI smoke + landing demo + e2e install + 16 个隔离 spec（各自起实例，无需预置 fixture 与共享服务）+ 帧率非阻塞观测 |
 | `git push origin v*` (tag) | `.github/workflows/release.yml` | 抽取 PUBLISHING.md 该版本段落 → 创建 GitHub Release |
 | 任何 push 到 main | GitHub Pages（仓库设置） | 自动重新部署 `docs/` 到 https://damonamber.github.io/atlas-dashboard/ |
 | `npm publish` | npm registry | 包上架 + CDN 同步（约 1-2 分钟） |
@@ -440,6 +441,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.10.0** (2026-08-20) — 新功能：**收藏夹**与**文档标签 + 按标签筛选**。目录树是"一个文件只能待在一个地方"，但常看的那几篇往往散在不同项目里（每次都要展开好几个分组去翻），而"周报""待评审""要归档"这些维度本身是交叉的、跟目录结构对不上。这两个功能各自解决其中一半。① **收藏**：文件行左侧加常驻星标 `.fav-btn`（未收藏时半透明、hover 该行浮出，已收藏则常亮金色 `--fav`），顶栏也加了同步状态的收藏按钮；侧栏新增「收藏」区（结构照 `.recent-bar`，跨文件夹平铺、按收藏时间倒序、条目上 ✕ 取消、可折叠且折叠态持久化到 `atlas:favCollapsed`）。刻意不把星标塞进 hover 才出现的 `.file-actions` —— 收藏是高频二元操作，藏在第 6 个按钮后面不合理；代价是它落在 SortableJS 的拖拽把手区里，必须同时加进 `initSortables` 的 `filter` 和文件行 `pointerdown/pointerup` 的守卫，否则按下星标会开始拖这一行（拖完 `onEnd` 还会把排序模式强行切到「自定义」）、或者顺带把文档打开。② **标签**：hover 文件 → 🏷 → 逗号分隔输入（`周报, 待评审, AI`），中英文逗号都认，服务端 `normalizeTags()` 做唯一一次规范化（trim、内部空白压成单空格、单个 ≤24 字、最多 12 个、**按小写去重但保留用户第一次输入的写法**，所以输 `AI` 之后再输 `ai` 不会多出一个看起来重复的标签）。文件行上显示前两个 + `+N`（完整列表进 `title`），`hover` 时标签让位给操作按钮——320px 侧栏放不下「chip + 展开后的 5 个按钮」，不让位文件名会被压成「留…」。③ **按标签筛选**：侧栏 `#tag-bar` 列出全部标签（按用量倒序、带计数），点一下只看该标签的文档，**多选是「同时具备」**（AND，与搜索多关键词语义一致，逐步收窄），且与搜索、「仅未读」正确叠加而非互相覆盖——新增 `matchesTagFilter()` 接进 `fileMatches()`，并抽出 `hasActiveFilter()` 统一 `render()` / `renderFolder()` 两处过滤守卫（原来是散在两地的 `state.search || state.onlyUnread`，加一种筛选就要改两处、漏一处就是"筛选只在顶层生效"）。标签筛选故意不持久化（同 `onlyUnread`）：否则刷新后"文档凭空少了一半"很难自查；服务端标签被清空后前端也会撤掉已失效的筛选，避免树里一片空白而筛选条上已无 chip 可取消。④ **数据与迁移**：`store.favorites`（path → 收藏时间戳，存时间而非 `true` 才能按"最近收藏"排序）与 `store.tags`（path → string[]），沿用 `alias` 那套端点约定新增 `POST /api/favorite`（省略 `favorite` 即切换；已收藏时重复收藏不刷新时间戳，避免误触打乱收藏夹顺序）与 `POST /api/tags`（整组覆盖，空即删 key）；`/api/state` 的 fileMap 加 `favorite`/`favoritedAt`/`tags`，顶层加 `favorites`/`allTags`；`/api/rename` 的迁移块补上这两个字段（漏一个用户就会觉得"改个名字东西就丢了"）。删文件后的清理走 `/api/state` 惰性剪枝而不是 chokidar 的 unlink 回调（那里每个事件都要 `loadStore+saveStore`，批量删除会连着打很多次盘），并用 `fs.existsSync` 兜底：条目不在扫描结果里可能只是用户在设置里取消勾选了 Markdown，不该因此丢掉 md 文件的收藏。顺手修掉 `migrateStore` 旧版 `folders` 分支返回手写字面量、缺 `shares`/`seenVersions` 的问题（改成递归自身补齐）。⑤ **修掉一个共享组件的缺陷**：`showDialog` 对「取消」和「清空输入后确定」都返回 `null`，调用方无法区分——第一版标签编辑因此点「取消」会把标签清光。新增 `allowEmpty` 选项（确定返回 trim 后字符串、可以是空串；取消仍返回 `null`），"可清空的字段"从此有正确语义。⑥ **修掉三个既有 spec 的假通过**：`drag-hover-expand` / `drag-stress` / `drag-to-root` 都从文件行左侧硬编码 `+30px` 起拖，而那个位置现在正是被 Sortable `filter` 排除的星标，拖拽根本不启动；前者断言严格所以直接红了，后两者只断言"页面仍响应"会静默变绿。全部改成按 `.file-name` 定位。新增 spec `favorites-and-tags.spec.js`（72 项，含"在星标上拖 70px 不产生 ghost / 不把排序切成自定义 / 不打开文档"这组回归），已挂进 `npm test` 与 CI。全套 31 个 spec 全绿。
 
 - **0.9.1** (2026-08-20) — Bug 修复：**Markdown 文档点过目录 / 标题锚点后，右上角刷新按钮报 `Cannot GET /raw/<n>/<目录>/`**（0.8.0 引入的隐性回归）。根因是 `<base href>` 同时改变了「相对 URL」的解析基准：0.8.0 为了让 md 里 `![](./assets/x.png)` 这类相对图片能加载，给 `/api/render-md` 渲染出的预览页注入了 `<base href="/raw/<n>/<md 所在目录>/">`；但这个 base 也是 `history.replaceState()` 和 `href="#锚点"` 的解析基准 —— 点一下 TOC 项，`replaceState(null,"","#第二节")` 会被解析成 `/raw/<n>/<目录>/#第二节`，iframe 里文档的 URL 就悄悄从 `/api/render-md?path=…` 漂移成了那个**目录**；随后刷新按钮的 `contentWindow.location.reload()` 去 GET 一个目录，`express.static` 找不到 index 就落到 404。① `public/vendor/markdown.js` 的 tocScript 把 `replaceState` 的相对 hash 改成带真实路径（`location.pathname + location.search + "#id"`），不再经 base 解析。② 同一个坑还有更直接的一条路：标题 hover 锚点 `.md-anchor` 与 md 正文里手写的 `[x](#y)`，`href="#id"` 同样按 base 解析，**点一下就整页跳到 `/raw/…/` 404，根本不用按刷新**（0.8.0 只修掉了这类链接被加 `target="_blank"` 的问题，没意识到 base 会让它们跳出本页）。现在 enhanceScript 统一接管：凡 `href` 原始值以 `#` 开头的链接都 `preventDefault` + 自行 `scrollIntoView` + 只安全改 hash，TOC 链接（带 `data-target`）交回 tocScript 处理不重复。③ `public/app.js` 新增 `reloadPreviewDoc(canonicalUrl)`：刷新前先比对 iframe 实际 `pathname/search` 与 canonical 地址（md → `/api/render-md`，html → `/raw/`），一致才 `reload()`（保留 hash / search），跑偏了就重新赋 `src` 并带上原 hash 以便仍定位到原章节；刷新按钮与退出编辑恢复只读预览（`exitEditMode`）两处都收敛到它 —— 即使将来再有别的原因让内层文档 URL 漂移，刷新也不会 404。顺带修掉 `exitEditMode` 里用 `els.preview.src`（DOM 属性，内层文档导航后不会变）判断"是否同一份文档"这个失效判据。全套 30 个 spec 全绿。
 

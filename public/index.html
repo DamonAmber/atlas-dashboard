@@ -59,6 +59,20 @@
       </label>
     </div>
 
+    <!-- 标签筛选条：只在有标签存在时显示（renderTagBar 控制） -->
+    <div id="tag-bar" class="tag-bar hidden" role="group" aria-label="按标签筛选">
+      <div id="tag-bar-chips" class="tag-bar-chips"></div>
+      <button id="tag-bar-clear" class="tag-bar-clear hidden" type="button" title="清除标签筛选" aria-label="清除标签筛选">清除</button>
+    </div>
+
+    <div id="fav-bar" class="fav-bar hidden">
+      <div class="fav-bar-header">
+        <span>收藏</span>
+        <button id="fav-toggle" type="button" title="收起 / 展开" aria-label="收起或展开收藏夹"><span aria-hidden="true">▾</span></button>
+      </div>
+      <div id="fav-list" class="fav-list"></div>
+    </div>
+
     <div id="recent-bar" class="recent-bar hidden">
       <div class="recent-bar-header">
         <span>最近</span>
@@ -120,6 +134,11 @@
         <button id="btn-export-pdf" disabled title="导出为 PDF 保存到 Downloads" aria-label="导出为 PDF">
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
             <path fill="currentColor" d="M5 1.5h4.5L13 5v9.5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V2.5a1 1 0 0 1 1-1zm4 1H5v12h7V5.5H10a1 1 0 0 1-1-1V2.5zM6.5 7.5h3v1h-3v-1zm0 2h3v1h-3v-1zm0 2h2v1h-2v-1z"/>
+          </svg>
+        </button>
+        <button id="btn-favorite" disabled title="收藏此文档" aria-label="收藏此文档" aria-pressed="false">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 2l1.85 3.9 4.15.56-3.05 2.86.79 4.18L8 11.5l-3.74 2 .79-4.18L2 6.46l4.15-.56z"/>
           </svg>
         </button>
         <button id="btn-share" disabled title="分享到局域网（生成可访问链接 + 二维码）" aria-label="分享到局域网">

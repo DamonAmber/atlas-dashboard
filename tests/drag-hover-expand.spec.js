@@ -81,8 +81,12 @@ function check(name, ok, detail = '') {
     for (const f of files) {
       if (f.closest(`.folder[data-folder-id="${targetId}"]`)) continue;
       if (!inView(f)) continue;
-      const r = f.getBoundingClientRect();
-      return { x: r.x + 30, y: r.y + r.height / 2, path: f.dataset.path };
+      // 从 .file-name 上按下，而不是行左边固定 +30px：行首那几十像素被
+      // unread-dot / 收藏星标 / 类型 icon 占着，星标是按钮且被 Sortable 的 filter
+      // 排除（按它是收藏，不是拖拽），硬编码偏移会随行内元素变动而失效
+      const nameEl = f.querySelector('.file-name') || f;
+      const r = nameEl.getBoundingClientRect();
+      return { x: r.x + Math.min(30, r.width / 2), y: r.y + r.height / 2, path: f.dataset.path };
     }
     return null;
   }, targetInfo.id);

@@ -107,7 +107,9 @@ const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
     const f = document.querySelector('.file');
     return f && {
       path: f.dataset.path,
-      box: f.getBoundingClientRect(),
+      // 用 .file-name 的盒子而不是整行：行首那几十像素是 unread-dot / 收藏星标 /
+      // 类型 icon，星标是按钮且被 SortableJS 的 filter 排除，按在它上面拖不动
+      box: (f.querySelector('.file-name') || f).getBoundingClientRect(),
     };
   });
   const treeBox = await page.evaluate(() => {
@@ -119,7 +121,10 @@ const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
 
   if (dragTarget) {
     // 慢速拖拽以确保 SortableJS 接受
-    await page.mouse.move(dragTarget.box.x + 30, dragTarget.box.y + dragTarget.box.height / 2);
+    await page.mouse.move(
+      dragTarget.box.x + Math.min(30, dragTarget.box.width / 2),
+      dragTarget.box.y + dragTarget.box.height / 2,
+    );
     await page.mouse.down();
     await page.waitForTimeout(80);
     // 拖到 tree 底部、左边一点（避免落到任何 folder-children）
@@ -154,9 +159,9 @@ const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
     const t = await page.evaluate(() => {
       const fs = [...document.querySelectorAll('.file')];
       const f = fs[Math.floor(Math.random() * fs.length)];
-      const r = f.getBoundingClientRect();
+      const r = (f.querySelector('.file-name') || f).getBoundingClientRect();
       const tr = document.getElementById('tree').getBoundingClientRect();
-      return { fx: r.x + 30, fy: r.y + r.height / 2, tx: tr.x + 20, ty: tr.y + tr.height - 8 };
+      return { fx: r.x + Math.min(30, r.width / 2), fy: r.y + r.height / 2, tx: tr.x + 20, ty: tr.y + tr.height - 8 };
     });
     if (!t) break;
     await page.mouse.move(t.fx, t.fy);

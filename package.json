@@ -1,6 +1,6 @@
 {
   "name": "atlas-dashboard",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "description": "本地 HTML / Markdown 文档统一浏览/管理 dashboard：扫描你指定的目录，提供统一目录树、未读红点、和上次已读版本对比、桌面通知、Markdown 实时预览与编辑。",
   "keywords": [
     "html",
@@ -39,7 +39,7 @@
   "scripts": {
     "start": "node bin/atlas.js",
     "dev": "node --watch bin/atlas.js",
-    "test": "node tests/inline-edit.spec.js && node tests/sidebar.spec.js && node tests/scroll-stuck.spec.js && node tests/no-sortable-leak.spec.js && node tests/sse-leak-and-retry.spec.js && node tests/toast.spec.js && node tests/preview-live-edit.spec.js && node tests/diff-algorithm.spec.js && node tests/md-render-and-roundtrip.spec.js && node tests/md-editor-ux.spec.js && node tests/quickopen-a11y-rename.spec.js && node tests/index-perf-and-search.spec.js && node tests/share-security.spec.js && node tests/diff-view.spec.js && node tests/misc-hardening.spec.js && node tests/md-pdf-export.spec.js && node tests/modal-close.spec.js && node tests/md-sync-highlight.spec.js",
+    "test": "node tests/inline-edit.spec.js && node tests/sidebar.spec.js && node tests/scroll-stuck.spec.js && node tests/no-sortable-leak.spec.js && node tests/sse-leak-and-retry.spec.js && node tests/toast.spec.js && node tests/preview-live-edit.spec.js && node tests/diff-algorithm.spec.js && node tests/md-render-and-roundtrip.spec.js && node tests/md-editor-ux.spec.js && node tests/quickopen-a11y-rename.spec.js && node tests/index-perf-and-search.spec.js && node tests/share-security.spec.js && node tests/diff-view.spec.js && node tests/misc-hardening.spec.js && node tests/md-pdf-export.spec.js && node tests/modal-close.spec.js && node tests/md-sync-highlight.spec.js && node tests/favorites-and-tags.spec.js",
     "test:all": "for f in tests/*.spec.js; do echo \"=== $f ===\"; node \"$f\" || exit 1; done"
   },
   "engines": {
