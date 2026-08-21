@@ -1001,7 +1001,11 @@ function renderNode(node) {
 }
 
 function renderFolder(folder) {
-  const isCollapsed = state.collapsed.has(folder.id);
+  // 筛选生效时强制展开：能活到这一步的分组本身就是"含命中项"的，
+  // 再让用户手动一个个点开是反直觉的 —— 折叠着的分组里的命中结果直接看不见，
+  // 表现为"筛选了但什么都没出来"。只在渲染时忽略折叠，不写 state.collapsed，
+  // 所以清除筛选后每个分组的折叠状态原样恢复。
+  const isCollapsed = hasActiveFilter() ? false : state.collapsed.has(folder.id);
   const folderEl = document.createElement('div');
   folderEl.className = 'folder' + (isCollapsed ? ' collapsed' : '');
   folderEl.dataset.nodeType = 'folder';

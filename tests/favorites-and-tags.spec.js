@@ -342,6 +342,62 @@ const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
   check('旧路径的收藏被清掉', oneAbs in (st.favorites || {}), false);
   check('旧路径的标签被清掉', oneAbs in (st.tags || {}), false);
 
+  // ============ ④ 筛选时命中分组必须可见 ============
+  // 日常使用里分组大多是折叠着的。如果筛选不忽略折叠状态，命中的文件虽然进了 DOM
+  // 却全在折叠的分组里 —— 屏幕上一个结果都看不到，表现为"筛选了但什么都没出来"、
+  // "清除筛选后文档也没回来"。这个毛病搜索与「仅未读」从 0.2.0 起就有，
+  // 标签筛选继承了它，0.10.1 一起修掉。
+  console.log('\n[折叠状态下筛选：命中结果必须可见]');
+  await page.evaluate(() => {
+    const ids = [...document.querySelectorAll('.tree .folder')].map(f => f.dataset.folderId);
+    localStorage.setItem('atlas:collapsed', JSON.stringify(ids));
+  });
+  await page.reload();
+  await page.waitForSelector('.tree .file', { state: 'attached' });
+  await page.waitForTimeout(900);
+
+  const vis = () => page.evaluate(() => ({
+    visible: [...document.querySelectorAll('.tree .file')].filter(e => e.offsetParent !== null).length,
+    collapsed: document.querySelectorAll('.tree .folder.collapsed').length,
+    lsCollapsed: JSON.parse(localStorage.getItem('atlas:collapsed') || '[]').length,
+  }));
+
+  const base = await vis();
+  check('前置：全部分组折叠，屏幕上看不到任何文档', base.visible, 0);
+  check('前置：localStorage 记下了折叠偏好', base.lsCollapsed > 0, true);
+
+  // 标签筛选
+  await page.locator('#tag-bar .tag-chip', { hasText: '归档' }).first().click();
+  await page.waitForTimeout(400);
+  let v = await vis();
+  check('标签筛选后命中结果可见（修复前是 0）', v.visible, 1);
+  check('命中分组被自动展开', v.collapsed, 0);
+  await page.click('#tag-bar-clear');
+  await page.waitForTimeout(500);
+  v = await vis();
+  check('清除筛选后折叠状态原样恢复', v.collapsed, base.collapsed);
+  check('折叠偏好没被筛选改写', v.lsCollapsed, base.lsCollapsed);
+
+  // 搜索
+  await page.fill('#search', 'three');
+  await page.waitForTimeout(800);
+  v = await vis();
+  check('搜索命中结果同样可见', v.visible > 0, true);
+  check('搜索时命中分组自动展开', v.collapsed, 0);
+  await page.fill('#search', '');
+  await page.waitForTimeout(800);
+  check('清空搜索后折叠状态恢复', (await vis()).collapsed, base.collapsed);
+
+  // 仅未读
+  await page.check('#only-unread');
+  await page.waitForTimeout(400);
+  v = await vis();
+  check('「仅未读」命中结果同样可见', v.visible > 0, true);
+  check('「仅未读」时命中分组自动展开', v.collapsed, 0);
+  await page.uncheck('#only-unread');
+  await page.waitForTimeout(400);
+  check('取消「仅未读」后折叠状态恢复', (await vis()).collapsed, base.collapsed);
+
   console.log('\n[无 JS 报错]');
   check('页面没有抛出未捕获异常', pageErrors, []);
 
