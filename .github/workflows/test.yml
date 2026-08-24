@@ -52,6 +52,7 @@ jobs:
           for spec in \
             preview-live-edit \
             favorites-and-tags \
+            archive-and-collapse-all \
             toast \
             inline-edit \
             v0.2-features \
