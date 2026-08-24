@@ -396,20 +396,27 @@
   // 预览基础样式：以 .md-body 作用域，iframe 与主文档编辑预览面板共用。
   // 全部走 CSS 变量，深色模式只需覆盖变量——iframe 预览页和 dashboard 内
   // 的编辑预览面板因此能自动保持一致。
-  var markdownCss = [
-    '.md-body{',
+  // 两套配色变量各自命名，好让「强制主题」复用同一份值——
+  // 用户在 Atlas 设置里把主题钉成深色 / 浅色时，iframe 预览页要跟着钉。
+  var mdVarsLight = [
     '--md-fg:#24292f;--md-fg-muted:#6a737d;--md-fg-faint:#8a8f98;',
     '--md-border:#eaecef;--md-border-strong:#d0d7de;',
     '--md-code-bg:rgba(175,184,193,.28);--md-pre-bg:#f6f8fa;--md-pre-head:#eceff3;',
     '--md-link:#0969da;--md-table-alt:#f6f8fa;--md-quote-fg:#57606a;',
-    '--md-fm-bg:#f6f8fa;--md-fm-border:#e3e6ec;',
-    'color:var(--md-fg);font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;word-wrap:break-word;}',
-    '@media (prefers-color-scheme: dark){.md-body{',
+    '--md-fm-bg:#f6f8fa;--md-fm-border:#e3e6ec;'
+  ].join('');
+  var mdVarsDark = [
     '--md-fg:#e3e6ec;--md-fg-muted:#9aa4b2;--md-fg-faint:#7c8494;',
     '--md-border:#272c36;--md-border-strong:#333a46;',
     '--md-code-bg:rgba(120,132,150,.22);--md-pre-bg:#171b22;--md-pre-head:#1f242d;',
     '--md-link:#6cb0ff;--md-table-alt:#171b22;--md-quote-fg:#a4adbb;',
-    '--md-fm-bg:#171b22;--md-fm-border:#272c36;}}',
+    '--md-fm-bg:#171b22;--md-fm-border:#272c36;'
+  ].join('');
+  var markdownCss = [
+    '.md-body{',
+    mdVarsLight,
+    'color:var(--md-fg);font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;word-wrap:break-word;}',
+    '@media (prefers-color-scheme: dark){.md-body{', mdVarsDark, '}}',
     '.md-body h1,.md-body h2,.md-body h3,.md-body h4,.md-body h5,.md-body h6{margin:1.4em 0 .6em;font-weight:600;line-height:1.3;position:relative;}',
     '.md-body h1{font-size:1.9em;padding-bottom:.3em;border-bottom:1px solid var(--md-border);}',
     '.md-body h2{font-size:1.5em;padding-bottom:.3em;border-bottom:1px solid var(--md-border);}',
@@ -699,11 +706,13 @@
   }
 
   // 只读预览页里 TOC 侧栏的样式（不影响编辑器分栏预览面板）——克制、极简
+  var tocVarsLight = '--toc-bg:#fff;--toc-border:#f0f1f3;--toc-title:#a0a6b0;--toc-fg:#697280;'
+    + '--toc-fg-strong:#1f2328;--toc-hover:#f6f7f9;--toc-active:#0969da;--toc-caret:#c2c7d0;';
+  var tocVarsDark = '--toc-bg:#12141a;--toc-border:#22262f;--toc-title:#6f7784;'
+    + '--toc-fg:#9aa4b2;--toc-fg-strong:#e3e6ec;--toc-hover:#1b1f27;--toc-active:#6cb0ff;--toc-caret:#4a515e;';
   var tocCss = [
-    'body{--toc-bg:#fff;--toc-border:#f0f1f3;--toc-title:#a0a6b0;--toc-fg:#697280;',
-    '--toc-fg-strong:#1f2328;--toc-hover:#f6f7f9;--toc-active:#0969da;--toc-caret:#c2c7d0;}',
-    '@media (prefers-color-scheme: dark){body{--toc-bg:#12141a;--toc-border:#22262f;--toc-title:#6f7784;',
-    '--toc-fg:#9aa4b2;--toc-fg-strong:#e3e6ec;--toc-hover:#1b1f27;--toc-active:#6cb0ff;--toc-caret:#4a515e;}}',
+    'body{', tocVarsLight, '}',
+    '@media (prefers-color-scheme: dark){body{', tocVarsDark, '}}',
     '*{scroll-behavior:smooth;}',
     '.md-toc{position:fixed;top:0;left:0;width:250px;height:100vh;box-sizing:border-box;overflow-y:auto;',
     'padding:46px 10px 32px 14px;border-right:1px solid var(--toc-border);background:var(--toc-bg);z-index:5;transition:transform .2s ease;',
@@ -852,6 +861,20 @@
   // opts.baseHref：必须传！预览页的 URL 是 /api/render-md?path=...，
   // 没有 <base> 的话文档里 `![](./img/a.png)` 会被解析成 /api/img/a.png → 404，
   // 也就是「md 里的本地图片全裂」。baseHref 指向该 md 所在目录的 /raw/ 前缀。
+  // 强制主题：Atlas 设置里把主题钉成 light / dark 时，iframe 里的预览页
+  // 不能再跟着系统走，否则会出现「外壳浅色 + 预览深色」的割裂。
+  // iframe 里的 prefers-color-scheme 读的是系统设置（不继承父文档的
+  // color-scheme），所以只能由服务端把这段覆盖样式一起吐出来。
+  // 它排在 @media 块之后，靠顺序取胜，不需要提高选择器优先级。
+  function forcedThemeCss(theme) {
+    if (theme !== 'light' && theme !== 'dark') return '';
+    var dark = theme === 'dark';
+    return ':root{color-scheme:' + theme + ';}'
+      + 'html,body{background:' + (dark ? '#12141a' : '#ffffff') + ';}'
+      + '.md-body{' + (dark ? mdVarsDark : mdVarsLight) + '}'
+      + 'body{' + (dark ? tocVarsDark : tocVarsLight) + '}';
+  }
+
   function renderPage(src, opts) {
     opts = opts || {};
     var title = escapeHtml(opts.title || 'Markdown');
@@ -869,6 +892,8 @@
         + '<body class="md-body">' + renderBody(src) + '</body></html>';
     }
 
+    var forced = forcedThemeCss(opts.theme);
+    var schemeMeta = (opts.theme === 'light' || opts.theme === 'dark') ? opts.theme : 'light dark';
     var extracted = extractHeadings(renderBody(src));
     var body = extracted.html;
     var items = extracted.items;
@@ -876,13 +901,13 @@
     var head = '<!doctype html><html lang="zh"><head><meta charset="utf-8" />'
       + baseTag
       + '<meta name="viewport" content="width=device-width,initial-scale=1" />'
-      + '<meta name="color-scheme" content="light dark" />'
+      + '<meta name="color-scheme" content="' + schemeMeta + '" />'
       + '<title>' + title + '</title>';
 
     if (!hasToc) {
       return head
         + '<style>html,body{margin:0;}body{padding:32px 40px;max-width:900px;margin:0 auto;}'
-        + pageCss + markdownCss + '</style></head>'
+        + pageCss + markdownCss + forced + '</style></head>'
         + '<body class="md-body">' + body
         + '<script>' + enhanceScript + '</script>'
         + '</body></html>';
@@ -892,7 +917,7 @@
       + 'stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg>';
 
     return head
-      + '<style>' + pageCss + tocCss + markdownCss + '</style></head>'
+      + '<style>' + pageCss + tocCss + markdownCss + forced + '</style></head>'
       + '<body>'
       + '<button class="md-toc-toggle" id="mdTocToggle" type="button" title="展开 / 收起目录" aria-label="展开或收起目录">' + toggleSvg + '</button>'
       + '<nav class="md-toc" id="mdToc" aria-label="文档目录"><div class="md-toc-title">目录</div>' + tocListHtml(items) + '</nav>'
@@ -909,6 +934,7 @@
     htmlToMarkdown: htmlToMarkdown,
     markdownCss: markdownCss,
     pageCss: pageCss,
+    forcedThemeCss: forcedThemeCss,
     printCss: printCss,
     splitFrontMatter: splitFrontMatter,
     escapeHtml: escapeHtml,

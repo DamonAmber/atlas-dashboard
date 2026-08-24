@@ -39,7 +39,7 @@ function check(name, ok, detail = '') {
   check('渲染 3 个 folder', initial.folders === 3);
   check('默认两个 folder 展开（5 个 file 可见）', visibleInit === 5);
   check('DOM 中含全部 8 个 file（折叠的也在 DOM 里）', initial.totalFilesInDom === 8);
-  check('stats 显示正确（8 个文档 · 3 未读）', /8\s*个/.test(initial.stats) && /3\s*未读/.test(initial.stats));
+  check('stats 显示正确（8 篇文档 · 3 未读）', /8\s*篇/.test(initial.stats) && /3\s*未读/.test(initial.stats));
   check('preview 默认有内容（首屏不空）', initial.previewHasContent);
 
   // ===== 2. 点击文件切换 preview + 消除未读 =====

@@ -18,6 +18,7 @@
 
 const { spawn } = require('child_process');
 const http = require('http');
+const net = require('net');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -29,11 +30,47 @@ function pickPort() {
   return 4400 + Math.floor(Math.random() * 400);
 }
 
-function health(base) {
+// 端口是否真的空着。必须先探再用：server.js 发现端口被占会自动切到下一个，
+// 而 helper 仍按原端口做健康检查 —— 探到的就成了那个占着端口的别人。
+function portFree(port) {
   return new Promise((resolve) => {
-    const req = http.get(`${base}/api/state`, (res) => { res.resume(); resolve(true); });
-    req.on('error', () => resolve(false));
-    req.setTimeout(800, () => { req.destroy(); resolve(false); });
+    const srv = net.createServer();
+    srv.once('error', () => resolve(false));
+    srv.once('listening', () => srv.close(() => resolve(true)));
+    srv.listen(port, '127.0.0.1');
+  });
+}
+async function pickFreePort() {
+  for (let i = 0; i < 40; i++) {
+    const p = pickPort();
+    if (await portFree(p)) return p;
+  }
+  throw new Error('找不到空闲端口（4400-4799 全被占用？）');
+}
+
+// 健康检查顺带验明身份：确认应答的这个实例扫的是我们自己的临时目录。
+//
+// 为什么要验：这个坑真的踩过。开发时留了一个长跑实例落在 4400-4799 区间里，
+// 测试实例撞端口后被 server.js 自动挪到别的端口，而健康检查探原端口探到的是
+// 那个长跑实例 —— 它是健康的，于是 startAtlas 认为"起好了"，接下来整个 spec
+// 拿着几百篇真实文档去跑只有几篇 fixture 的断言。
+// 失败信息还极具误导性（"空查询时列出全部文档 期望 4 实际 50"），
+// 根本看不出是连错了服务。宁可在这里判死，也不要让 spec 对着错误的实例跑。
+function health(base, expectScanDir) {
+  return new Promise((resolve) => {
+    const req = http.get(`${base}/api/config`, (res) => {
+      let buf = '';
+      res.on('data', d => { buf += d; });
+      res.on('end', () => {
+        try {
+          const cfg = JSON.parse(buf);
+          const roots = Array.isArray(cfg.scanRoots) ? cfg.scanRoots : [];
+          resolve({ ok: roots.includes(expectScanDir), foreign: !roots.includes(expectScanDir), roots });
+        } catch { resolve({ ok: false }); }
+      });
+    });
+    req.on('error', () => resolve({ ok: false }));
+    req.setTimeout(800, () => { req.destroy(); resolve({ ok: false }); });
   });
 }
 
@@ -55,7 +92,7 @@ async function startAtlas(opts = {}) {
     prefix = 'atlas-spec-',
   } = opts;
 
-  const port = pickPort();
+  const port = await pickFreePort();
   const base = `http://127.0.0.1:${port}`;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const home = path.join(tmp, 'home');
@@ -117,14 +154,23 @@ async function startAtlas(opts = {}) {
   process.once('SIGTERM', () => { stopSync(); process.exit(143); });
 
   let healthy = false;
+  let foreignRoots = null;
   for (let i = 0; i < 50; i++) {
     await new Promise(r => setTimeout(r, 200));
-    if (await health(base)) { healthy = true; break; }
+    const h = await health(base, scanDirs[0]);
+    if (h.ok) { healthy = true; break; }
+    if (h.foreign) foreignRoots = h.roots;   // 端口上有个不是我们的实例
     if (child.exitCode !== null) break;
   }
   if (!healthy) {
     const log = logs.join('');
     stopSync();
+    if (foreignRoots) {
+      throw new Error(
+        `端口 ${port} 上应答的不是本实例（它扫的是 ${JSON.stringify(foreignRoots)}）。\n`
+        + '通常是本机另有一个 Atlas 跑在 4400-4799 区间里 —— 跑测试前先把它停掉，\n'
+        + '或者让它监听这个区间之外的端口。\n' + log);
+    }
     throw new Error('隔离 Atlas 实例启动失败：\n' + log);
   }
 

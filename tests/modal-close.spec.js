@@ -48,8 +48,9 @@ function check(name, actual, expected) {
   // 首次分享（这是用户报告的场景）：点 ✕ 上的图标
   await openShare();
   check('首次分享：弹窗打开', await page.isVisible('#share-modal'), true);
-  // 精确点在图标 span 上，模拟真实点击落点
-  await page.click('#share-modal .modal-close span');
+  // 精确点在图标本身上（现在是 <svg class="ico">，不再是 <span>），模拟真实点击落点。
+  // 这一条守的是 v0.8.1 那个 P0：事件目标落在按钮的子元素上时也必须能关闭。
+  await page.click('#share-modal .modal-close .ico');
   await page.waitForTimeout(250);
   check('首次分享：点 ✕ 的图标能关闭', await page.isHidden('#share-modal'), true);
 
@@ -74,13 +75,13 @@ function check(name, actual, expected) {
   // 关闭后能重新打开（状态没被卡住）
   await openShare();
   check('关闭后能再次打开', await page.isVisible('#share-modal'), true);
-  await page.click('#share-modal .modal-close span');
+  await page.click('#share-modal .modal-close .ico');
   await page.waitForTimeout(250);
   check('再次关闭仍然有效', await page.isHidden('#share-modal'), true);
 
   // 焦点归还（弹窗栈的行为不能因为这次修复被破坏）
   await openShare();
-  await page.click('#share-modal .modal-close span');
+  await page.click('#share-modal .modal-close .ico');
   await page.waitForTimeout(300);
   const focusBack = await page.evaluate(() => {
     const a = document.activeElement;
@@ -91,7 +92,7 @@ function check(name, actual, expected) {
   // ---- 设置弹窗（同一个 bug，用户没提到但一并钉住）----
   console.log('\n[设置弹窗的关闭路径]');
   await openSettings();
-  await page.click('#settings-modal .modal-close span');
+  await page.click('#settings-modal .modal-close .ico');
   await page.waitForTimeout(250);
   check('点 ✕ 的图标能关闭', await page.isHidden('#settings-modal'), true);
 

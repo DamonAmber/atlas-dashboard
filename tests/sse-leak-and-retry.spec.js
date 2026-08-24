@@ -158,8 +158,8 @@ const activeCountExpr = () => window.__es.instances.filter(i => i.readyState !==
     files: Object.keys(window.state?.files || {}).length,
   }));
   console.log(`  stats="${recovered.stats}"`);
-  check('自动重试成功：统计恢复为"N 个文档"格式',
-    /^\d+ 个文档/.test(recovered.stats), `stats="${recovered.stats}"`);
+  check('自动重试成功：统计恢复为"N 篇文档"格式（不再是错误提示）',
+    /^\d+ 篇文档/.test(recovered.stats), `stats="${recovered.stats}"`);
   check('恢复后未残留 scanning 状态', recovered.scanning === false, `scanning=${recovered.scanning}`);
 
   // ========== 6. 全流程结束后连接数仍然干净 ==========

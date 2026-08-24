@@ -44,8 +44,18 @@ const els = {
   search: document.getElementById('search'),
   onlyUnread: document.getElementById('only-unread'),
   stats: document.getElementById('stats'),
+  favCount: document.getElementById('fav-count'),
+  recentCount: document.getElementById('recent-count'),
+  treeCount: document.getElementById('tree-count'),
   preview: document.getElementById('preview'),
   emptyState: document.getElementById('empty-state'),
+  homeSub: document.getElementById('home-sub'),
+  homeMetrics: document.getElementById('home-metrics'),
+  homeUnread: document.getElementById('home-unread'),
+  homeUnreadCount: document.getElementById('home-unread-count'),
+  homeRecent: document.getElementById('home-recent'),
+  homeFav: document.getElementById('home-fav'),
+  homeFavCard: document.getElementById('home-fav-card'),
   crumbs: document.getElementById('crumbs'),
   saveStatus: document.getElementById('save-status'),
   btnToggleSidebar: document.getElementById('btn-toggle-sidebar'),
@@ -154,10 +164,32 @@ function isMdFile(file) {
   if (file.docType) return file.docType === 'md';
   return /\.(md|markdown)$/i.test(file.name || '');
 }
+// ---------- 图标 ----------
+// 全站图标只有一个来源：index.html 顶部内嵌的 <symbol> sprite。
+// 这样图标改一处全局生效，也不会再出现 emoji 在不同系统上长得完全不一样的问题。
+function ic(name, size = 14, extraClass = '') {
+  const cls = 'ico' + (extraClass ? ' ' + extraClass : '');
+  return `<svg class="${cls}" width="${size}" height="${size}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+}
+// 文档类型图标：md = 带文字行的文件，html = 地球（对应"能在浏览器里打开"）
+function docTypeIcon(file, size = 13) {
+  return ic(isMdFile(file) ? 'file-text' : 'globe', size);
+}
+// 当前生效的主题：system 不传给服务端，让预览页自己跟随系统
+function forcedTheme() {
+  const t = document.documentElement.getAttribute('data-theme');
+  return t === 'light' || t === 'dark' ? t : '';
+}
 // iframe 预览地址：md 走服务端渲染，html 用原始 /raw/ 地址
 function previewUrlFor(file) {
   if (!file) return '';
-  if (isMdFile(file)) return '/api/render-md?path=' + encodeURIComponent(file.path);
+  if (isMdFile(file)) {
+    // 带上 theme：md 预览页是 Atlas 自己渲染的，主题钉死时它要跟着钉
+    // （iframe 里的 prefers-color-scheme 不继承父文档）
+    const th = forcedTheme();
+    return '/api/render-md?path=' + encodeURIComponent(file.path)
+      + (th ? '&theme=' + th : '');
+  }
   return file.url;
 }
 
@@ -200,11 +232,11 @@ function showToast({ kind = 'info', text = '', secondary = '', duration = 2800, 
   const t = document.createElement('div');
   t.className = `toast ${kind}` + (progress ? ' toast-progress' : '');
   t.setAttribute('role', 'status');
-  const ico = progress ? '⟳' : (kind === 'success' ? '✓' : kind === 'error' ? '✕' : 'i');
+  const icoName = progress ? 'loader' : (kind === 'success' ? 'check-circle' : kind === 'error' ? 'alert' : 'info');
   t.innerHTML = `
-    <span class="toast-icon">${ico}</span>
+    <span class="toast-icon">${ic(icoName, 15)}</span>
     <div class="toast-msg"></div>
-    <button class="toast-close" aria-label="关闭">×</button>
+    <button class="toast-close" aria-label="关闭">${ic('x', 13)}</button>
     ${progress ? '<div class="toast-progress-bar"><div></div></div>' : ''}
   `;
   const msgEl = t.querySelector('.toast-msg');
@@ -502,6 +534,103 @@ els.btnToggleSidebar.addEventListener('click', () => toggleSidebar());
 })();
 
 // ---------- 工具 ----------
+// ---------- 侧栏统计 ----------
+// 底栏一行说清三件事：一共扫到多少篇、其中多少未读、当前树里正显示多少篇。
+// 原来这行挤在 brand 下面（brand-sub），320px 侧栏里总是被截成「804 个文档 · 377 未…」。
+function updateStats() {
+  const total = Object.keys(state.files).length;
+  const unread = Object.values(state.files).filter(f => f.unread).length;
+  if (els.stats) {
+    els.stats.innerHTML = `${total} 篇文档`
+      + (unread > 0 ? ` · <span class="stat-unread">${unread} 未读</span>` : ' · 全部已读');
+    els.stats.title = `共 ${total} 篇文档，其中 ${unread} 篇未读`;
+  }
+  if (els.treeCount) {
+    const shown = els.tree ? els.tree.querySelectorAll('.file').length : 0;
+    // 有筛选时显示「命中 / 全部」，让人知道自己正看着一个子集
+    els.treeCount.textContent = shown === total ? String(total) : `${shown}/${total}`;
+    els.treeCount.title = shown === total
+      ? `${total} 篇文档`
+      : `当前筛选命中 ${shown} 篇，共 ${total} 篇`;
+  }
+}
+// ---------- 首页 ----------
+// 「AI 又改了哪些文档」是这个工具存在的理由，首页就直接答这个问题：
+// 未读队列按 mtime 倒序，点一行直接进文档。最近 / 收藏同理。
+const HOME_LIST_MAX = 7;
+function homeRow(file) {
+  const name = file.alias || stripDocExt(file.name);
+  return `
+    <button class="home-row${file.unread ? ' unread' : ''}" type="button"
+            data-path="${escapeHtml(file.path)}" title="${escapeHtml(file.relPath)}">
+      <span class="home-row-dot" aria-hidden="true"></span>
+      <span class="home-row-ico">${docTypeIcon(file, 13)}</span>
+      <span class="home-row-name">${escapeHtml(name)}</span>
+      <span class="home-row-proj">${escapeHtml(file.projectName || '')}</span>
+      <span class="home-row-time">${fmtMtime(file.mtime)}</span>
+    </button>`;
+}
+function renderHome() {
+  if (!els.homeUnread) return;
+  const all = Object.values(state.files);
+  const total = all.length;
+  if (total === 0) {
+    els.homeSub.textContent = '还没扫到任何文档。到 ⚙ 设置里加一个扫描根目录试试。';
+    els.homeMetrics.innerHTML = '';
+    els.homeUnread.innerHTML = '';
+    els.homeRecent.innerHTML = '';
+    return;
+  }
+  const unread = all.filter(f => f.unread).sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+  const projects = new Set(all.map(f => f.projectName).filter(Boolean));
+
+  els.homeSub.textContent = unread.length
+    ? `有 ${unread.length} 篇文档在你上次看过之后被改动过`
+    : '所有文档都看过了';
+
+  els.homeMetrics.innerHTML = [
+    { k: '文档', v: total },
+    { k: '未读', v: unread.length, hot: unread.length > 0 },
+    { k: '项目', v: projects.size },
+    { k: '收藏', v: (state.favorites || []).filter(p => state.files[p]).length },
+  ].map(m => `
+    <div class="home-metric${m.hot ? ' hot' : ''}">
+      <div class="home-metric-v">${m.v}</div>
+      <div class="home-metric-k">${m.k}</div>
+    </div>`).join('');
+
+  // 待看
+  if (unread.length) {
+    els.homeUnreadCount.textContent = unread.length;
+    els.homeUnread.innerHTML = unread.slice(0, HOME_LIST_MAX).map(homeRow).join('')
+      + (unread.length > HOME_LIST_MAX
+        ? `<div class="home-more">还有 ${unread.length - HOME_LIST_MAX} 篇，在左侧勾选「仅未读」查看全部</div>`
+        : '');
+  } else {
+    els.homeUnreadCount.textContent = '';
+    els.homeUnread.innerHTML = `<div class="home-empty">
+      <svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-check-circle"/></svg>
+      <span>没有未读文档</span></div>`;
+  }
+
+  // 最近打开
+  const recent = (state.recent || []).filter(p => state.files[p]).slice(0, HOME_LIST_MAX);
+  els.homeRecent.innerHTML = recent.length
+    ? recent.map(p => homeRow(state.files[p])).join('')
+    : '<div class="home-empty"><span>还没打开过文档——从左侧目录树点一个开始</span></div>';
+
+  // 收藏（没有收藏就整张卡片不出现，不占版面）
+  const favs = (state.favorites || []).filter(p => state.files[p]).slice(0, HOME_LIST_MAX);
+  els.homeFavCard.classList.toggle('hidden', favs.length === 0);
+  if (favs.length) els.homeFav.innerHTML = favs.map(p => homeRow(state.files[p])).join('');
+}
+// 事件委托：首页的行是动态渲染的，挂在容器上一次就够
+document.addEventListener('click', (e) => {
+  const row = e.target.closest && e.target.closest('.home-row');
+  if (row && row.dataset.path) openFile(row.dataset.path);
+});
+
+// ---------- 工具 ----------
 function fmtMtime(ts) {
   if (!ts) return '';
   const diff = Date.now() - ts;
@@ -579,13 +708,13 @@ async function fetchState() {
       if (!liveTags.has(t.toLowerCase())) state.tagFilter.delete(t);
     }
     state.archivedProjects = Array.isArray(data.archivedProjects) ? data.archivedProjects : [];
-    const unread = Object.values(data.files).filter(f => f.unread).length;
-    els.stats.textContent = `${Object.keys(data.files).length} 个文档 · ${unread} 未读`;
     setSaveStatus('idle');
     renderTagBar();
     render();
     renderRecent();
     renderFavorites();
+    updateStats();
+    renderHome();
     updateFavButton();
     // 对比面板开着的时候，如果当前文件在磁盘上又被改了，自动刷新差异
     if (diffState.open && diffState.path) {
@@ -731,6 +860,8 @@ function renderRecent() {
   }
   els.recentBar.classList.remove('hidden');
   els.recentBar.classList.toggle('collapsed', state.recentCollapsed);
+  if (els.recentCount) els.recentCount.textContent = usable.length;
+  if (els.recentToggle) els.recentToggle.setAttribute('aria-expanded', state.recentCollapsed ? 'false' : 'true');
   els.recentList.innerHTML = '';
   for (const p of usable) {
     const file = state.files[p];
@@ -741,9 +872,8 @@ function renderRecent() {
       + (p === state.activeFilePath ? ' active' : '');
     div.dataset.path = p;
     div.title = file.alias ? `${file.alias}\n${file.relPath}` : file.relPath;
-    const rIcon = isMdFile(file) ? '📝' : '🌐';
     div.innerHTML = `
-      <span class="recent-icon">${rIcon}</span>
+      <span class="recent-icon">${docTypeIcon(file, 12)}</span>
       <span class="recent-name">${escapeHtml(file.alias || stripDocExt(file.name))}</span>
       <span class="recent-project">${escapeHtml(file.projectName)}</span>
     `;
@@ -769,6 +899,8 @@ function renderFavorites() {
   }
   els.favBar.classList.remove('hidden');
   els.favBar.classList.toggle('collapsed', state.favCollapsed);
+  if (els.favCount) els.favCount.textContent = usable.length;
+  if (els.favToggle) els.favToggle.setAttribute('aria-expanded', state.favCollapsed ? 'false' : 'true');
   els.favList.innerHTML = '';
   for (const p of usable) {
     const file = state.files[p];
@@ -780,10 +912,10 @@ function renderFavorites() {
     div.dataset.path = p;
     div.title = file.alias ? `${file.alias}\n${file.relPath}` : file.relPath;
     div.innerHTML = `
-      <span class="fav-icon">${isMdFile(file) ? '📝' : '🌐'}</span>
+      <span class="fav-icon">${docTypeIcon(file, 12)}</span>
       <span class="fav-name">${escapeHtml(file.alias || stripDocExt(file.name))}</span>
       <span class="fav-project">${escapeHtml(file.projectName)}</span>
-      <button class="fav-remove" type="button" title="取消收藏" aria-label="取消收藏「${escapeHtml(file.alias || stripDocExt(file.name))}」"><span aria-hidden="true">✕</span></button>
+      <button class="fav-remove" type="button" title="取消收藏" aria-label="取消收藏「${escapeHtml(file.alias || stripDocExt(file.name))}」">${ic('x', 11)}</button>
     `;
     div.addEventListener('click', (e) => {
       if (e.target.closest('.fav-remove')) return;   // 由下面的按钮自己处理
@@ -1020,15 +1152,15 @@ function renderFolder(folder) {
   const header = document.createElement('div');
   header.className = 'folder-header';
   header.innerHTML = `
-    <span class="folder-toggle">▾</span>
-    <span class="folder-icon">📁</span>
+    <span class="folder-toggle">${ic('chevron-down', 12)}</span>
+    <span class="folder-icon">${ic('folder', 13)}</span>
     <span class="folder-name" data-folder-id="${folder.id}">${escapeHtml(folder.name)}</span>
     ${counts.unread > 0 ? `<span class="folder-unread-dot" title="${counts.unread} 个未读"></span>` : ''}
     <span class="folder-count">${counts.files}</span>
     <span class="folder-actions">
-      <button data-act="new-sub" title="在此分组内新建子分组" aria-label="在「${escapeHtml(folder.name)}」内新建子分组"><span aria-hidden="true">＋</span></button>
-      <button data-act="rename" title="重命名" aria-label="重命名分组「${escapeHtml(folder.name)}」"><span aria-hidden="true">✎</span></button>
-      <button data-act="delete" title="删除分组（文件下次扫描会回到所属项目）" aria-label="删除分组「${escapeHtml(folder.name)}」"><span aria-hidden="true">✕</span></button>
+      <button data-act="new-sub" title="在此分组内新建子分组" aria-label="在「${escapeHtml(folder.name)}」内新建子分组">${ic('plus', 12)}</button>
+      <button data-act="rename" title="重命名" aria-label="重命名分组「${escapeHtml(folder.name)}」">${ic('pencil', 11)}</button>
+      <button data-act="delete" title="删除分组（文件下次扫描会回到所属项目）" aria-label="删除分组「${escapeHtml(folder.name)}」">${ic('x', 12)}</button>
     </span>
   `;
   folderEl.appendChild(header);
@@ -1135,13 +1267,13 @@ function renderFile(file, node) {
   titleParts.push(file.name);
   titleParts.push(file.relPath);
   // 行上只显示前两个标签，剩下的靠 title 补全（悬停能看到完整列表）
-  if ((file.tags || []).length) titleParts.push('🏷 ' + file.tags.join(' · '));
-  if (snippet) titleParts.push('🔍 ' + snippet);
+  if ((file.tags || []).length) titleParts.push('标签：' + file.tags.join(' · '));
+  if (snippet) titleParts.push('内容命中：' + snippet);
   fileEl.title = titleParts.join('\n');
   const displayName = file.alias || stripDocExt(file.name);
   const isShared = state.sharesByPath && state.sharesByPath.has(file.path);
   if (isShared) fileEl.classList.add('shared');
-  const typeIcon = dtype === 'md' ? '📝' : '🌐';
+  const typeIcon = ic(dtype === 'md' ? 'file-text' : 'globe', 12);
   // 星标是常驻按钮（不在 .file-actions 里）：收藏是高频二元操作，不该藏在 hover
   // 才出现的那排按钮里。代价是它落在拖拽把手区内，必须同时做两件事——
   //   ① 加进 initSortables 的 filter，否则按下星标会启动拖拽
@@ -1159,26 +1291,26 @@ function renderFile(file, node) {
   fileEl.innerHTML = `
     <span class="unread-dot"></span>
     <button class="fav-btn" type="button" title="${file.favorite ? '取消收藏' : '收藏'}" aria-label="${favLabel}" aria-pressed="${file.favorite ? 'true' : 'false'}">
-      <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2l1.85 3.9 4.15.56-3.05 2.86.79 4.18L8 11.5l-3.74 2 .79-4.18L2 6.46l4.15-.56z"/></svg>
+      ${ic('star', 12)}
     </button>
     <span class="folder-icon file-type-icon">${typeIcon}</span>
     <span class="file-name" data-path="${escapeHtml(file.path)}">${escapeHtml(displayName)}</span>
     ${tagsHtml}
     <span class="file-type-badge type-${dtype}">${dtype === 'md' ? 'MD' : 'HTML'}</span>
     <span class="share-badge" title="正在分享到局域网" aria-hidden="${isShared ? 'false' : 'true'}">
-      <svg viewBox="0 0 12 12" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7L7 5M4 8a2 2 0 0 1 0-3l1-1M8 4a2 2 0 0 1 0 3l-1 1"/></svg>
+      ${ic('share', 11)}
     </span>
     <span class="file-mtime">${fmtMtime(file.mtime)}</span>
     <span class="file-actions">
       <button data-act="share" title="分享到局域网（生成可访问链接 + 二维码）" aria-label="分享「${escapeHtml(displayName)}」到局域网">
-        <svg viewBox="0 0 14 14" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 8L9 5M5 8a2 2 0 0 1-2-2 2 2 0 0 1 4 0M9 5a2 2 0 0 1 2-2 2 2 0 0 1 0 4 2 2 0 0 1-2-2M5 8a2 2 0 0 0-2 2 2 2 0 0 0 4 0 2 2 0 0 0-2-2"/></svg>
+        ${ic('share', 12)}
       </button>
       <button data-act="tags" title="编辑标签（逗号分隔）" aria-label="编辑「${escapeHtml(displayName)}」的标签">
-        <svg viewBox="0 0 14 14" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.2 6.3V3a.8.8 0 0 1 .8-.8h3.3c.2 0 .4.1.6.2l4.7 4.7a.8.8 0 0 1 0 1.2l-3.2 3.2a.8.8 0 0 1-1.2 0L2.4 6.9a.8.8 0 0 1-.2-.6z"/><circle cx="4.8" cy="4.8" r=".9"/></svg>
+        ${ic('tag', 12)}
       </button>
-      <button data-act="rename-file" title="重命名磁盘文件" aria-label="重命名文件「${escapeHtml(file.name)}」"><span aria-hidden="true">Aa</span></button>
-      <button data-act="alias" title="备注名（不改源文件名）" aria-label="给「${escapeHtml(displayName)}」起备注名"><span aria-hidden="true">✎</span></button>
-      <button data-act="reveal" title="在访达中显示" aria-label="在访达中显示「${escapeHtml(displayName)}」"><span aria-hidden="true">📂</span></button>
+      <button data-act="rename-file" title="重命名磁盘上的真实文件名" aria-label="重命名文件「${escapeHtml(file.name)}」">${ic('file-pen', 12)}</button>
+      <button data-act="alias" title="备注名（不改源文件名）" aria-label="给「${escapeHtml(displayName)}」起备注名">${ic('pencil', 11)}</button>
+      <button data-act="reveal" title="在访达中显示" aria-label="在访达中显示「${escapeHtml(displayName)}」">${ic('folder-open', 12)}</button>
     </span>
   `;
   // 用 pointerdown + pointerup 替代 click：
@@ -1748,8 +1880,7 @@ function updateUnreadDecorations() {
       dot.remove();
     }
   });
-  const total = Object.values(state.files).filter(f => f.unread).length;
-  els.stats.textContent = `${Object.keys(state.files).length} 个文档 · ${total} 未读`;
+  updateStats();
 }
 
 function setActiveFile(filePath, doNavigate) {
@@ -1800,11 +1931,93 @@ function setActiveFile(filePath, doNavigate) {
       els.preview.src = previewUrl;
     } else {
       els.preview.classList.remove('loading');
+      // 同一篇文档再打开一次不会触发 iframe load，
+      // 从 ⌘K 正文命中点进来时得在这里把高亮兑现掉
+      applyPendingPreviewHighlight();
     }
   }
 }
 
+// ==================== 预览 iframe 的快捷键桥 ====================
+// 预览是一份独立文档，键盘事件不会跨 iframe 边界冒泡到外壳，所以外壳那个
+// keydown 总处理器收不到。表现出来就是：点进文档正文读一会儿，再按 ⌘K 想跳
+// 下一篇——没反应，得先点侧栏把焦点拿回来。而"读完跳下一篇"恰好是最常见的动线。
+//
+// 做法：往同源的预览文档里挂一个 keydown 监听，命中 app 级和弦时
+//   ① 在 iframe 侧 preventDefault —— 合成事件只影响外壳，管不到原始事件的
+//      默认行为，不在这儿拦住的话 ⌘S 仍会弹浏览器的「存储网页」，
+//      Windows/Linux 上 Ctrl+K 仍会跳到地址栏搜索
+//   ② 构造等价事件重新派发给外壳 document
+// 用派发而不是直接调函数，是为了让"哪个键干什么"只存在一处（外壳的总处理器），
+// 不至于两边各写一份、日后改了一边忘了另一边。
+//
+// 只转发带修饰键的组合。单键的 `/`（聚焦搜索）刻意不转发：不少 HTML 报告
+// 自己就监听 `/` 做站内搜索，抢过来会破坏文档本身的交互。
+const PREVIEW_BRIDGED_KEYS = new Set(['k', 'b', 's']);
+// 唯一一个不带修饰键也转发的：? 打开快捷键清单。
+// 破例的理由是它正好服务于"读文档时想知道还能怎么用"这个场景；而它被文档自己
+// 占用的概率远低于 `/`（站内搜索常用 `/`，几乎没人拿 ? 当功能键）。
+// 和其它键一样，文档内正在打字时不抢。
+const PREVIEW_BRIDGED_BARE_KEYS = new Set(['?']);
+function bindPreviewShortcutBridge() {
+  // 预览里点了外链跳到站外时，读 contentDocument 会抛安全错误 → 静默跳过
+  let doc = null;
+  try { doc = els.preview.contentDocument; } catch { return; }
+  if (!doc) return;
+  // iframe 每次导航都换一份新 document，打个标记就够防重复绑定
+  if (doc.__atlasKeyBridge) return;
+  doc.__atlasKeyBridge = true;
+
+  // 用 capture：文档自己的 keydown 监听可能 stopPropagation，
+  // 捕获阶段能保证我们先拿到这几个和弦
+  doc.addEventListener('keydown', (e) => {
+    const mod = e.metaKey || e.ctrlKey;
+    const key = (e.key || '').toLowerCase();
+
+    // 不带修饰键的白名单（目前只有 ?）：e.key 已经是最终字符，
+    // 不用管它在哪个布局上要不要按 Shift
+    if (!mod && !e.altKey) {
+      if (!PREVIEW_BRIDGED_BARE_KEYS.has(e.key)) return;
+      if (isTypingTarget(doc.activeElement)) return;
+      forwardKeyToShell(e);
+      return;
+    }
+    if (!mod || e.altKey || e.shiftKey) return;
+    if (!PREVIEW_BRIDGED_KEYS.has(key)) return;
+
+    if (key === 's') {
+      // ⌘S 只在编辑态下归 Atlas（保存到文件）。非编辑态不抢，让浏览器的
+      // 「存储网页」照常工作 —— 和焦点在外壳时的行为保持一致。
+      // 编辑态下即便正在改字也要转发：那正是最需要保存的时刻。
+      if (!editState.active) return;
+    } else if (isTypingTarget(doc.activeElement)) {
+      // ⌘K / ⌘B：文档内正在打字（编辑态的可编辑 span、链接编辑条、
+      // 文档自带的表单）就不抢，交回给输入上下文
+      return;
+    }
+
+    forwardKeyToShell(e);
+  }, true);
+}
+// 在 iframe 侧拦住默认行为，再把等价事件派发给外壳。
+// 两步都必须做：合成事件只影响外壳，管不到原始事件的默认行为。
+function forwardKeyToShell(e) {
+  e.preventDefault();
+  document.dispatchEvent(new KeyboardEvent('keydown', {
+    key: e.key,
+    code: e.code,
+    metaKey: e.metaKey,
+    ctrlKey: e.ctrlKey,
+    altKey: e.altKey,
+    shiftKey: e.shiftKey,
+    bubbles: true,
+    cancelable: true,
+  }));
+}
+
 els.preview.addEventListener('load', () => {
+  // 每次导航都要重新架桥（新文档 = 新的监听目标）
+  bindPreviewShortcutBridge();
   if (editState.active && editState.kind === 'html') {
     // 编辑文档加载完成 → 绑定可编辑区域，并恢复进入编辑前的滚动位置
     bindEditableDoc();
@@ -3235,7 +3448,7 @@ function renderDiffResult(data) {
     els.diffStats.textContent = '';
     renderDiffEmpty(`
       <div class="diff-empty">
-        <div class="diff-empty-art">🕰️</div>
+        <div class="diff-empty-art">${ic('clock', 30)}</div>
         <div>${escapeHtml(data.message || '还没有可对比的底本。')}</div>
         <div class="diff-empty-hint">底本会在你打开文档时自动记录，之后 AI 再改动就能看到逐行差异。</div>
       </div>`);
@@ -3246,7 +3459,7 @@ function renderDiffResult(data) {
     els.diffStats.textContent = `底本记录于 ${when}`;
     renderDiffEmpty(`
       <div class="diff-empty">
-        <div class="diff-empty-art">✅</div>
+        <div class="diff-empty-art ok">${ic('check-circle', 30)}</div>
         <div>和你上次看到的内容完全一致</div>
         <div class="diff-empty-hint">底本记录于 ${escapeHtml(when)}</div>
       </div>`);
@@ -3309,14 +3522,14 @@ async function loadDiff() {
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
       els.diffStats.textContent = '';
-      renderDiffEmpty(`<div class="diff-empty"><div class="diff-empty-art">⚠️</div>
+      renderDiffEmpty(`<div class="diff-empty"><div class="diff-empty-art warn">${ic('alert', 30)}</div>
         <div>对比失败：${escapeHtml(data.error || ('HTTP ' + r.status))}</div></div>`);
       return;
     }
     renderDiffResult(data);
   } catch (e) {
     els.diffStats.textContent = '';
-    renderDiffEmpty(`<div class="diff-empty"><div class="diff-empty-art">⚠️</div>
+    renderDiffEmpty(`<div class="diff-empty"><div class="diff-empty-art warn">${ic('alert', 30)}</div>
       <div>对比失败：${escapeHtml(e.message)}</div></div>`);
   } finally {
     diffState.loading = false;
@@ -3550,8 +3763,27 @@ function updateMatchBadge(total, currentIdx) {
   badge.querySelector('.match-text').textContent = `${currentIdx + 1} / ${total}`;
 }
 
+// ⌘K 从「正文命中」打开文档时，要高亮的是那次搜索的词，而不是侧栏搜索框里的内容。
+// 刻意不去写侧栏搜索框：那会顺带过滤整棵目录树，而用户只是想跳到某一篇的某一处。
+let pendingPreviewHighlight = null;   // { path, query }
+function setPendingPreviewHighlight(path, query) {
+  pendingPreviewHighlight = (path && query) ? { path, query } : null;
+}
+// 只在路径对得上时兑现，且兑现后立即失效 —— 否则之后从目录树打开别的文档
+// 也会被同一个词高亮
+function applyPendingPreviewHighlight() {
+  if (!pendingPreviewHighlight) return false;
+  if (pendingPreviewHighlight.path !== state.activeFilePath) return false;
+  const q = pendingPreviewHighlight.query;
+  pendingPreviewHighlight = null;
+  highlightInIframe(q);
+  if (els.matchBadge) els.matchBadge.title = '正文命中：' + q;
+  return true;
+}
 // 在 search 改变 / iframe load 后被调用
 function updateIframeHighlight() {
+  if (applyPendingPreviewHighlight()) return;
+  if (els.matchBadge) els.matchBadge.title = '搜索命中导航';
   highlightInIframe(state.search);
 }
 
@@ -3573,11 +3805,13 @@ els.recentToggle.addEventListener('click', () => {
   state.recentCollapsed = !state.recentCollapsed;
   localStorage.setItem('atlas:recentCollapsed', state.recentCollapsed ? '1' : '0');
   els.recentBar.classList.toggle('collapsed', state.recentCollapsed);
+  els.recentToggle.setAttribute('aria-expanded', state.recentCollapsed ? 'false' : 'true');
 });
 els.favToggle.addEventListener('click', () => {
   state.favCollapsed = !state.favCollapsed;
   localStorage.setItem('atlas:favCollapsed', state.favCollapsed ? '1' : '0');
   els.favBar.classList.toggle('collapsed', state.favCollapsed);
+  els.favToggle.setAttribute('aria-expanded', state.favCollapsed ? 'false' : 'true');
 });
 els.tagBarClear.addEventListener('click', clearTagFilter);
 els.btnFavorite.addEventListener('click', () => {
@@ -3876,9 +4110,143 @@ function isInMdEditor(el) {
   return el === els.mdSource || (els.mdPreview && els.mdPreview.contains(el));
 }
 
+// ==================== 快捷键速查表 ====================
+// 唯一的一份清单，紧挨着下面的全局 keydown 处理器放 —— 改快捷键的人应该
+// 在同一屏里看到"清单也要改"。按 ? 唤出，侧栏底部和首页各有一个显式入口。
+//
+// 为什么需要它：功能全藏在 title 提示和 README 里，用户根本不知道"还能这样用"。
+// 首页底部那行提示只在没打开文档时可见，Markdown 编辑器那套键更是完全没有出口。
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+const MOD = IS_MAC ? '⌘' : 'Ctrl';
+const SHORTCUTS = [
+  {
+    group: '全局',
+    items: [
+      [[MOD, 'K'], '快速打开（模糊匹配文件名，同时搜正文；再按一次收起）'],
+      [['/'], '聚焦搜索框'],
+      [[MOD, 'B'], '收起 / 展开侧边栏'],
+      [[MOD, 'S'], '保存改动到文件（编辑态）'],
+      [['?'], '打开这份快捷键清单'],
+      [['Esc'], '关闭弹窗；焦点在搜索框时清空搜索'],
+    ],
+  },
+  {
+    group: '快速打开面板',
+    items: [
+      [['↑', '↓'], '上下选择'],
+      [['Home'], '跳到第一条'],
+      [['End'], '跳到最后一条'],
+      [['Enter'], '打开选中的文档（正文命中项会直接跳到命中位置）'],
+    ],
+  },
+  {
+    group: '侧栏与目录树',
+    items: [
+      [['↓'], '在搜索框里按 ↓ 进入文件列表'],
+      [['↑', '↓'], '在列表里上下移动（第一条再按 ↑ 回搜索框）'],
+      [['Enter'], '打开当前文件'],
+      [['Esc'], '退出列表，回到搜索框'],
+      [['双击'], '双击分组名 / 文件名即可重命名'],
+    ],
+  },
+  {
+    group: '正文命中导航',
+    items: [
+      [['Enter'], '焦点在搜索框时，跳到下一处命中'],
+      [['Shift', 'Enter'], '跳到上一处命中'],
+      [['▲', '▼'], '顶栏的上下箭头同样可以跳'],
+    ],
+  },
+  {
+    group: 'Markdown 编辑器',
+    items: [
+      [[MOD, 'B'], '加粗'],
+      [[MOD, 'I'], '斜体'],
+      [[MOD, 'E'], '行内代码'],
+      [[MOD, 'K'], '插入链接'],
+      [[MOD, 'S'], '保存'],
+      [['Tab'], '多行缩进'],
+      [['Shift', 'Tab'], '反缩进'],
+      [['Enter'], '自动续列表（有序列表序号自增、任务项续出未勾选框）'],
+    ],
+  },
+  {
+    group: '编辑器分栏条',
+    items: [
+      [['←', '→'], '聚焦分栏条后微调宽度'],
+      [['Shift', '←/→'], '加速微调'],
+      [['Home'], '宽度复位（双击分栏条同效）'],
+    ],
+  },
+  {
+    group: '重命名与备注',
+    items: [
+      [['Enter'], '提交'],
+      [['Esc'], '取消，恢复原值'],
+    ],
+  },
+];
+
+let shortcutsEntry = null;
+function renderShortcuts() {
+  const body = document.getElementById('shortcuts-body');
+  if (!body || body.dataset.rendered === '1') return;
+  body.innerHTML = SHORTCUTS.map(sec => `
+    <section class="sc-group">
+      <h3>${escapeHtml(sec.group)}</h3>
+      <dl>
+        ${sec.items.map(([keys, desc]) => `
+          <div class="sc-row">
+            <dt>${keys.map(k => `<kbd>${escapeHtml(k)}</kbd>`).join('<span class="sc-plus">+</span>')}</dt>
+            <dd>${escapeHtml(desc)}</dd>
+          </div>`).join('')}
+      </dl>
+    </section>`).join('');
+  body.dataset.rendered = '1';
+}
+function openShortcuts() {
+  const root = document.getElementById('shortcuts-modal');
+  if (!root || shortcutsEntry) return;
+  renderShortcuts();
+  root.classList.remove('hidden');
+  shortcutsEntry = pushModal({
+    panel: root.querySelector('.modal-panel'),
+    close: closeShortcuts,
+  });
+}
+function closeShortcuts() {
+  const root = document.getElementById('shortcuts-modal');
+  if (!root) return;
+  root.classList.add('hidden');
+  if (shortcutsEntry) { popModal(shortcutsEntry); shortcutsEntry = null; }
+}
+(() => {
+  const root = document.getElementById('shortcuts-modal');
+  if (root) {
+    root.addEventListener('click', (e) => {
+      if (isCloseTarget(e.target)) closeShortcuts();
+    });
+  }
+  const btn = document.getElementById('btn-shortcuts');
+  if (btn) btn.addEventListener('click', openShortcuts);
+  // 首页那个入口是动态渲染出来的兄弟节点，用委托更省事
+  document.addEventListener('click', (e) => {
+    if (e.target.closest && e.target.closest('[data-open-shortcuts]')) openShortcuts();
+  });
+})();
+
 document.addEventListener('keydown', (e) => {
   const active = document.activeElement;
   const mod = e.metaKey || e.ctrlKey;
+
+  // ? 打开 / 关闭快捷键清单。用 e.key === '?' 而不是判断 Shift+/，
+  // 这样不同键盘布局下都对（'?' 落在哪个物理键不重要）
+  if (e.key === '?' && !mod && !isTypingTarget(active)) {
+    e.preventDefault();
+    if (shortcutsEntry) closeShortcuts();
+    else openShortcuts();
+    return;
+  }
 
   // ⌘S / Ctrl+S：编辑态下保存到文件，而不是让浏览器弹"保存网页"
   if (mod && e.key.toLowerCase() === 's' && !e.altKey && !e.shiftKey) {
@@ -3931,9 +4299,22 @@ const qoEls = {
   count: document.getElementById('quickopen-count'),
 };
 const QO_LIMIT = 50;
+// 正文命中单独限量：它是"补充手段"，不该把名称命中挤出视野
+const QO_CONTENT_LIMIT = 25;
+const QO_CONTENT_DEBOUNCE = 180;
 let qoEntry = null;
 let qoResults = [];
 let qoActive = 0;
+// 正文搜索的状态。刻意不复用 state.contentMatches——那是侧栏搜索的，
+// 写它会顺带过滤整棵目录树，而 ⌘K 是纯导航，不该有这个副作用。
+const qoContent = {
+  q: '',                  // 已拿到结果的那次查询
+  matches: new Map(),     // path → { snippet, count }
+  loading: false,
+  truncated: false,
+};
+let qoContentSeq = 0;
+let qoContentTimer = null;
 
 // 子序列模糊匹配：'aprt' 能命中 'api-report'。
 // 返回 { score, hits }，hits 是命中字符在原串里的下标（用于高亮）；不匹配返回 null。
@@ -4011,41 +4392,185 @@ function qoSearch(query) {
   return scored.slice(0, QO_LIMIT);
 }
 
+// 把 snippet 里的关键词标出来。服务端已经按原始大小写返回 snippet，
+// 这里按词做大小写不敏感的匹配再包 <mark>。
+function qoMarkSnippet(snippet, query) {
+  const text = String(snippet || '');
+  const terms = parseQueryTerms(query).filter(t => t.length > 0);
+  if (!terms.length) return escapeHtml(text);
+  const lower = text.toLowerCase();
+  // 收集所有命中区间并合并重叠，避免嵌套 <mark>
+  const ranges = [];
+  for (const t of terms) {
+    const lt = t.toLowerCase();
+    let from = 0;
+    let idx;
+    while ((idx = lower.indexOf(lt, from)) !== -1) {
+      ranges.push([idx, idx + lt.length]);
+      from = idx + lt.length;
+    }
+  }
+  if (!ranges.length) return escapeHtml(text);
+  ranges.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  const merged = [];
+  for (const r of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && r[0] < last[1]) { if (r[1] > last[1]) last[1] = r[1]; }
+    else merged.push(r.slice());
+  }
+  let out = '';
+  let cur = 0;
+  for (const [s, e] of merged) {
+    if (s > cur) out += escapeHtml(text.slice(cur, s));
+    out += `<mark>${escapeHtml(text.slice(s, e))}</mark>`;
+    cur = e;
+  }
+  if (cur < text.length) out += escapeHtml(text.slice(cur));
+  return out;
+}
+
+// 正文命中：只保留"名称组没收录"的文件，避免同一篇出现两次。
+// 名称已经命中的文件，正文里有没有这个词不影响你要不要打开它。
+function qoContentResults(nameResults, query) {
+  if (!qoContent.matches.size || qoContent.q !== query.trim()) return [];
+  const already = new Set(nameResults.map(r => r.file.path));
+  const out = [];
+  for (const [p, info] of qoContent.matches) {
+    if (already.has(p)) continue;
+    const f = state.files[p];
+    if (!f) continue;      // 磁盘上已删、索引还没更新
+    out.push({
+      file: f,
+      hits: [],
+      label: f.alias || stripDocExt(f.name),
+      content: info,
+    });
+    if (out.length >= QO_CONTENT_LIMIT) break;
+  }
+  return out;
+}
+
+function qoRowHtml(r, query) {
+  const f = r.file;
+  const dtype = isMdFile(f) ? 'md' : 'html';
+  // 正文命中的行：第二行给摘要（比路径有用得多），完整路径落到 title 上
+  const second = r.content
+    ? `<span class="qo-snippet">${qoMarkSnippet(r.content.snippet, query)}</span>`
+    : `<span class="qo-path">${escapeHtml(f.relPath)}</span>`;
+  const hitCount = r.content
+    ? `<span class="qo-hits" title="正文里出现 ${r.content.count >= 200 ? '200 以上' : r.content.count} 处">${r.content.count >= 200 ? '200+' : r.content.count} 处</span>`
+    : '';
+  return `
+    <span class="qo-icon" aria-hidden="true">${ic(dtype === 'md' ? 'file-text' : 'globe', 14)}</span>
+    <span class="qo-main">
+      <span class="qo-name">${qoHighlight(r.label, r.hits)}</span>
+      ${second}
+    </span>
+    ${hitCount}
+    <span class="qo-badge">${dtype === 'md' ? 'MD' : 'HTML'}</span>
+    ${f.unread ? '<span class="qo-unread" title="未读"></span>' : ''}
+  `;
+}
+
 function qoRender() {
-  qoResults = qoSearch(qoEls.input.value);
+  const query = qoEls.input.value;
+  const nameResults = qoSearch(query);
+  const contentResults = qoContentResults(nameResults, query);
+  // 名称命中永远在前：⌘K 的肌肉记忆是"敲两个字母 Enter 就走"，
+  // 正文命中排进去会把这条路径搅乱
+  qoResults = nameResults.concat(contentResults);
   qoActive = 0;
   qoEls.list.innerHTML = '';
+
   if (!qoResults.length) {
     const empty = document.createElement('div');
     empty.className = 'quickopen-empty';
-    empty.textContent = '没有匹配的文档';
+    empty.textContent = qoContent.loading ? '正在搜正文…' : '没有匹配的文档';
     qoEls.list.appendChild(empty);
     qoEls.count.textContent = '';
     return;
   }
-  qoResults.forEach((r, idx) => {
-    const f = r.file;
-    const dtype = isMdFile(f) ? 'md' : 'html';
+
+  const appendRow = (r, idx) => {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'quickopen-item' + (idx === 0 ? ' active' : '');
+    btn.className = 'quickopen-item' + (idx === qoActive ? ' active' : '')
+      + (r.content ? ' is-content' : '');
     btn.setAttribute('role', 'option');
-    btn.setAttribute('aria-selected', String(idx === 0));
+    btn.setAttribute('aria-selected', String(idx === qoActive));
     btn.dataset.idx = String(idx);
-    btn.innerHTML = `
-      <span class="qo-icon" aria-hidden="true">${dtype === 'md' ? '📝' : '🌐'}</span>
-      <span class="qo-main">
-        <span class="qo-name">${qoHighlight(r.label, r.hits)}</span>
-        <span class="qo-path">${escapeHtml(f.relPath)}</span>
-      </span>
-      <span class="qo-badge">${dtype === 'md' ? 'MD' : 'HTML'}</span>
-      ${f.unread ? '<span class="qo-unread" title="未读"></span>' : ''}
-    `;
+    btn.title = r.file.relPath;
+    btn.innerHTML = qoRowHtml(r, query);
     btn.addEventListener('click', () => qoOpen(idx));
     btn.addEventListener('mousemove', () => qoSetActive(idx));
     qoEls.list.appendChild(btn);
-  });
-  qoEls.count.textContent = `${qoResults.length}${qoResults.length >= QO_LIMIT ? '+' : ''} 个结果`;
+  };
+
+  nameResults.forEach((r, idx) => appendRow(r, idx));
+
+  // 正文命中单独分组，标题行说清这是"文件名没匹配上、但正文里有"
+  if (contentResults.length) {
+    const head = document.createElement('div');
+    head.className = 'qo-group';
+    head.innerHTML = `${ic('search', 11)}<span>正文命中</span>`;
+    qoEls.list.appendChild(head);
+    contentResults.forEach((r, i) => appendRow(r, nameResults.length + i));
+  }
+
+  // 正文搜索还在路上：给一行占位，避免结果突然多出一截时毫无预告
+  if (qoContent.loading) {
+    const hint = document.createElement('div');
+    hint.className = 'qo-group qo-group-loading';
+    hint.innerHTML = `${ic('loader', 11, 'qo-spin')}<span>正在搜正文…</span>`;
+    qoEls.list.appendChild(hint);
+  }
+
+  const parts = [`${nameResults.length}${nameResults.length >= QO_LIMIT ? '+' : ''} 个文件名`];
+  if (contentResults.length) {
+    parts.push(`${contentResults.length}${qoContent.truncated ? '+' : ''} 篇正文`);
+  }
+  qoEls.count.textContent = parts.join(' · ');
+}
+
+// 正文搜索：名称组是同步的、立即出结果；这边 debounce 之后异步追加。
+// 短查询不发请求——单个 ASCII 字符匹配面太广，服务端也会直接拒（termIsSearchable）
+function qoScheduleContentSearch() {
+  const query = qoEls.input.value.trim();
+  clearTimeout(qoContentTimer);
+  const searchable = parseQueryTerms(query).some(t =>
+    /^[\x00-\x7F]+$/.test(t) ? t.length >= 2 : true);
+  if (!searchable) {
+    qoContentSeq++;                 // 作废在途请求
+    qoContent.q = '';
+    qoContent.matches = new Map();
+    qoContent.loading = false;
+    qoContent.truncated = false;
+    return;
+  }
+  if (qoContent.q === query && !qoContent.loading) return;   // 结果已经是这个查询的
+  qoContent.loading = true;
+  qoContentTimer = setTimeout(async () => {
+    const my = ++qoContentSeq;
+    try {
+      const r = await fetch('/api/search?limit=' + QO_CONTENT_LIMIT
+        + '&q=' + encodeURIComponent(query));
+      if (my !== qoContentSeq) return;      // 已被后续输入取代
+      const data = await r.json();
+      if (my !== qoContentSeq) return;
+      qoContent.q = query;
+      qoContent.matches = new Map(
+        (data.matches || []).map(m => [m.path, { snippet: m.snippet, count: m.count || 1 }]));
+      qoContent.truncated = !!data.truncated;
+    } catch {
+      // 搜正文失败不该让整个面板不可用：名称组仍然可用
+      if (my === qoContentSeq) { qoContent.q = query; qoContent.matches = new Map(); }
+    } finally {
+      if (my === qoContentSeq) {
+        qoContent.loading = false;
+        if (qoEntry) qoRender();          // 面板还开着才重绘
+      }
+    }
+  }, QO_CONTENT_DEBOUNCE);
 }
 
 function qoSetActive(idx) {
@@ -4063,6 +4588,8 @@ function qoSetActive(idx) {
 function qoOpen(idx) {
   const r = qoResults[typeof idx === 'number' ? idx : qoActive];
   if (!r) return;
+  // 正文命中：打开后直接高亮并滚到第一处，顶栏的 ▲▼ 可以继续跳
+  setPendingPreviewHighlight(r.content ? r.file.path : null, qoContent.q);
   closeQuickOpen();
   openFile(r.file.path);
 }
@@ -4071,6 +4598,13 @@ function openQuickOpen() {
   if (!qoEls.root || qoEntry) return;
   qoEls.root.classList.remove('hidden');
   qoEls.input.value = '';
+  // 清掉上一次的正文结果，避免刚打开就闪一批和当前空查询无关的条目
+  qoContentSeq++;
+  qoContent.q = '';
+  qoContent.matches = new Map();
+  qoContent.loading = false;
+  qoContent.truncated = false;
+  clearTimeout(qoContentTimer);
   qoRender();
   qoEntry = pushModal({
     panel: qoEls.root.querySelector('.modal-panel'),
@@ -4089,7 +4623,10 @@ if (qoEls.root) {
   qoEls.root.addEventListener('click', (e) => {
     if (isCloseTarget(e.target)) closeQuickOpen();
   });
-  qoEls.input.addEventListener('input', qoRender);
+  qoEls.input.addEventListener('input', () => {
+    qoRender();                  // 名称组：同步，立即出结果
+    qoScheduleContentSearch();   // 正文组：debounce 后异步追加
+  });
   qoEls.input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); qoSetActive(qoActive + 1); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); qoSetActive(qoActive - 1); }
@@ -4166,6 +4703,7 @@ async function openSettings() {
   els.doctypeRadios.forEach(cb => { cb.checked = enabled.includes(cb.value); });
   lastDocTypes = enabled.slice();
   els.modal.classList.remove('hidden');
+  gotoSettingsPane(settingsPane);
   if (!settingsModalEntry) {
     settingsModalEntry = pushModal({
       panel: els.modal.querySelector('.modal-panel'),
@@ -4173,6 +4711,56 @@ async function openSettings() {
     });
   }
 }
+
+// ---------- 设置弹窗的分区导航 ----------
+// 每个 .modal-section 上有 data-pane，点左侧导航只显示对应那组。
+// 记住上次看的分区：改扫描根往往要连着改好几次，每次都跳回第一屏很烦。
+let settingsPane = 'scan';
+function gotoSettingsPane(pane) {
+  const items = els.modal.querySelectorAll('.settings-nav-item');
+  if (!items.length) return;
+  const known = [...items].some(b => b.dataset.goto === pane);
+  settingsPane = known ? pane : 'scan';
+  items.forEach(b => {
+    const on = b.dataset.goto === settingsPane;
+    b.classList.toggle('is-on', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  els.modal.querySelectorAll('.modal-section[data-pane]').forEach(sec => {
+    sec.hidden = sec.dataset.pane !== settingsPane;
+  });
+  const content = document.getElementById('settings-content');
+  if (content) content.scrollTop = 0;
+}
+document.querySelectorAll('.settings-nav-item').forEach(btn => {
+  btn.addEventListener('click', () => gotoSettingsPane(btn.dataset.goto));
+});
+
+// ---------- 主题 ----------
+// 三态：system（不设 data-theme，由 CSS 的 color-scheme: light dark 跟随系统）/ light / dark。
+// 所有配色都写成 light-dark(浅, 深)，所以切换只需要改根节点的 color-scheme——
+// 不用维护两份色板，iframe 里的预览页也会跟着变（used color scheme 会传播给子文档）。
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === 'light' || mode === 'dark') root.setAttribute('data-theme', mode);
+  else { root.removeAttribute('data-theme'); mode = 'system'; }
+  try { localStorage.setItem('atlas:theme', mode); } catch {}
+  document.querySelectorAll('[data-theme-pick]').forEach(b => {
+    const on = b.dataset.themePick === mode;
+    b.classList.toggle('is-on', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+  });
+  // 正在预览 md 时要换 src（theme 在 URL 上），换完预览页才会重新渲染。
+  // 普通 HTML 文档的配色由文档自己决定，Atlas 不干预，也就不用动。
+  const f = state.files[state.activeFilePath];
+  if (f && isMdFile(f) && !editState.active) {
+    els.preview.src = previewUrlFor(f);
+  }
+}
+document.querySelectorAll('[data-theme-pick]').forEach(btn => {
+  btn.addEventListener('click', () => applyTheme(btn.dataset.themePick));
+});
+applyTheme(localStorage.getItem('atlas:theme') || 'system');
 
 // 记录上一次的勾选，用于失败/非法回滚
 let lastDocTypes = null;
@@ -4212,7 +4800,7 @@ els.doctypeRadios.forEach(cb => {
       els.preview.classList.add('hidden');
       els.mdEditor.classList.add('hidden');
       els.emptyState.classList.remove('hidden');
-      els.crumbs.innerHTML = '<span class="placeholder">从左侧选择一个文档开始预览</span>';
+      els.crumbs.innerHTML = '<span class="placeholder">首页</span>';
     }
     setScanning(false);
     t.close();
@@ -4377,7 +4965,7 @@ function renderRootList(roots) {
     const li = document.createElement('li');
     li.innerHTML = `
       <span class="root-path" title="${escapeHtml(p)}">${escapeHtml(p)}</span>
-      <button data-remove>✕</button>
+      <button data-remove title="移除这个扫描根" aria-label="移除这个扫描根">${ic('x', 12)}</button>
     `;
     li.querySelector('[data-remove]').addEventListener('click', async () => {
       const next = roots.filter(x => x !== p);
@@ -4453,7 +5041,7 @@ async function loadDir(path) {
       const div = document.createElement('div');
       div.className = 'dir-item';
       div.dataset.path = entry.path;
-      div.innerHTML = `<span class="dir-icon">📁</span><span>${escapeHtml(entry.name)}</span>`;
+      div.innerHTML = `<span class="dir-icon">${ic('folder', 13)}</span><span>${escapeHtml(entry.name)}</span>`;
       div.addEventListener('click', () => loadDir(entry.path));
       els.dirList.appendChild(div);
     }

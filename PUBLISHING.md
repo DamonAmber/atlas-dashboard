@@ -111,13 +111,21 @@ for spec in tests/*.spec.js; do
 done
 ```
 
-> 验证过：把本机 Atlas 完全停掉，全套 31 个 spec 依然全绿，且 `~/.atlas/config.json`
+> 验证过：把本机 Atlas 完全停掉，全套 34 个 spec 依然全绿，且 `~/.atlas/config.json`
 > 与 `store.json` 校验和逐字节未变。若将来某个 spec 在服务停止时失败，说明它偷偷依赖了
 > 你的真实实例，按下面的约定改掉。
 
 **要求所有 spec 都"失败 0 项"**。任意一个失败必须先修才能发版。
 
 > ⚠️ 两个"假绿"陷阱，看到这两行输出别当成通过：
+> - **跑测试前先确认 4400-4799 没有别的 Atlas 在跑**（比如自己开着的调试实例）。
+>   隔离实例在这个区间随机取端口，撞上了 `server.js` 会自动切到别的端口，
+>   而 helper 探原端口就探到了那个别人的实例 —— 它是健康的，于是 spec 会对着
+>   几百篇真实文档跑只有几篇 fixture 的断言，失败信息极具误导性
+>   （`空查询时列出全部文档 期望 4 实际 50`）。
+>   helper 现在会先探端口是否空闲、再用 `/api/config` 的 `scanRoots` 验明身份，
+>   撞上时直接报「端口 N 上应答的不是本实例」而不是让 spec 跑错。
+>   调试实例建议监听这个区间之外的端口。
 > - `e2e-install.spec.js` 打印 `没有 tgz，先运行 npm pack` 就退出（**exit code 仍是 0**，循环里看不出来）。它需要项目根有 `atlas-dashboard-*.tgz`。跑法：
 >   ```bash
 >   npm pack >/dev/null && node tests/e2e-install.spec.js | tail -5 && rm -f atlas-dashboard-*.tgz
@@ -125,7 +133,7 @@ done
 >   期望末行 `总计 10 项，失败 0 项`。**记得删掉 tgz**，否则会被 `git add -A` 带进 commit。
 > - `scroll-after-toggle.spec.js` 在 iframe 还没加载出内容时打印 `!! HTML 不够长，没法测试` 并跳过（也是 exit 0）。这是它长期的既有行为，不是本次改动引入的；判断是否回归的办法是 `git stash` 后对比同一行输出。
 
-当前 spec 清单（31 个）。除 `landing-demo`（`file://`）与 `diff-algorithm`（纯函数单测）
+当前 spec 清单（34 个）。除 `landing-demo`（`file://`）与 `diff-algorithm`（纯函数单测）
 外，其余都通过
 `tests/helpers/isolated-atlas.js` 的 `startAtlas()` 起独立实例：临时 `ATLAS_HOME`
 （自带 config/store）+ 临时扫描根 + 临时 fixture + 随机端口，结束即删。
@@ -143,6 +151,9 @@ done
 > - `diff-algorithm.spec.js` — 行级 diff 算法单测：上限必须卡在编辑距离而非 N+M、trace 切片边界、大文件性能（33 项，纯函数，不起服务）
 > - `diff-view.spec.js` — 和上次已读版本对比：底本生命周期（打开即记录·内容相同去重·数量上限·删文件即清理）/ hunk 与统计 / 上下文行数 / 标记为已看过 / 改名后底本迁移 / 前端面板与编辑态互斥（41 项）
 > - `md-sync-highlight.spec.js` — 源码 ↔ 预览的对应区域高亮：行号映射（含 front matter 偏移）、光标所在块标 active、跨块选区把覆盖到的块全标 selected、预览侧点/选时源码画出对齐到行的色带（含软换行折行）、色带随滚动移动、内容变化后映射更新、退出编辑清干净（24 项）
+> - `shortcuts-panel.spec.js` — 快捷键速查表：三个入口（? 键 / 侧栏底部按钮 / 首页「全部快捷键」）、打开文档后仍可查、焦点在预览 iframe 内按 ? 也能唤出（经快捷键桥转发）、清单覆盖 7 个场景分组且抽查的键位与代码里注册的一致、输入框里 ? 是输入字符不开面板、Esc 关闭并把焦点还给触发按钮（33 项）
+> - `quickopen-content-search.spec.js` — ⌘K 正文搜索：名称命中在前 / 正文命中作为第二组追加且不与名称组重复 / 摘要保留原始大小写并标出关键词 / 命中处数 / 打开后在预览里高亮并滚到第一处、顶栏 n/m 可继续跳 / 换文档后高亮自动失效 / 全程不写侧栏搜索框（不误过滤目录树）/ 单个 ASCII 字符不发请求、中文单字照搜（24 项）
+> - `preview-shortcut-bridge.spec.js` — 预览 iframe 内的 app 级快捷键：焦点在文档正文时 ⌘K / ⌘B 仍生效（键盘事件不跨 iframe 冒泡，靠注入桥转发）、编辑态 ⌘S 被拦下并真的触发保存、文档内打字时不抢 ⌘K/⌘B、非编辑态不抢 ⌘S、单键 `/` 一律不转发、iframe 换文档后桥自动重建（18 项）
 > - `modal-close.spec.js` — 每个弹窗的每条关闭路径：✕ 按钮（含精确点在图标 span 上）、遮罩、Esc、关闭后焦点归还、以及"点弹窗内部不会误关"（22 项）
 > - `misc-hardening.spec.js` — 杂项加固：编辑备份扩展名跟随源文件 / 请求体上限与可读错误 / `/raw` 路由不依赖 `app._router.stack`（扫描根运行时增删后序号重排仍正确）（26 项）
 > - `toast.spec.js` — 扫描根增删与反馈 toast（12 项，含隔离性断言）
@@ -441,6 +452,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.12.0** (2026-08-21) — 界面系统性升级 + 三个可发现性缺口的修复。**① 设计令牌层重写**（`public/styles.css`）：所有配色改用 `light-dark(浅, 深)` 单次声明，深浅两套色板不再各维护一份，随之删掉全部 `@media (prefers-color-scheme)` 重复块（`.preview` / `.md-preview-pane` / 源码↔预览同步高亮 / 两处 pulse 动画）。新增 `--border-strong`（控件轮廓，原来 `--border` 在深色下几乎看不出这是个按钮）、`--hairline`、`--accent-hover/-press/-ring`、`--on-accent`（深色主题的蓝配白字只有 2.6:1，实心按钮上必须换近黑）、`--warn`、`--shadow-1~3`、`--sp-*` 4px 栅格、`--r-*` 圆角、`--h-ctl*`、`--ring`。顺带修掉一个一直没人注意的问题：从未声明 `color-scheme`，于是深色模式下原生 checkbox 与滚动条仍是刺眼的浅色。**② 图标系统统一**：`public/index.html` 顶部内嵌 35 个 symbol 的 sprite（viewBox 24×24、stroke 1.75），`app.js` 新增 `ic()` / `docTypeIcon()`，把散落各处的 emoji（📁 📂 📋 🏷 ✎ ✕ 📝 🌐 Aa ⌕ ▾ 🕰️ ✅ ⚠️）全部换成线性图标。emoji 在 mac / Windows / Linux 是三套完全不同的字形、颜色不受 `currentColor` 控制、和线性图标的视觉重量也对不上——这是界面观感不统一的主因。`.file.content-match` 那个放大镜改用 CSS mask 画。**③ 顶栏工具条**：10 个同权重带边框的图标按钮改成 ghost 风格并按语义分三组（文档操作 / 标记分发 / 跳到外部），组间加 1px 分隔线；`#btn-share.shared` 与编辑态的 `#btn-edit` 原来靠 `border-color` 表态，ghost 化后改用 `accent-soft` 填充。**④ 侧栏**：头部收成单行并与主顶栏对齐到同一水平线；统计从 `brand-sub` 挪到底栏——320px 宽度下它长期被截成「804 个文档 · 377 未…」，新增 `updateStats()` 统一渲染并在「全部文档」区块标题上给出当前筛选命中数；收藏 / 最近的区块头从「只有右侧 16px 小箭头是热区」改成整行可点（`.section-head`，带 chevron + 图标 + 计数）；缩进引导线常显；`.file.active` 加 2px accent 左竖线。**⑤ 首页**：没打开文档时右侧原本只有一个占位图标加两行提示，整块空着。现在直接回答这个工具存在的理由——「AI 又改了哪些文档」：四个数字（文档 / 未读 / 项目 / 收藏）加上按 mtime 倒序的**待看队列**、最近打开、收藏三张卡片，点一行进文档，不必再去目录树里找红点。**⑥ 设置弹窗**：6 段长滚动改成左导航四分区（扫描 / 外观与通知 / 分享 / 归档），面板自身不滚动、标题栏与导航固定。**⑦ 深浅色可固定**：设置里新增「跟随系统 / 浅色 / 深色」，`<head>` 内联脚本先设 `data-theme` 防首帧闪白。这里踩到一个不明显的坑：**iframe 里的 `prefers-color-scheme` 不继承父文档的 `color-scheme`**，只在根节点切换会出现「外壳浅色、正文深色」的割裂。修法是把主题带进预览 URL——`markdown.js` 把两套配色变量提取成 `mdVarsLight/Dark` 与 `tocVarsLight/Dark` 并新增 `forcedThemeCss(theme)`，`renderPage` 接受 `opts.theme` 把覆盖样式追加在 `@media` 之后，`server.js` 的 `/api/render-md` 读 `?theme=`，`app.js` 的 `previewUrlFor()` 带上该参数；导出 PDF 仍钉浅色不受影响。**⑧ 对比度校准到 WCAG AA**：`--text-faint` 承载的是日期 / 计数 / 提示这类 10~11px 小字，原值在浅色下只有 2.79:1、深色下 3.25:1，现分别提到 4.39 / 4.89；`--unread`（底栏「N 未读」是文字）、`--ok`、`--fav`、`--border-strong` 一并上调。**⑨ 修掉三个长期存在的 CSS 优先级 bug**：`.modal button`（0,1,1）一直压过 `.modal-close` / `.quickopen-item` / `.share-btn-danger` / `.share-stop-all-btn` / `.root-list li button`（都是 0,1,0）——表现是 ⌘K 结果列表**每一行都被画成一个带边框的按钮**、「停止分享」这个破坏性操作显示成普通灰按钮、弹窗 ✕ 被画成方块。改法是给 `.modal button` 加 `:not(:where(...))` 排除三类非控件按钮（用 `:where` 保持优先级不变），其余加 `.modal` 前缀提级。**⑩ 修掉「焦点在预览文档正文里时快捷键全失效」**（既有缺陷，在 0.10.1 上同样复现）：预览是独立文档，键盘事件不跨 iframe 边界冒泡，外壳那个 keydown 总处理器收不到——点进正文读一会儿再按 ⌘K 想跳下一篇没反应，得先点侧栏把焦点拿回来，而这恰好是最常见的动线。新增 `bindPreviewShortcutBridge()` 往同源预览文档注入 keydown 桥（挂在 `load` 上，每次导航重建，`doc.__atlasKeyBridge` 防重复，`capture: true` 以防文档自己 `stopPropagation`）：命中 app 级和弦时**先在 iframe 侧 `preventDefault`**（合成事件只影响外壳，管不到原始事件的默认行为，不拦住的话 ⌘S 仍会弹浏览器「存储网页」、Windows/Linux 上 Ctrl+K 仍会跳地址栏），再构造等价事件派发给外壳，因此「哪个键干什么」仍只存在一处。让位规则：⌘S 仅编辑态接管（非编辑态留给浏览器，与外壳焦点时行为一致）、⌘K/⌘B 在文档内打字时不抢、单键 `/` 一律不转发（不少 HTML 报告自己用 `/` 做站内搜索）。**⑪ ⌘K 快速打开接入正文搜索**：AI 生成的报告文件名往往很泛（一堆 `README.md`、`20260529-xxx.md`），你记得的是「某篇里提过转化率」而不是文件叫什么；侧栏搜索虽然能搜正文，但它同时过滤整棵目录树，是「收窄视野」而非「跳过去」。现在名称命中在前（不破坏「敲两个字母 Enter 就走」的肌肉记忆），文件名没命中但正文里有的另成一组「正文命中」，每条带上下文摘要（关键词已 mark 标出）与这篇里出现了几处；选中回车后预览**滚到第一处并高亮**，顶栏出现 `n / m` 可用 ▲▼ 继续跳，全程不写侧栏搜索框（新增独立的 `qoContent` 状态与 `pendingPreviewHighlight`，后者只在路径匹配时兑现、兑现即失效，且因为「同一篇再打开不触发 iframe load」，`setActiveFile` 里 URL 未变的分支也要兑现一次）。服务端配套：`getFileText` 改为同时缓存原文与小写索引，**snippet 因此保留原始大小写**（原来只存小写，`README` 会显示成 `readme`；并防 `toLowerCase()` 改变长度导致切歪），`/api/search` 新增 `limit`（⌘K 传 25）、每条 `count`、响应 `truncated`，且**扫描前按 mtime 倒序**——带 limit 时循环会提前 break，按原扫描顺序返回的等于「随机 25 篇」，按 mtime 倒序才是「最近改过的里含这个词的」。**⑫ 新增快捷键速查表**：功能此前全藏在按钮 title 与 README 里，首页那行提示还只在没打开文档时可见，Markdown 编辑器那一整套键（⌘B/⌘I/⌘E/⌘K、Tab 缩进、回车续列表）在应用内完全没有出口。现在按 `?` 唤出（侧栏底部键盘图标、首页「全部快捷键」按钮同效），7 个场景分组共 31 条，`⌘`/`Ctrl` 按平台自动切；`SHORTCUTS` 数据刻意放在全局 keydown 处理器正上方，改快捷键的人在同一屏里就能看到清单也要改。`?` 也加进了快捷键桥的转发白名单（目前唯一不带修饰键就转发的键，因为它正服务于「读文档时想知道还能怎么用」）。**⑬ 加固测试 harness**（`tests/helpers/isolated-atlas.js`）：隔离实例在 4400-4799 随机取端口，撞上别的进程时 `server.js` 会自动切到别的端口，而 helper 仍探原端口——若那里恰好是另一个 Atlas（比如开发时留的调试实例），它是健康的，于是 `startAtlas` 认为「起好了」，整个 spec 拿着几百篇真实文档去跑只有几篇 fixture 的断言，失败信息还极具误导性（`空查询时列出全部文档 期望 4 实际 50`）。这次发版前就真踩到了，也追认了此前几次被当成「偶发」的失败。现在先用 `net` 探端口是否真空闲再 spawn，健康检查改用 `/api/config` 的 `scanRoots` 验明身份，撞上时直接报「端口 N 上应答的不是本实例」；PUBLISHING.md 步骤 0 也补了这条排查说明。**⑭ 测试**：新增 `preview-shortcut-bridge.spec.js`（18 项）、`quickopen-content-search.spec.js`（24 项）、`shortcuts-panel.spec.js`（33 项），三者都做过反向验证（临时停用被测逻辑确认断言真会红）；因文案与 DOM 调整同步更新 4 个既有 spec 的断言（`modal-close` 的 `.modal-close span` → `.ico`、`favorites-and-tags` 的 title 前缀、`sse-leak-and-retry` 与 `landing-demo` 的「个文档」→「篇文档」）。全套 34 个 spec 全绿，`npm test` 582 项断言。README 新增 `## 快捷键` 完整表格，landing page 同步 mockup 图标、demo 数据、统计文案，并新增「首页概览」「深浅色主题可固定」两张特性卡与键盘流卡的改写。
 
 - **0.10.1** (2026-08-21) — Bug 修复：**筛选时命中结果落在折叠的分组里就看不见了**，表现为"筛选了但什么都没出来"、"清除筛选后文档也没回来"。日常使用中分组大多是折叠着的（`state.collapsed` 持久化在 `atlas:collapsed`），而 `renderFolder` 一直无条件按折叠状态渲染：筛选把不含命中项的分组整棵剪掉之后，剩下那些确实含命中项的分组仍然是折叠的 —— 命中的文件行进了 DOM 却被 `.folder.collapsed > .folder-children { display: none }` 藏住，屏幕上一个结果都没有。实测 766 个文档 / 30 个分组、其中 29 个折叠时，点标签 chip 筛选后**屏幕上可见文档数是 0**。修法：`renderFolder` 里 `const isCollapsed = hasActiveFilter() ? false : state.collapsed.has(folder.id)` —— 筛选生效时忽略折叠状态（能活到渲染这一步的分组本身就是"含命中项"的，再让用户一个个点开是反直觉的），且**只在渲染时忽略、不写 `state.collapsed`**，所以清除筛选后每个分组的折叠状态原样恢复、localStorage 里的折叠偏好也不被改写。这个毛病不是 0.10.0 引入的：搜索（0.1.0）与「仅未读」（0.2.0）一直有，0.10.0 新加的标签筛选继承了它，现在三者一起修好。`favorites-and-tags.spec.js` 加了 12 项断言把这条钉住（折叠状态下标签筛选 / 搜索 / 仅未读三种筛选的命中结果都必须可见、命中分组自动展开、清除后折叠状态与 localStorage 偏好都原样恢复），共 84 项。全套 31 个 spec 全绿。
 

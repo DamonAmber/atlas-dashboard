@@ -691,25 +691,32 @@ app.use('/raw', (req, res, next) => {
 });
 
 // 全文搜索：HTML 内容缓存（按 mtime 失效）+ 简单 contains 匹配
-const contentCache = new Map();   // path → { mtime, text }
+// path → { mtime, text, lower, usedAt }
+//   text  = 归一化空白后的原文（保留大小写，给 snippet 用）
+//   lower = 同一份的小写副本（给 indexOf 匹配用）
+// 为什么两份都留：原来只存小写，snippet 也就只能是小写的，
+// 英文正文摘要看起来像坏了（"README" 显示成 "readme"）。
+// 代价是内存翻倍，但 LRU 上限 500 个文件，可接受。
+const contentCache = new Map();
 
 // 文件集合发生结构性变化（配置改动）后调用：丢弃派生缓存 + 让文件索引重建
 function invalidateIndex() {
   contentCache.clear();
   invalidateFileIndex();
 }
+// 返回 { text, lower }：text 保留原始大小写，lower 用于匹配
 async function getFileText(filePath, mtime) {
   const cached = contentCache.get(filePath);
   if (cached && cached.mtime === mtime) {
     cached.usedAt = Date.now();   // LRU 淘汰用
-    return cached.text;
+    return cached;
   }
   try {
     const raw = await fsp.readFile(filePath, 'utf8');
     let text;
     if (docTypeOfPath(filePath) === 'md') {
       // Markdown 基本就是纯文本，直接归一化空白即可
-      text = raw.replace(/\s+/g, ' ').toLowerCase();
+      text = raw.replace(/\s+/g, ' ');
     } else {
       text = raw
         .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
@@ -719,13 +726,18 @@ async function getFileText(filePath, mtime) {
         .replace(/&amp;/g, '&')
         .replace(/&lt;/g, '<')
         .replace(/&gt;/g, '>')
-        .replace(/\s+/g, ' ')
-        .toLowerCase();
+        .replace(/\s+/g, ' ');
     }
-    contentCache.set(filePath, { mtime, text, usedAt: Date.now() });
-    return text;
+    // toLowerCase() 对少数字符会改变长度（如 'İ' → 'i̇'），一旦长度不等，
+    // 用 lower 里的下标去切 text 就会错位。这种情况直接让两者都用小写版，
+    // 摘要丑一点也比切歪了强。
+    let lower = text.toLowerCase();
+    if (lower.length !== text.length) text = lower;
+    const entry = { mtime, text, lower, usedAt: Date.now() };
+    contentCache.set(filePath, entry);
+    return entry;
   } catch {
-    return '';
+    return { text: '', lower: '' };
   }
 }
 
@@ -748,30 +760,62 @@ function termIsSearchable(t) {
   return /^[\x00-\x7F]+$/.test(t) ? t.length >= 2 : true;
 }
 
+// 数一个词在正文里出现多少次（不重叠）。上限 200：显示成「200+ 处」就够了，
+// 常见词在长文档里能有上千处，全数完纯属浪费
+function countOccurrences(hay, needle, cap = 200) {
+  if (!needle) return 0;
+  let n = 0;
+  let from = 0;
+  let idx;
+  while ((idx = hay.indexOf(needle, from)) !== -1) {
+    n++;
+    if (n >= cap) break;
+    from = idx + needle.length;
+  }
+  return n;
+}
+
 app.get('/api/search', async (req, res) => {
   const q = (req.query.q || '').toString().trim().toLowerCase();
-  if (q.length === 0) return res.json({ matches: [] });
+  // 空查询与"没有可搜的词"（单个 ASCII 字符匹配面太广）都返回空集，
+  // 且字段形状和正常返回保持一致，客户端不用做 undefined 判断
+  if (q.length === 0) return res.json({ matches: [], terms: [], truncated: false });
   const terms = parseQueryTerms(q).filter(termIsSearchable);
-  if (terms.length === 0) return res.json({ matches: [] });
+  if (terms.length === 0) return res.json({ matches: [], terms: [], truncated: false });
+  // limit：⌘K 快速打开只需要前几十条，没必要把 800 个命中全序列化回去。
+  // 不传则不限，保持侧栏搜索"过滤整棵树"的语义不变。
+  const rawLimit = parseInt(req.query.limit, 10);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : Infinity;
   try {
-    const scanned = await getScannedFiles();
+    // 按修改时间倒序再扫。带 limit 时循环会在攒够条数后提前 break，
+    // 若按扫描顺序走，返回的就是"目录里碰巧排在前面的 25 篇"——等于随机。
+    // 按 mtime 倒序则是"最近改过的那些里含这个词的"，符合这个工具的前提：
+    // AI 刚动过的文档最可能是你在找的。
+    // 不带 limit（侧栏搜索）时要读完全部文件，顺序不影响结果集，只是稳定了输出次序。
+    const scanned = (await getScannedFiles()).slice()
+      .sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
     const matches = [];
+    let truncated = false;
     for (const f of scanned) {
-      const text = await getFileText(f.path, f.mtime);
+      const { text, lower } = await getFileText(f.path, f.mtime);
       // AND：所有关键词都要命中
       let firstIdx = -1;
       let firstLen = 0;
       let all = true;
       for (const t of terms) {
-        const idx = text.indexOf(t);
+        const idx = lower.indexOf(t);
         if (idx < 0) { all = false; break; }
         if (firstIdx < 0 || idx < firstIdx) { firstIdx = idx; firstLen = t.length; }
       }
       if (!all || firstIdx < 0) continue;
+      if (matches.length >= limit) { truncated = true; break; }
       const start = Math.max(0, firstIdx - 35);
       const end = Math.min(text.length, firstIdx + firstLen + 35);
+      // 从 text 切（保留原始大小写），下标来自 lower —— 两者等长由 getFileText 保证
       const snippet = (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
-      matches.push({ path: f.path, snippet });
+      // 命中处数按第一个关键词算：多词 AND 时它最能代表"这篇里有多少地方提到"
+      const count = countOccurrences(lower, terms[0]);
+      matches.push({ path: f.path, snippet, count });
     }
     // GC：缓存大于 500 个文件时按最久未访问淘汰一半
     // （原来按 mtime 排序淘汰，等于优先丢掉最稳定、最该留着的老文件）
@@ -779,7 +823,7 @@ app.get('/api/search', async (req, res) => {
       const all = [...contentCache.entries()].sort((a, b) => (a[1].usedAt || 0) - (b[1].usedAt || 0));
       for (let i = 0; i < all.length / 2; i++) contentCache.delete(all[i][0]);
     }
-    res.json({ matches, terms });
+    res.json({ matches, terms, truncated });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1644,9 +1688,14 @@ app.get('/api/render-md', async (req, res) => {
     // base href 指向该 md 所在目录的 /raw/ 前缀：预览页 URL 是
     // /api/render-md?path=...，没有 base 的话文档里 `![](./img/a.png)`
     // 会被解析成 /api/img/a.png → 404，md 里的本地图片全部裂开
+    // theme=light|dark：用户在设置里把主题钉死时，预览页要一起钉，
+    // 否则 iframe 内仍按系统配色渲染，出现「外壳浅色 + 预览深色」的割裂
+    const theme = req.query.theme === 'light' || req.query.theme === 'dark'
+      ? req.query.theme : undefined;
     const html = markdown.renderPage(raw, {
       title: path.basename(filePath),
       baseHref: mdBaseHref(filePath),
+      theme,
     });
     res.set('Cache-Control', 'no-store');
     res.type('html').send(html);

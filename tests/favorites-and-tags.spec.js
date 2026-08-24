@@ -194,7 +194,7 @@ const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
     atlas.readStore().tags[oneAbs], ['周报', 'AI', '待评审']);
   check('行上最多显示 2 个标签 + “+N”', tagsOnRow, ['周报', 'AI', '+1']);
   check('完整标签列表进了 title 提示',
-    /🏷 周报 · AI · 待评审/.test(await page.getAttribute(fileRow('one.html'), 'title')), true);
+    /标签：周报 · AI · 待评审/.test(await page.getAttribute(fileRow('one.html'), 'title')), true);
 
   // 「取消」和「清空后确定」都会让 showPrompt 返回 null，实现里必须区分这两者，
   // 否则要么点取消把标签清了，要么永远清不掉标签
