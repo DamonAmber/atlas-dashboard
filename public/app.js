@@ -119,6 +119,7 @@ const els = {
   recentBar: document.getElementById('recent-bar'),
   recentList: document.getElementById('recent-list'),
   recentToggle: document.getElementById('recent-toggle'),
+  recentClear: document.getElementById('recent-clear'),
   favBar: document.getElementById('fav-bar'),
   favList: document.getElementById('fav-list'),
   favToggle: document.getElementById('fav-toggle'),
@@ -872,6 +873,10 @@ function renderRecent() {
   const usable = list.filter(p => !!state.files[p]);
   if (usable.length === 0) {
     els.recentBar.classList.add('hidden');
+    // 连节点一起清掉，不只是把父容器藏起来：清除记录之后 DOM 里还躺着一串
+    // .recent-item，"已清除"就只是视觉上的（下次有记录时 render 会重建，
+    // 所以清空没有额外成本）
+    els.recentList.innerHTML = '';
     return;
   }
   els.recentBar.classList.remove('hidden');
@@ -895,6 +900,36 @@ function renderRecent() {
     `;
     div.addEventListener('click', () => openFile(p));
     els.recentList.appendChild(div);
+  }
+}
+
+// 清除最近浏览记录。只清 store.recent 这一份列表——已读状态、收藏、标签都不动：
+// 用户点这个按钮想的是"别让侧栏一直摆着我看过什么"，不是"把阅读状态重置"。
+// 先本地清、再打后端，失败就把列表原样放回去（这是个不可撤销的动作，
+// 一次没成功却看着像成功了，比慢半拍难受得多）。
+async function clearRecent() {
+  const count = (state.recent || []).filter(p => !!state.files[p]).length;
+  if (count === 0) return;
+  const ok = await showConfirm({
+    title: '清除最近浏览记录？',
+    body: `列表里的 ${count} 条记录会被清空，无法恢复。\n文档本身、未读红点和收藏都不受影响。`,
+    confirmText: '清除',
+    danger: true,
+  });
+  if (!ok) return;
+  const backup = (state.recent || []).slice();
+  state.recent = [];
+  renderRecent();
+  renderHome();   // 首页那张「最近打开」卡片同一份数据，得一起变
+  try {
+    const r = await fetch('/api/recent/clear', { method: 'POST' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    showToast({ kind: 'success', text: '已清除最近浏览记录' });
+  } catch (e) {
+    state.recent = backup;
+    renderRecent();
+    renderHome();
+    showToast({ kind: 'error', text: '清除失败', secondary: e.message });
   }
 }
 
@@ -3971,6 +4006,7 @@ els.recentToggle.addEventListener('click', () => {
   els.recentBar.classList.toggle('collapsed', state.recentCollapsed);
   els.recentToggle.setAttribute('aria-expanded', state.recentCollapsed ? 'false' : 'true');
 });
+if (els.recentClear) els.recentClear.addEventListener('click', clearRecent);
 els.favToggle.addEventListener('click', () => {
   state.favCollapsed = !state.favCollapsed;
   localStorage.setItem('atlas:favCollapsed', state.favCollapsed ? '1' : '0');

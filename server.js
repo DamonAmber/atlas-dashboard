@@ -1353,6 +1353,16 @@ app.post('/api/seen/all', async (_req, res) => {
   }
 });
 
+// 清除「最近打开」列表。只清 store.recent——seen / seenVersions / favorites / tags
+// 一个都不碰：用户要的是抹掉浏览痕迹，不是把阅读状态重置回未读。
+app.post('/api/recent/clear', (_req, res) => {
+  const store = loadStore();
+  const cleared = (store.recent || []).length;
+  store.recent = [];
+  saveStore(store);
+  res.json({ ok: true, cleared });
+});
+
 app.post('/api/unseen', (req, res) => {
   const filePath = req.body && req.body.path;
   if (!filePath) return res.status(400).json({ error: '缺少 path' });

@@ -149,12 +149,17 @@
     </div>
 
     <div id="recent-bar" class="recent-bar hidden">
-      <button class="section-head" id="recent-toggle" type="button" aria-expanded="true" aria-controls="recent-list" title="收起 / 展开最近打开列表">
-        <svg class="ico section-chev" width="12" height="12" aria-hidden="true"><use href="#i-chevron-down"/></svg>
-        <svg class="ico section-ico" width="12" height="12" aria-hidden="true"><use href="#i-clock"/></svg>
-        <span class="section-title">最近</span>
-        <span class="section-count" id="recent-count"></span>
-      </button>
+      <!-- 折叠和「清除」是两个动作，必须是并列的两个 button（button 不能嵌套），
+           结构与 tag-bar-head 一致 -->
+      <div class="recent-bar-head">
+        <button class="section-head recent-toggle" id="recent-toggle" type="button" aria-expanded="true" aria-controls="recent-list" title="收起 / 展开最近打开列表">
+          <svg class="ico section-chev" width="12" height="12" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+          <svg class="ico section-ico" width="12" height="12" aria-hidden="true"><use href="#i-clock"/></svg>
+          <span class="section-title">最近</span>
+          <span class="section-count" id="recent-count"></span>
+        </button>
+        <button id="recent-clear" class="recent-clear" type="button" title="清除最近浏览记录" aria-label="清除最近浏览记录">清除</button>
+      </div>
       <div id="recent-list" class="recent-list"></div>
     </div>
 

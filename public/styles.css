@@ -491,6 +491,12 @@ body.resizing iframe { pointer-events: none; }
 .recent-bar.hidden { display: none; }
 .recent-bar.collapsed .recent-list { display: none; }
 
+/* 分区头 + 「清除」并列（同 .tag-bar-head）：折叠按钮吃掉整行剩余宽度，
+ * 热区尽量大，不用瞄着 chevron 点 */
+.recent-bar-head { display: flex; align-items: center; gap: 2px; }
+.recent-toggle { flex: 1; min-width: 0; width: auto; }
+/* 收起时「清除」也留着：折叠只是把列表藏起来，记录还在，这时候更需要一键清掉 */
+
 .recent-list {
   display: flex; flex-direction: column; gap: 1px;
   max-height: 160px;
@@ -901,8 +907,11 @@ body.resizing iframe { pointer-events: none; }
 .tag-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* 「清除」：只在有筛选时出现，跟在分区头右侧。用文字而不是 ✕ 图标——
- * 侧栏里已经有一排 ✕ 形状的按钮，再加一个含义完全不同的容易误点 */
-.tag-bar-clear {
+ * 侧栏里已经有一排 ✕ 形状的按钮，再加一个含义完全不同的容易误点。
+ * 「最近」分区的清除按钮共用这套外观（.recent-clear）——两者都是
+ * "跟在分区头右边的次要文字动作"，长得不一样反而像两种不同的东西 */
+.tag-bar-clear,
+.recent-clear {
   flex: none;
   height: 22px;
   padding: 0 7px;
@@ -915,9 +924,12 @@ body.resizing iframe { pointer-events: none; }
   border-radius: var(--r-xs);
   transition: background var(--dur-fast), color var(--dur-fast);
 }
-.tag-bar-clear:hover { background: var(--accent-soft); }
-.tag-bar-clear:focus-visible { outline: none; box-shadow: var(--ring); }
-.tag-bar-clear.hidden { display: none; }
+.tag-bar-clear:hover,
+.recent-clear:hover { background: var(--accent-soft); }
+.tag-bar-clear:focus-visible,
+.recent-clear:focus-visible { outline: none; box-shadow: var(--ring); }
+.tag-bar-clear.hidden,
+.recent-clear.hidden { display: none; }
 
 /* 收藏夹：结构与「最近打开」一致（跨文件夹的平铺列表） */
 .fav-bar {
