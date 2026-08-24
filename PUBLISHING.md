@@ -316,6 +316,17 @@ git push origin "v$NEW_VERSION"
 2. 调 `gh release create` 创建 Release
 3. body 含变更日志 + npm 链接 + 网站链接 + 安装命令
 
+> ⚠️ **Release body 是推 tag 那一刻 `PUBLISHING.md` 的快照，之后不会自动跟着变。**
+> 所以「发完版才想起来补一句本版描述」（比如流程变更、事后发现的遗漏）时，
+> 改完 `PUBLISHING.md` 还得手动把 Release 同步一遍，否则两处永久不一致：
+> ```bash
+> awk -v ver="$NEW_VERSION" '/^- \*\*[0-9]+\.[0-9]+\.[0-9]+\*\*/ { if (found) exit; if ($0 ~ "\\*\\*" ver "\\*\\*") found = 1 } found { print }' PUBLISHING.md > /tmp/notes.md
+> # 再按上面 release.yml 的模板补上 npm / 介绍页 / 安装命令那几行尾部
+> gh release edit "v$NEW_VERSION" --notes-file /tmp/notes.md
+> ```
+> 0.14.0 就是这么补的（⑧ 段是发完才加的）。
+> 更省事的办法当然是**发版前把描述写完整**。
+
 验证：
 
 ```bash
@@ -381,9 +392,11 @@ curl -s "https://api.github.com/repos/DamonAmber/atlas-dashboard/actions/runs?pe
   | grep -B3 '"name": "tests"' | head -20   # 看最近一条 tests 的 conclusion
 ```
 
-> ⚠️ 这几条 curl **会间歇性返回空响应**（网络抖动），空响应 `grep` 不到就会误判成
-> "未创建"。0.14.0 发版时验证 ② 就先红了一次、重试即绿。**判失败前一定要重试
-> 2~3 次**，别急着去查根本不存在的问题。
+> ⚠️ **GitHub API 会间歇性返回空响应**，`grep` 不到就会误判成"未创建 / 未通过"。
+> 这不限于上面的匿名 curl —— `gh` 自己也会（0.14.0 发版时 `gh run list` 报过
+> `Get "https://api.github.com/...": EOF`，`gh run list --json` 也返回过空串）。
+> 同一次发版里验证 ② 和 ③ 各误红了一次，重试即绿。
+> **判失败前一定要重试 2~3 次**，别急着去查根本不存在的问题。
 
 ---
 
