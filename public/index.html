@@ -84,12 +84,14 @@
 
   <aside class="sidebar" id="sidebar">
     <header class="sidebar-header">
-      <div class="brand">
-        <div class="brand-mark">A</div>
-        <div class="brand-text">
-          <div class="brand-title">Atlas</div>
-        </div>
-      </div>
+      <!-- 品牌区同时是「回到首页」入口：点 logo 回首页是通用肌肉记忆，
+           白捡一个入口且不占新的界面位置。主入口在面包屑最左段。 -->
+      <button class="brand" id="btn-home" type="button" title="回到首页（Esc）" aria-label="回到首页">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <span class="brand-text">
+          <span class="brand-title">Atlas</span>
+        </span>
+      </button>
       <div class="actions">
         <button id="btn-refresh" title="重新扫描磁盘" aria-label="重新扫描磁盘">
           <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-refresh"/></svg>
@@ -118,10 +120,22 @@
       </label>
     </div>
 
-    <!-- 标签筛选条：只在有标签存在时显示（renderTagBar 控制） -->
+    <!-- 标签筛选区：只在有标签存在时显示（renderTagBar 控制）。
+         结构刻意与「收藏 / 最近打开」对齐——分区头 + 可折叠内容区。
+         原来是一排裸 chip 直接顶在 sort-bar 的分隔线上：既没有"这排东西是干什么的"
+         的说明，也没有呼吸空间，标签一多还会把文件树挤下去。 -->
     <div id="tag-bar" class="tag-bar hidden" role="group" aria-label="按标签筛选">
+      <div class="tag-bar-head">
+        <!-- 折叠按钮和「清除」是两个动作，必须是并列的两个 button（button 不能嵌套） -->
+        <button class="section-head tag-bar-toggle" id="tag-bar-toggle" type="button" aria-expanded="true" aria-controls="tag-bar-chips" title="收起 / 展开标签筛选">
+          <svg class="ico section-chev" width="12" height="12" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+          <svg class="ico section-ico" width="12" height="12" aria-hidden="true"><use href="#i-tag"/></svg>
+          <span class="section-title">标签</span>
+          <span class="section-count" id="tag-bar-count"></span>
+        </button>
+        <button id="tag-bar-clear" class="tag-bar-clear hidden" type="button" title="清除标签筛选" aria-label="清除标签筛选">清除</button>
+      </div>
       <div id="tag-bar-chips" class="tag-bar-chips"></div>
-      <button id="tag-bar-clear" class="tag-bar-clear hidden" type="button" title="清除标签筛选" aria-label="清除标签筛选">清除</button>
     </div>
 
     <div id="fav-bar" class="fav-bar hidden">
@@ -173,8 +187,14 @@
       <button id="btn-toggle-sidebar" class="toggle-sidebar" title="收起 / 展开侧边栏（⌘B）">
         <svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-panel-left"/></svg>
       </button>
+      <!-- 没打开文档时的第一段占位。和 app.js 里 crumbHomePlaceholderHtml()
+           必须保持一致：打开文档后这里会变成可点的 .crumb-home 按钮，
+           两者图标与文字位置相同，来回切换时不横跳 -->
       <div class="crumbs" id="crumbs">
-        <span class="placeholder">首页</span>
+        <span class="placeholder">
+          <svg class="ico" width="12" height="12" aria-hidden="true"><use href="#i-home"/></svg>
+          <span>首页</span>
+        </span>
       </div>
       <!-- 工具条分三组，用细分隔线隔开：
              ① 文档本身（刷新 / 对比 / 编辑）

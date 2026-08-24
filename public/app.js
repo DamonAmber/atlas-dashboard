@@ -16,6 +16,9 @@ const state = {
   collapsed: new Set(JSON.parse(localStorage.getItem('atlas:collapsed') || '[]')),
   recentCollapsed: localStorage.getItem('atlas:recentCollapsed') === '1',
   favCollapsed: localStorage.getItem('atlas:favCollapsed') === '1',
+  // 标签筛选区的折叠态。和 tagFilter 不同，这个要持久化——标签几十个的时候
+  // 用户一般只在需要时展开一次，每次刷新都重新弹开一大片 chip 很烦
+  tagsCollapsed: localStorage.getItem('atlas:tagsCollapsed') === '1',
   notifyEnabled: localStorage.getItem('atlas:notify') === '1',
   // 'name' | 'mtime' | 'custom'：folder.children 排序模式
   // 默认按名称——一系列文档（v1/v2/v3）会自动聚合在一起
@@ -59,6 +62,7 @@ const els = {
   homeFav: document.getElementById('home-fav'),
   homeFavCard: document.getElementById('home-fav-card'),
   crumbs: document.getElementById('crumbs'),
+  btnHome: document.getElementById('btn-home'),
   saveStatus: document.getElementById('save-status'),
   btnToggleSidebar: document.getElementById('btn-toggle-sidebar'),
   btnRefresh: document.getElementById('btn-refresh'),
@@ -122,6 +126,8 @@ const els = {
   tagBar: document.getElementById('tag-bar'),
   tagBarChips: document.getElementById('tag-bar-chips'),
   tagBarClear: document.getElementById('tag-bar-clear'),
+  tagBarToggle: document.getElementById('tag-bar-toggle'),
+  tagBarCount: document.getElementById('tag-bar-count'),
   updateBadge: document.getElementById('update-badge'),
   updateBanner: document.getElementById('update-banner'),
   segButtons: document.querySelectorAll('.seg-btn[data-sort]'),
@@ -711,6 +717,13 @@ async function fetchState() {
     }
     state.archivedProjects = Array.isArray(data.archivedProjects) ? data.archivedProjects : [];
     setSaveStatus('idle');
+    // 正在预览的文档在这次扫描后不见了（被归档 / 磁盘上被删 / 改了扫描类型）：
+    // 回首页。不做的话 iframe 会一直挂着一篇已经不在看板里的文档，顶栏按钮还全
+    // 可用，点刷新 / 分享 / 导出全是 404，而侧栏里已经找不到它了。
+    // confirmDirty:false —— 文件都没了，没什么可保存的（草稿会落到本地）
+    if (state.activeFilePath && !state.files[state.activeFilePath]) {
+      await goHome({ confirmDirty: false });
+    }
     renderTagBar();
     render();
     renderRecent();
@@ -932,8 +945,8 @@ function renderFavorites() {
   }
 }
 
-// ---------- 标签筛选条 ----------
-// 只在真的有标签时出现，避免给没用过这功能的用户凭空多一行界面。
+// ---------- 标签筛选区 ----------
+// 只在真的有标签时出现，避免给没用过这功能的用户凭空多一块界面。
 function renderTagBar() {
   if (!els.tagBar) return;
   const tags = state.allTags || [];
@@ -943,6 +956,11 @@ function renderTagBar() {
     return;
   }
   els.tagBar.classList.remove('hidden');
+  els.tagBar.classList.toggle('collapsed', state.tagsCollapsed);
+  els.tagBar.classList.toggle('filtering', state.tagFilter.size > 0);
+  if (els.tagBarToggle) {
+    els.tagBarToggle.setAttribute('aria-expanded', state.tagsCollapsed ? 'false' : 'true');
+  }
   els.tagBarChips.innerHTML = '';
   const selectedLower = new Set([...state.tagFilter].map(t => t.toLowerCase()));
   for (const { name, count } of tags) {
@@ -959,7 +977,28 @@ function renderTagBar() {
     btn.addEventListener('click', () => toggleTagFilter(name));
     els.tagBarChips.appendChild(btn);
   }
+  // 分区头计数：平时是标签总数，筛选中变成「已选 / 总数」。
+  // 收起来之后这就是唯一还能看出"树被过滤了"的地方，所以必须带上已选数
+  if (els.tagBarCount) {
+    const picked = state.tagFilter.size;
+    els.tagBarCount.textContent = picked ? `${picked}/${tags.length}` : String(tags.length);
+    els.tagBarCount.title = picked
+      ? `已选 ${picked} 个标签，共 ${tags.length} 个`
+      : `共 ${tags.length} 个标签`;
+  }
   els.tagBarClear.classList.toggle('hidden', state.tagFilter.size === 0);
+  syncTagChipsOverflow();
+}
+
+// chip 区超出 max-height 才挂底部渐隐——无条件挂会把最后一行也淡掉。
+// 折叠 / 隐藏时两个高度都是 0，自然不会误判。
+function syncTagChipsOverflow() {
+  if (!els.tagBarChips) return;
+  const el = els.tagBarChips;
+  const overflow = el.scrollHeight - el.clientHeight;
+  el.classList.toggle('scrollable', overflow > 1);
+  // 滚到底就撤掉渐隐（下面真的没内容了，继续淡着反而像没渲染完）
+  el.classList.toggle('at-end', overflow <= 1 || el.scrollTop >= overflow - 1);
 }
 
 function toggleTagFilter(name) {
@@ -1951,6 +1990,8 @@ function setActiveFile(filePath, doNavigate) {
     : `<span class="crumb-name">${escapeHtml(file.name)}</span>`;
   const dtype = isMdFile(file) ? 'md' : 'html';
   els.crumbs.innerHTML = `
+    ${crumbHomeHtml()}
+    <span class="crumb-sep">›</span>
     <span class="file-type-badge type-${dtype}">${dtype === 'md' ? 'MD' : 'HTML'}</span>
     <span class="crumb-project">${escapeHtml(file.projectName)}</span>
     <span class="crumb-sep">›</span>
@@ -1991,6 +2032,71 @@ function setActiveFile(filePath, doNavigate) {
   }
 }
 
+// ---------- 回到首页 ----------
+// setActiveFile 的反操作。原来这条路径根本不存在：activeFilePath 一旦被赋值就
+// 再也回不到 null——iframe 永远挂着最后打开的那篇，顶栏那三组"针对当前文档"的
+// 按钮永远可用，而首页的待看 / 最近 / 收藏三张卡片在看完第一篇之后就再也见不到，
+// 只能靠刷新整个页面。
+//
+// 顺带收口了几个"当前文档已经不存在了"的场景（归档分组、文件被删、改扫描类型）：
+// 它们以前只更新侧栏树，预览区照旧挂着一篇已经不在看板里的文档，点刷新 / 分享
+// 全是 404。
+//
+// confirmDirty=false 用于那些"文档已经没了"的场景：那时没什么可保存的，
+// 弹一个「放弃改动吗」只会拦住必须发生的复位（草稿仍会由 exitEditMode 落到本地）。
+// 返回 false 表示用户在确认框里选了「继续编辑」，调用方应当中止后续动作。
+async function goHome({ confirmDirty = true } = {}) {
+  if (editState.active) {
+    if (confirmDirty && !(await confirmDiscardIfDirty())) return false;
+    exitEditMode({ restore: false });
+  }
+  if (diffState.open) closeDiff();
+
+  state.activeFilePath = null;
+  els.tree.querySelectorAll('.file.active').forEach(e => e.classList.remove('active'));
+
+  // 卸载 iframe 走 about:blank 而不是 src=''：后者在部分内核里会重新 GET
+  // 当前目录，预览区会闪一个 Cannot GET（reloadPreviewDoc 里同样的理由）
+  els.preview.src = 'about:blank';
+  els.preview.classList.add('hidden');
+  // 顺手清掉 loading（opacity:0）。不清的话下次打开文档会先闪一下空白
+  els.preview.classList.remove('loading');
+  els.mdEditor.classList.add('hidden');
+  els.emptyState.classList.remove('hidden');
+  els.crumbs.innerHTML = crumbHomePlaceholderHtml();
+
+  // 顶栏按钮全部收回禁用态。这里必须手写一遍：它们只在 setActiveFile 里被
+  // 逐个 `= false` 打开过，之前没有任何地方关回去
+  for (const b of [els.btnReloadPreview, els.btnDiff, els.btnEdit, els.btnMarkUnread,
+    els.btnShare, els.btnExportPdf, els.btnOpenExternal, els.btnReveal, els.btnCopyPath]) {
+    if (b) b.disabled = true;
+  }
+  if (els.btnShare) els.btnShare.classList.remove('shared');
+  updateFavButton();     // 这两个内部都按 activeFilePath == null 自动收敛
+  updateDiffButton();
+  updateIframeHighlight();   // 收掉命中角标：iframe 已经空了，跳转无意义
+  renderHome();              // 离开首页这段时间里数据可能变过
+  renderRecent();            // 重画以清掉列表里的 active 高亮
+  renderFavorites();
+  return true;
+}
+
+// 面包屑最左段：首页。
+// 以前面包屑是「项目 › 文件名」，没有根——面包屑的第一段本来就该是可点回根的，
+// 这个缺口正是"没法回首页"的直接原因。
+//
+// 两个形态用同一套 markup（图标 + 「首页」），只是打开文档时是可点的 button、
+// 没打开时是不可点的占位：图标和文字的位置一模一样，来回切换不横跳，
+// 用户才会相信这两者是同一个位置的两种状态。
+// 占位那份在 index.html 里还静态写了一遍（首屏不闪），改这里记得同步。
+function crumbHomeHtml() {
+  return '<button type="button" class="crumb-home" title="回到首页（Esc）" aria-label="回到首页">'
+    + ic('home', 12) + '<span>首页</span></button>';
+}
+function crumbHomePlaceholderHtml() {
+  return '<span class="placeholder">' + ic('home', 12) + '<span>首页</span></span>';
+}
+
 // ==================== 预览 iframe 的快捷键桥 ====================
 // 预览是一份独立文档，键盘事件不会跨 iframe 边界冒泡到外壳，所以外壳那个
 // keydown 总处理器收不到。表现出来就是：点进文档正文读一会儿，再按 ⌘K 想跳
@@ -2011,6 +2117,11 @@ const PREVIEW_BRIDGED_KEYS = new Set(['k', 'b', 's']);
 // 破例的理由是它正好服务于"读文档时想知道还能怎么用"这个场景；而它被文档自己
 // 占用的概率远低于 `/`（站内搜索常用 `/`，几乎没人拿 ? 当功能键）。
 // 和其它键一样，文档内正在打字时不抢。
+//
+// Escape（回首页）刻意不在这里：带 lightbox / 弹层的 HTML 报告普遍用 Escape
+// 关闭自己的浮层，抢过来会让文档的交互坏掉——这和 `/` 不转发是同一个理由。
+// 代价是读文档时按 Escape 不回首页，但那个场景鼠标本来就在手上，
+// 面包屑最左段和侧栏 logo 两个入口都在视野里。
 const PREVIEW_BRIDGED_BARE_KEYS = new Set(['?']);
 function bindPreviewShortcutBridge() {
   // 预览里点了外链跳到站外时，读 contentDocument 会抛安全错误 → 静默跳过
@@ -3867,6 +3978,30 @@ els.favToggle.addEventListener('click', () => {
   els.favToggle.setAttribute('aria-expanded', state.favCollapsed ? 'false' : 'true');
 });
 els.tagBarClear.addEventListener('click', clearTagFilter);
+els.tagBarToggle.addEventListener('click', () => {
+  state.tagsCollapsed = !state.tagsCollapsed;
+  localStorage.setItem('atlas:tagsCollapsed', state.tagsCollapsed ? '1' : '0');
+  els.tagBar.classList.toggle('collapsed', state.tagsCollapsed);
+  els.tagBarToggle.setAttribute('aria-expanded', state.tagsCollapsed ? 'false' : 'true');
+  // 展开的瞬间才第一次量得到真实高度（折叠时 display:none，两个高度都是 0）
+  syncTagChipsOverflow();
+});
+// 侧栏可拖宽：宽度一变 chip 的换行数就变，溢出与否得重新判定
+if (window.ResizeObserver && els.tagBarChips) {
+  new ResizeObserver(syncTagChipsOverflow).observe(els.tagBarChips);
+}
+els.tagBarChips.addEventListener('scroll', syncTagChipsOverflow, { passive: true });
+// 回到首页的两个入口。
+// ① 面包屑最左段——面包屑本来就是导航路径，第一段可点回根是标准语义，
+//    而且它就在当前文档标题的左边，视线不用移动
+// ② 侧栏左上角的品牌区——"点 logo 回首页"是几乎所有人的肌肉记忆，
+//    白捡一个入口，不占任何新的界面位置
+// 面包屑每次 setActiveFile 都整体重建，所以用委托而不是直接绑
+els.crumbs.addEventListener('click', (e) => {
+  if (e.target.closest('.crumb-home')) goHome();
+});
+if (els.btnHome) els.btnHome.addEventListener('click', () => goHome());
+
 els.btnFavorite.addEventListener('click', () => {
   if (!state.activeFilePath) return;
   setFavorite(state.activeFilePath);
@@ -4184,7 +4319,7 @@ const SHORTCUTS = [
       [[MOD, 'B'], '收起 / 展开侧边栏'],
       [[MOD, 'S'], '保存改动到文件（编辑态）'],
       [['?'], '打开这份快捷键清单'],
-      [['Esc'], '关闭弹窗；焦点在搜索框时清空搜索'],
+      [['Esc'], '由近及远地退出：关弹窗 → 清空搜索 → 收起对比 → 回到首页'],
     ],
   },
   {
@@ -4337,12 +4472,27 @@ document.addEventListener('keydown', (e) => {
     els.search.focus();
     return;
   }
-  if (e.key === 'Escape' && active === els.search) {
-    els.search.value = '';
-    state.search = '';
-    state.contentMatches = new Map();
-    render();
-    updateIframeHighlight();
+  // Escape 是一条"由近及远地退出当前语境"的阶梯，从上到下越来越远：
+  //   弹窗（在上面那个 capture 层就被吃掉了，走不到这里）
+  //   → 搜索框里的这次搜索
+  //   → 对比面板
+  //   → 当前文档（回首页）
+  // 编辑态整段跳过：那时 Escape 的候选动作是"放弃改动"，不该由一个
+  // 顺手按下的键来决定，交给顶栏的「取消」按钮走确认流程。
+  if (e.key === 'Escape') {
+    if (active === els.search) {
+      els.search.value = '';
+      state.search = '';
+      state.contentMatches = new Map();
+      render();
+      updateIframeHighlight();
+      return;
+    }
+    if (isTypingTarget(active)) return;
+    if (editState.active) return;
+    if (diffState.open) { e.preventDefault(); closeDiff(); return; }
+    if (state.activeFilePath) { e.preventDefault(); goHome(); }
+    return;
   }
 });
 
@@ -4733,7 +4883,14 @@ els.tree.addEventListener('keydown', (e) => {
     e.preventDefault();
     openFile(focused.dataset.path);
   } else if (e.key === 'Escape') {
+    // 只有真的在用键盘逐行导航（行上有 .kbd-focus）时，Escape 才是"退出列表"。
+    // 鼠标点开一篇文档后焦点也会留在 .file 上（tabindex=-1 可被点击聚焦），
+    // 那时不能拦——否则全局那条 Escape 阶梯永远走不到最后一级「回首页」，
+    // 而"从侧栏点开文档"恰好是最常见的动线
+    if (!focused.classList.contains('kbd-focus')) return;
     e.preventDefault();
+    // 拦住冒泡，别让全局 Escape 顺带把文档也关掉
+    e.stopPropagation();
     setKbdFocus(null);
     els.search.focus();
   }
@@ -4847,18 +5004,9 @@ els.doctypeRadios.forEach(cb => {
       return;
     }
 
-    // 平滑刷新：只在当前预览文件失效时才重置预览，否则保持不动
-    const prevActive = state.activeFilePath;
+    // 平滑刷新：当前预览文件失效时的复位现在由 fetchState 统一处理
+    // （原来这里内联了一份，漏了关对比面板和收回顶栏按钮）
     await fetchState();
-    if (prevActive && !state.files[prevActive]) {
-      if (editState.active) exitEditMode({ restore: false });
-      state.activeFilePath = null;
-      els.preview.src = 'about:blank';
-      els.preview.classList.add('hidden');
-      els.mdEditor.classList.add('hidden');
-      els.emptyState.classList.remove('hidden');
-      els.crumbs.innerHTML = '<span class="placeholder">首页</span>';
-    }
     setScanning(false);
     t.close();
     const hasHtml = checked.includes('html'), hasMd = checked.includes('md');

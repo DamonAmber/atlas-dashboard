@@ -194,7 +194,26 @@ body.resizing iframe { pointer-events: none; }
   gap: 8px;
 }
 
-.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+/* 品牌区是个 <button>（回到首页），所以要先把浏览器默认按钮样式清干净。
+ * 视觉上仍然只是 logo + 字，靠 hover 才透出"可点" */
+.brand {
+  display: flex; align-items: center; gap: 10px; min-width: 0;
+  appearance: none;
+  border: none;
+  background: transparent;
+  margin: 0;
+  padding: 3px 6px 3px 3px;
+  margin-left: -3px;          /* 抵掉 padding，logo 左缘回到原位 */
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--r-md);
+  transition: background var(--dur-fast);
+}
+.brand:hover { background: var(--bg-hover); }
+.brand:hover .brand-title { color: var(--accent); }
+.brand:focus-visible { outline: none; box-shadow: var(--ring); }
 .brand-text { min-width: 0; }
 .brand-mark {
   width: 28px; height: 28px; border-radius: 8px;
@@ -204,7 +223,11 @@ body.resizing iframe { pointer-events: none; }
   font-size: 14px;
   flex: none;
 }
-.brand-title { font-weight: 650; letter-spacing: 0.2px; font-size: 14px; }
+.brand-title {
+  display: block;
+  font-weight: 650; letter-spacing: 0.2px; font-size: 14px;
+  transition: color var(--dur-fast);
+}
 
 .actions { display: flex; gap: 2px; flex: none; }
 
@@ -785,31 +808,62 @@ body.resizing iframe { pointer-events: none; }
  * hover 是"现在要操作"，让位是正确的取舍（完整标签仍在 title 里） */
 .file:hover .file-tags { display: none; }
 
-/* 标签筛选条：紧跟 sort-bar 的又一行。沿用 sort-bar 的 inline 工具栏风格 */
+/* ==================== 标签筛选区 ====================
+ * 和「收藏 / 最近打开」同构：section-head 分区头 + 可折叠内容区。
+ * 之所以不再沿用 sort-bar 那种 inline 工具栏风：sort-bar 是"一行两个控件"的固定
+ * 高度条，而标签数量不可控——裸 chip 直接贴在分隔线下方时，既缺一个"这排东西是
+ * 什么"的锚点，也会在标签变多时无声地把文件树往下推。给它一个头，就同时有了
+ * 呼吸空间、语义标签、计数反馈和一个能收起来的开关。
+ */
 .tag-bar {
   display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 0 12px 8px;
+  flex-direction: column;
+  /* 内边距对齐 fav-bar / recent-bar（6px 8px 8px），三段分区左右缘才在一条线上 */
+  padding: 6px 8px 8px;
   border-bottom: 1px solid var(--border);
   flex: none;
 }
 .tag-bar.hidden { display: none; }
+.tag-bar.collapsed .tag-bar-chips { display: none; }
+
+.tag-bar-head { display: flex; align-items: center; gap: 2px; }
+/* 折叠按钮吃掉整行剩余宽度：热区尽量大，不用瞄着 chevron 点 */
+.tag-bar-toggle { flex: 1; min-width: 0; width: auto; }
+/* 有筛选生效时，计数徽章用 accent 表态——即使把 chip 区收起来了，
+ * 分区头也还在说"树被过滤过，不是文档丢了" */
+.tag-bar.filtering .tag-bar-toggle .section-count {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .tag-bar-chips {
+  /* chip 尺寸抽成变量，只为让下面的 max-height 能按"几行"来表达 */
+  --tag-chip-h: 22px;
+  --tag-chip-gap: 5px;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  flex: 1;
+  gap: var(--tag-chip-gap);
   min-width: 0;
-  /* 标签多了不无限撑高侧边栏，超出可滚 */
-  max-height: 66px;
+  /* 和 section-head 的文字左缘对齐（chevron 12px + gap 6px + padding 6px） */
+  padding: 4px 2px 2px 24px;
+  /* 标签多了不无限撑高侧边栏：最多 4 行，超出可滚。
+   * 按整行算而不是拍一个 96px——差半行的截断看起来像渲染坏了，
+   * 而滚动条停在行与行之间是干净的 */
+  max-height: calc(var(--tag-chip-h) * 4 + var(--tag-chip-gap) * 3 + 6px);
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* 只有真的溢出、且还没滚到底时才做底部渐隐（class 由 JS 维护）。
+ * 无条件挂 mask 会把最后一行 chip 也一起淡掉，看着像渲染坏了；
+ * 滚到底还淡着同理——那时下面真的没东西了，不该再暗示"还有" */
+.tag-bar-chips.scrollable:not(.at-end) {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
 }
 .tag-chip {
-  display: inline-flex; align-items: center; gap: 4px;
-  height: 20px;
-  padding: 0 7px;
-  border-radius: 10px;
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--r-full);
   border: 1px solid var(--border);
   background: var(--bg-elev-2);
   color: var(--text-dim);
@@ -818,37 +872,51 @@ body.resizing iframe { pointer-events: none; }
   cursor: pointer;
   white-space: nowrap;
   max-width: 100%;
-  transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast);
+  transition: background var(--dur-fast), color var(--dur-fast),
+              border-color var(--dur-fast), box-shadow var(--dur-fast);
 }
-.tag-chip:hover { background: var(--bg-hover); color: var(--text); }
+.tag-chip:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
 .tag-chip-name { overflow: hidden; text-overflow: ellipsis; }
 .tag-chip-count {
   font-size: 9.5px;
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
-/* 选中态：accent 描边 + 淡填充。比纯文字色变化更容易在一堆 chip 里辨认 */
+/* 选中态：accent 描边 + 淡填充 + 一圈 inset 把 1px 边"加粗"到看得清。
+ * 比纯文字色变化更容易在一堆 chip 里辨认，也不至于像实心填充那样在
+ * 侧栏里糊成一片蓝 */
 .tag-chip.on {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
   font-weight: 500;
 }
+.tag-chip.on:hover { background: var(--accent-soft); color: var(--accent); }
 .tag-chip.on .tag-chip-count { color: var(--accent); }
 .tag-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* 「清除」：只在有筛选时出现，跟在分区头右侧。用文字而不是 ✕ 图标——
+ * 侧栏里已经有一排 ✕ 形状的按钮，再加一个含义完全不同的容易误点 */
 .tag-bar-clear {
   flex: none;
-  height: 20px;
-  padding: 0 6px;
+  height: 22px;
+  padding: 0 7px;
   border: none;
   background: transparent;
-  color: var(--text-faint);
+  color: var(--accent);
   font-family: inherit;
-  font-size: 10.5px;
+  font-size: 11px;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--r-xs);
+  transition: background var(--dur-fast), color var(--dur-fast);
 }
-.tag-bar-clear:hover { color: var(--text); background: var(--bg-hover); }
+.tag-bar-clear:hover { background: var(--accent-soft); }
+.tag-bar-clear:focus-visible { outline: none; box-shadow: var(--ring); }
 .tag-bar-clear.hidden { display: none; }
 
 /* 收藏夹：结构与「最近打开」一致（跨文件夹的平铺列表） */
@@ -1117,7 +1185,38 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
   white-space: nowrap;
   font-size: 12px;
 }
-.crumbs .placeholder { color: var(--text-dim); }
+/* 面包屑第一段「首页」的两个形态：
+ *   .placeholder —— 没打开文档（已经在首页了），不可点
+ *   .crumb-home  —— 打开了文档，可点回首页
+ * 图标 + 文字的排布刻意做成一样，只有 hover 底色和文字色的差别：它们是同一个
+ * 位置的两种状态，位置一致才让人相信"点它就回到刚才那个页面"，
+ * 也避免来回切换时文字横跳。 */
+.crumbs .placeholder {
+  display: inline-flex; align-items: center; gap: 4px;
+  vertical-align: middle;
+  color: var(--text-dim);
+}
+.crumbs .placeholder .ico { color: var(--text-faint); }
+.crumbs .crumb-home {
+  display: inline-flex; align-items: center; gap: 4px;
+  vertical-align: middle;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  height: 22px;
+  padding: 0 6px;
+  margin-left: -6px;          /* 让文字左缘和 .placeholder 对齐，切换时不横跳 */
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.crumbs .crumb-home .ico { color: var(--text-faint); transition: color var(--dur-fast); }
+.crumbs .crumb-home:hover { background: var(--bg-hover); color: var(--text); }
+.crumbs .crumb-home:hover .ico { color: var(--accent); }
+.crumbs .crumb-home:focus-visible { outline: none; box-shadow: var(--ring); }
 .crumbs .crumb-project { color: var(--text-dim); margin-right: 6px; }
 .crumbs .crumb-sep { color: var(--text-faint); margin: 0 5px; opacity: .7; }
 .crumbs .crumb-name,
