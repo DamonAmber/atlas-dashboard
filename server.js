@@ -186,6 +186,15 @@ function collectTagCounts(store, livePaths) {
     .sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name, 'zh'));
 }
 
+// "标为已读"该写哪个时间戳。
+// 未读判定是 seen < mtime，所以这个值必须不小于文件自身的 mtime。直接写
+// Date.now() 在 mtime 落在未来时（时钟漂移、网络盘、被 touch 到未来）清不掉
+// 红点——点完"全部标为已读"它还是未读。
+function markSeenAt(mtime) {
+  const m = Number(mtime);
+  return Math.max(Date.now(), Number.isFinite(m) ? m : 0);
+}
+
 const RECENT_MAX = 10;
 function pushRecent(store, filePath) {
   const list = (store.recent || []).filter(p => p !== filePath);
@@ -395,15 +404,24 @@ function pruneEmptyFolders(nodes) {
   return out;
 }
 
+// 归档过滤：projectName 落在 store.archivedProjects 里的文件视为"从看板隐藏"。
+//
+// 树、统计、未读、搜索、快速打开必须共用这一个可见集合。历史上只有 reconcile
+// 过滤了归档、而 /api/state 的 fileMap 用的是全量 scanned，于是出现一个自相
+// 矛盾的状态：侧边栏树里看不到归档文档，但底栏仍把它们算成未读，点"全部标为
+// 已读"也清不掉（那个接口走的是已过滤的 store.tree）。
+function visibleFiles(scanned, store) {
+  const archived = new Set(store.archivedProjects || []);
+  if (archived.size === 0) return scanned;
+  return scanned.filter(f => !archived.has(f.projectName));
+}
+
 function reconcile(store, scanned) {
   migrateLegacyRootFolders(store.tree);
 
-  // 归档：projectName 在 store.archivedProjects 里的 file 跳过——
-  // 既不进 scannedSet（也就不会被 prune 留下来），也不会被 reconcile 重建出 folder
-  const archivedSet = new Set(store.archivedProjects || []);
-  const visibleScanned = archivedSet.size === 0
-    ? scanned
-    : scanned.filter(f => !archivedSet.has(f.projectName));
+  // 归档的 file 跳过——既不进 scannedSet（也就不会被 prune 留下来），
+  // 也不会被 reconcile 重建出 folder
+  const visibleScanned = visibleFiles(scanned, store);
 
   const scannedSet = new Set(visibleScanned.map(f => f.path));
   store.tree = pruneMissing(store.tree, scannedSet);
@@ -559,10 +577,14 @@ function createWatcher(root, ignoredFn) {
       const segments = rel.split(path.sep);
       const projectName = segments.length > 1 ? segments[0] : path.basename(root);
 
+      // 归档分组一律不对外通知、也不标未读：它在看板里已经不存在了，
+      // 弹一条"文档已更新"只会让人去树里找一篇找不到的文档
+      const store = loadStore();
+      if ((store.archivedProjects || []).includes(projectName)) return;
+
       if (kind === 'change') {
         // 自我写入（编辑保存触发）不标未读
         if (!isSelfWrite(filePath, mtime)) {
-          const store = loadStore();
           delete store.seen[filePath];
           saveStore(store);
         }
@@ -792,7 +814,9 @@ app.get('/api/search', async (req, res) => {
     // 按 mtime 倒序则是"最近改过的那些里含这个词的"，符合这个工具的前提：
     // AI 刚动过的文档最可能是你在找的。
     // 不带 limit（侧栏搜索）时要读完全部文件，顺序不影响结果集，只是稳定了输出次序。
-    const scanned = (await getScannedFiles()).slice()
+    // 归档的文档要一并排除：它们在树里、统计里都不存在，正文搜索却把它们捞
+    // 出来的话，前端拿 state.files 查不到条目，命中就变成一条点不开的死结果
+    const scanned = visibleFiles(await getScannedFiles(), loadStore()).slice()
       .sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
     const matches = [];
     let truncated = false;
@@ -839,8 +863,16 @@ app.get('/api/state', async (_req, res) => {
     reconcile(store, scanned);
     let storeDirty = JSON.stringify(store.tree) !== treeBefore;
 
+    // 两个集合，用途严格分开：
+    //   diskPaths —— 磁盘上真实存在的全部文档，只用于"剪掉已消失的记录"这类清理。
+    //                归档只是隐藏，文件还在，不能因为归档就把用户的收藏/标签删掉。
+    //   visible   —— 看板可见的文档，返回给前端的一切（fileMap / favorites /
+    //                allTags / recent）都只认它，和侧边栏树保持同一口径。
+    const diskPaths = new Set(scanned.map(f => f.path));
+    const visible = visibleFiles(scanned, store);
+
     const fileMap = {};
-    for (const f of scanned) {
+    for (const f of visible) {
       fileMap[f.path] = {
         path: f.path,
         relPath: f.relPath,
@@ -864,10 +896,12 @@ app.get('/api/state', async (_req, res) => {
       };
     }
 
-    // 清理 recent 中已不存在的文件
-    const allPaths = new Set(scanned.map(f => f.path));
+    // 可见集合：下面的 favorites / allTags / recent 都按它过滤后再发给前端
+    const allPaths = new Set(visible.map(f => f.path));
+    // 清理 recent 里已消失的文件。判断用 diskPaths 而不是 allPaths——归档只是
+    // 隐藏，不该把归档分组的条目从 recent 里永久剔掉，取消归档后它得原样回来
     if (Array.isArray(store.recent)) {
-      const cleaned = store.recent.filter(p => allPaths.has(p));
+      const cleaned = store.recent.filter(p => diskPaths.has(p));
       if (cleaned.length !== store.recent.length) {
         store.recent = cleaned;
         storeDirty = true;
@@ -885,7 +919,7 @@ app.get('/api/state', async (_req, res) => {
       if (!map || typeof map !== 'object') continue;
       let changed = false;
       for (const p of Object.keys(map)) {
-        if (allPaths.has(p)) continue;
+        if (diskPaths.has(p)) continue;
         // 不在扫描结果里有两种可能：文件真被删了（该清），或只是当前 docTypes
         // 没启用它（不该清——用户在设置里取消勾选 Markdown，不代表要丢掉 md 的收藏）。
         // 收藏和标签是用户手工投入的信息，误删的代价远高于留一条僵尸记录。
@@ -914,11 +948,13 @@ app.get('/api/state', async (_req, res) => {
     res.json({
       tree: store.tree,
       files: fileMap,
-      recent: store.recent || [],
+      // recent 在 store 里保留归档项，但只把可见的发给前端
+      recent: (store.recent || []).filter(p => allPaths.has(p)),
       favorites,
       allTags,
       scanRoots: getScanRoots(),
-      scannedCount: scanned.length,
+      // 可见文档数，和 files 的口径一致（不含归档分组）
+      scannedCount: visible.length,
       docTypes: getEnabledDocTypes(),
       archivedProjects,
     });
@@ -1232,7 +1268,9 @@ app.post('/api/seen', (req, res) => {
     return res.status(400).json({ error: '路径非法' });
   }
   const store = loadStore();
-  store.seen[filePath] = Date.now();
+  let mtime = 0;
+  try { mtime = fs.statSync(filePath).mtimeMs; } catch {}
+  store.seen[filePath] = markSeenAt(mtime);
   pushRecent(store, filePath);   // 同时更新 recent
   recordSeenVersion(store, filePath);
   saveStore(store);
@@ -1288,19 +1326,31 @@ app.post('/api/diff/accept', (req, res) => {
   }
   const store = loadStore();
   const snap = recordSeenVersion(store, filePath);
-  store.seen[filePath] = Date.now();
+  let mtime = 0;
+  try { mtime = fs.statSync(filePath).mtimeMs; } catch {}
+  store.seen[filePath] = markSeenAt(mtime);
   saveStore(store);
   res.json({ ok: true, baselineAt: snap.ok ? snap.at : null });
 });
 
-app.post('/api/seen/all', (_req, res) => {
-  const store = loadStore();
-  const now = Date.now();
-  const all = new Set();
-  collectFilePaths(store.tree, all);
-  for (const p of all) store.seen[p] = now;
-  saveStore(store);
-  res.json({ ok: true });
+// 全部标为已读。
+//
+// 走"当前可见的扫描结果"而不是 store.tree：tree 会滞后于磁盘（刚落地、还没被
+// reconcile 收进树的新文件就不在里面），按 tree 标会漏掉它们，用户看到的就是
+// "点了全部标为已读，底栏还剩几篇未读"。归档分组的文件不在看板里，也不参与。
+app.post('/api/seen/all', async (_req, res) => {
+  try {
+    const scanned = await getScannedFiles();
+    const store = loadStore();
+    for (const f of visibleFiles(scanned, store)) {
+      store.seen[f.path] = markSeenAt(f.mtime);
+    }
+    saveStore(store);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.post('/api/unseen', (req, res) => {

@@ -438,6 +438,27 @@ body.resizing iframe { pointer-events: none; }
 /* tree-head 不可折叠，所以不给 chevron 位，用等宽缩进对齐上面两段 */
 .tree-head { padding-left: 24px; margin-top: 2px; }
 
+/* 全部折叠 / 全部展开：常驻但低调（分组多时是主要导航手段，藏在 hover 里
+ * 反而找不到）。和分区标题同一行右侧，紧贴计数徽章。 */
+.tree-head-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast), opacity var(--dur-fast);
+}
+.tree-head-btn:hover { background: var(--bg-hover); color: var(--text); }
+.tree-head-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tree-head-btn:disabled { opacity: 0.35; cursor: default; background: transparent; color: var(--text-faint); }
+
 /* 最近打开 */
 .recent-bar {
   border-bottom: 1px solid var(--border);

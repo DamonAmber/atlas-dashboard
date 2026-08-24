@@ -47,6 +47,8 @@ const els = {
   favCount: document.getElementById('fav-count'),
   recentCount: document.getElementById('recent-count'),
   treeCount: document.getElementById('tree-count'),
+  btnCollapseAll: document.getElementById('btn-collapse-all'),
+  collapseAllIco: document.getElementById('collapse-all-ico'),
   preview: document.getElementById('preview'),
   emptyState: document.getElementById('empty-state'),
   homeSub: document.getElementById('home-sub'),
@@ -845,6 +847,7 @@ function render() {
     els.tree.appendChild(renderNode(node));
   }
   initSortables();
+  updateCollapseAllBtn();
   if (state.activeFilePath && state.files[state.activeFilePath]) {
     setActiveFile(state.activeFilePath, false);
   }
@@ -1380,6 +1383,55 @@ function toggleFolder(id) {
   saveCollapsed();
   const el = els.tree.querySelector(`.folder[data-folder-id="${id}"]`);
   if (el) el.classList.toggle('collapsed');
+  updateCollapseAllBtn();
+}
+
+// 树里所有分组的 id（含子分组）
+function allFolderIds(nodes = state.tree, out = []) {
+  for (const n of nodes) {
+    if (n && n.type === 'folder') {
+      out.push(n.id);
+      allFolderIds(n.children || [], out);
+    }
+  }
+  return out;
+}
+
+// 全部折叠 / 全部展开。
+// 分组一多，逐个点开点关是这个界面里最费手的操作。做成一个按钮两个状态
+// （已全部折叠 → 变成"全部展开"），比并排放两个按钮省一格空间，也不用让人
+// 先判断该点哪个。
+function toggleCollapseAll() {
+  const ids = allFolderIds();
+  if (!ids.length) return;
+  const allCollapsed = ids.every(id => state.collapsed.has(id));
+  if (allCollapsed) {
+    // 顺手把陈旧 id（分组已删/改名重建）一起清掉
+    state.collapsed.clear();
+  } else {
+    for (const id of ids) state.collapsed.add(id);
+  }
+  saveCollapsed();
+  // 一次动几十个节点，不走 toggleFolder 的单节点 classList 切换，整树重渲染
+  // （render 末尾会顺带刷新按钮自身的图标与文案）
+  render();
+}
+
+function updateCollapseAllBtn() {
+  const btn = els.btnCollapseAll;
+  if (!btn) return;
+  const ids = allFolderIds();
+  // 筛选生效时树是被强制展开的（见 renderFolder 里的说明），此时折叠写进了
+  // state.collapsed 却看不到任何变化，按钮点起来像坏的——直接禁用并说明原因
+  const filtering = hasActiveFilter();
+  btn.disabled = filtering || ids.length === 0;
+  const allCollapsed = ids.length > 0 && ids.every(id => state.collapsed.has(id));
+  const label = allCollapsed ? '全部展开' : '全部折叠';
+  btn.title = filtering ? '筛选中：分组已强制展开' : label;
+  btn.setAttribute('aria-label', label);
+  if (els.collapseAllIco) {
+    els.collapseAllIco.setAttribute('href', allCollapsed ? '#i-expand-all' : '#i-collapse-all');
+  }
 }
 
 function normalizeText(s) {
@@ -1726,6 +1778,7 @@ document.addEventListener('mousemove', (e) => {
         state.collapsed.delete(folderId);
         saveCollapsed();
         folderEl.classList.remove('collapsed');
+        updateCollapseAllBtn();
       }
       head.classList.remove('drag-hover');
       dragHoverHead = null;
@@ -3881,6 +3934,10 @@ els.btnMarkAll.addEventListener('click', async () => {
   await fetch('/api/seen/all', { method: 'POST' });
   fetchState();
 });
+
+if (els.btnCollapseAll) {
+  els.btnCollapseAll.addEventListener('click', toggleCollapseAll);
+}
 
 els.btnMarkUnread.addEventListener('click', async () => {
   if (!state.activeFilePath) return;
