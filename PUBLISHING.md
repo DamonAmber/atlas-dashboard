@@ -41,27 +41,40 @@ node -e "const p=require('./package.json'); p.version='$NEW_VERSION'; require('f
 # 2. 看清单（不真发）
 npm publish --dry-run
 
-# 3. 真发布到 npm（已配 token，免 OTP）
-npm publish
-
-# 4. 验证 registry 同步
-npm view atlas-dashboard version
-
-# 5. push 到 GitHub（CI 会自动跑测试）
-git add -A
+# 3. commit + push 到 GitHub（CI 自动跑测试）
+git add <改动的文件>          # 别用 -A，避免把 tgz / 临时脚本带进去
 git commit -m "feat/fix: <一句话描述本版改动>"
 git push
 
-# 6. 创建并推送 tag → 自动触发 GitHub Release workflow
+# 4. 等 CI 绿（publish 是不可逆的，绿灯之后再发）
+gh run watch                  # 或 gh run list --limit 1
+
+# 5. 真发布到 npm（已配 token，免 OTP）
+npm publish
+
+# 6. 验证 registry 同步
+npm view atlas-dashboard version
+
+# 7. 创建并推送 tag → 自动触发 GitHub Release workflow
 git tag "v$NEW_VERSION"
 git push origin "v$NEW_VERSION"
 
-# 7. 升级本机的全局 atlas（让未来发版时 update-check 基准是新版）
+# 8. 升级本机的全局 atlas（让未来发版时 update-check 基准是新版）
 npm install -g atlas-dashboard@latest
 atlas --version   # 应显示新版本号
+atlas restart     # 让本机服务也用新版
 ```
 
 发完之后**必看**：[验证发版成功](#验证发版成功) 章节确认 4 项绿。
+
+> **为什么是「先 push，再 publish，最后 tag」**（0.14.0 起改成这个顺序）：
+> 三步里只有 `npm publish` 不可逆（24h 外只能 deprecate，版本号永久占用），
+> 所以要把它排在能反悔的步骤之后、并且拿到 CI 绿灯再按。
+> 早先的顺序是 publish 在 push 之前，风险是**发完包才发现推不上去**
+> （git 凭据过期、CI 红、本地有没提交干净的东西）——那时 npm 上就有了一个
+> GitHub 上找不到对应代码的版本，只能靠再发一个补丁号收场。
+> 唯一的硬约束是 **tag 必须在 publish 之后**：tag 触发的 Release 说明里带
+> `npmjs.com/package/atlas-dashboard/v/<版本>` 链接，包还没上架就是一条坏链。
 
 ---
 
@@ -77,7 +90,15 @@ grep authToken ~/.npmrc             # token 已配置？(应输出 1 行)
 atlas status                        # atlas 服务在跑？(测试需要)
 ```
 
-如果任意一项不对，停下来修，不要发版。
+如果任意一项不对，停下来修，不要发版。**唯一的例外是 `gh auth status`**：
+`gh` 只用来看 CI 状态和验证 Release，本仓库是 public，这两件事都能用匿名
+`api.github.com` 替代（见[步骤 4](#步骤-4commit--push) 与[验证发版成功](#验证发版成功)），
+所以它失效不阻塞发版——但**发完要提醒用户重新 `gh auth login`**。
+
+注意 `gh` 和 `git push` 用的是**两套凭据**：`gh` 存在系统 keyring，`git push` 走
+`credential.helper`（本机是 `osxkeychain`）。所以 `gh` 红了不代表推不上去，
+反之亦然。想在 publish 之前确认 push 权限，最可靠的就是先把 commit 推上去
+（这也正是[步骤 4](#步骤-4commit--push) 排在 publish 之前的原因）。
 
 ---
 
@@ -239,21 +260,12 @@ npm publish --dry-run
 - `total files:` 应在 20~26 之间（当前为 23；bin/lib/public/server/README/LICENSE，包含 vendored 前端依赖）
 - 不应含 `tests/`、`data/`、`*.tgz`、`config.json`（这些在 `package.json` 的 `files` 白名单外）
 
-### 步骤 4：真实发布
+### 步骤 4：commit + push
 
 ```bash
-npm publish
-```
-
-期望最后一行是 `+ atlas-dashboard@<新版本>`。
-
-> 当前账号配置了 **Granular Access Token with bypass 2FA**（写到 `~/.npmrc`），所以**不需要 OTP**。如果 token 失效（403）或被撤销，去 https://www.npmjs.com/settings/d4monwang/tokens 重新生成。
-
-### 步骤 5：commit + push
-
-```bash
-git add -A
-git status -s   # 确认改动范围
+git add <改动的文件>   # 逐个列出，别用 -A —— npm pack 留下的 tgz、临时验证脚本
+                       # 都可能还在工作区，被顺手带进 commit
+git status -s          # 确认改动范围
 git commit -m "$(cat <<'EOF'
 feat/fix(<scope>): <概括，不超过 72 字符>
 
@@ -265,14 +277,34 @@ EOF
 git push
 ```
 
-GitHub Actions `tests` workflow 会自动跑（push 触发）。**等它绿**再继续。看状态：
+GitHub Actions `tests` workflow 会自动跑（push 触发）。**必须等它绿再进下一步**——
+下一步 `npm publish` 是整个流程里唯一不可逆的动作。看状态：
 
 ```bash
 gh run list --limit 1
 gh run watch   # 实时跟随最新 run（可选）
 ```
 
+> `gh` 登录失效时的替代（本仓库是 public，Actions 与 Release 状态匿名可读）：
+> ```bash
+> curl -s "https://api.github.com/repos/DamonAmber/atlas-dashboard/actions/runs?per_page=3" \
+>   | grep -E '"(name|status|conclusion|head_sha)"' | head -12
+> ```
+
+### 步骤 5：真实发布
+
+```bash
+npm publish
+npm view atlas-dashboard version   # 确认 registry 已同步
+```
+
+期望 publish 最后一行是 `+ atlas-dashboard@<新版本>`。
+
+> 当前账号配置了 **Granular Access Token with bypass 2FA**（写到 `~/.npmrc`），所以**不需要 OTP**。如果 token 失效（403）或被撤销，去 https://www.npmjs.com/settings/d4monwang/tokens 重新生成。
+
 ### 步骤 6：打 tag → 自动创建 GitHub Release
+
+> **必须在步骤 5 成功之后**：Release 说明里带 npm 版本页链接，包没上架就是坏链。
 
 ```bash
 git tag "v$NEW_VERSION"
@@ -337,6 +369,22 @@ curl -sL "https://damonamber.github.io/atlas-dashboard/?_=$(date +%s)" | grep -q
 
 注意 ④ 需要等 GitHub Pages 重新部署（约 1-2 分钟）。
 
+`gh` 登录失效时，②③ 换成匿名 API（public 仓库可读）：
+
+```bash
+# ② Release
+curl -s "https://api.github.com/repos/DamonAmber/atlas-dashboard/releases/tags/v$NEW_VERSION" \
+  | grep -q "\"tag_name\": \"v$NEW_VERSION\"" && echo "✓ GitHub Release"
+
+# ③ tests workflow
+curl -s "https://api.github.com/repos/DamonAmber/atlas-dashboard/actions/runs?per_page=5" \
+  | grep -B3 '"name": "tests"' | head -20   # 看最近一条 tests 的 conclusion
+```
+
+> ⚠️ 这几条 curl **会间歇性返回空响应**（网络抖动），空响应 `grep` 不到就会误判成
+> "未创建"。0.14.0 发版时验证 ② 就先红了一次、重试即绿。**判失败前一定要重试
+> 2~3 次**，别急着去查根本不存在的问题。
+
 ---
 
 ## 故障排查
@@ -347,7 +395,9 @@ curl -sL "https://damonamber.github.io/atlas-dashboard/?_=$(date +%s)" | grep -q
 | `npm publish` → **E404 `PUT https://registry.npmjs.org/atlas-dashboard - Not found`** | **同样是 token 失效**，不是包不存在。npm 对无效凭据的 publish 会返回 404 而不是 401（避免泄漏包是否存在）。先跑 `npm whoami` 确认：401 就是 token 问题，按上一行重新生成。注意 `npm publish --dry-run` **不校验凭据**，dry-run 通过不代表能发。<br>快速判定（不打印 token）：<br>`TOKEN=$(node -e "process.stdout.write(require('fs').readFileSync(process.env.HOME+'/.npmrc','utf8').match(/_authToken=(.+)/)[1].trim())")`<br>`curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOKEN" https://registry.npmjs.org/-/whoami`<br>200 = token 有效，401 = 该换了。<br>**此时不要 push tag**：Release 说明里会带 npm 链接，npm 上没有对应版本就是坏链。先修 token → publish 成功 → 再 commit/push/tag。 |
 | `npm publish` → 403 Two-factor authentication | token 没勾 bypass-2FA。重生成时确保勾上 **"Bypass two-factor authentication when publishing packages"** |
 | `npm publish` → `You cannot publish over the previously published versions` | 同一版本号重复发。`npm version` 已经升过版本号，你忘了改 `package.json`。重新 step 2 |
+| `gh auth status` → **The token in keyring is invalid** | gh 的 token 过期（和 `git push` 用的 `osxkeychain` 凭据是两套，所以 push 照样能成）。**不阻塞发版**：CI 状态与 Release 验证都能用匿名 `api.github.com` 替代（见[步骤 4](#步骤-4commit--push)、[验证发版成功](#验证发版成功)）。发完让用户自己跑 `gh auth login -h github.com`——OAuth 要开浏览器，AI 代不了。0.14.0 发版时遇到过。 |
 | `git push origin v*` 后 release workflow 失败 | 看 `gh run view <run-id> --log-failed`。最常见：PUBLISHING.md 格式不对，awk 抽不到内容。确保版本行格式严格是 `- **X.Y.Z** (...)` |
+| 打 tag 前想确认 awk 能抽到本版变更日志 | 本地预演一遍，避免 Release body 落到 fallback 的那一行：<br>`awk -v ver="$NEW_VERSION" '/^- \*\*[0-9]+\.[0-9]+\.[0-9]+\*\*/ { if (found) exit; if ($0 ~ "\\*\\*" ver "\\*\\*") found = 1 } found { print }' PUBLISHING.md \| wc -c`<br>输出远大于 200 字节就说明抽到了正文。 |
 | 发完别人 `npm i -g` 装不到 | 等 1-2 分钟 CDN 同步。`npm view atlas-dashboard versions` 看是否已在 registry |
 | 发完发现 bug | 见 [紧急回滚](#紧急回滚) |
 | tests workflow 失败但本地通过 | 多半是 fixture HTML 不够长 / 不含某关键字。看 `.github/workflows/test.yml` 里 `Prepare fixture HTML files` 那一步，按需调整 |
@@ -440,7 +490,9 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 1. **先读这份文档**，特别是 [TL;DR](#tldr--标准发版命令序列) 和 [前置检查](#前置检查每次发版前)。
 2. **不确定时不要发**——问用户具体期望、版本号要不要 patch 还是 minor。
-3. **publish 前必须 dry-run** 确认包内容。
+3. **publish 前必须 dry-run** 确认包内容，并且**必须先 commit + push 拿到 CI 绿灯**。
+   `npm publish` 是整个流程里唯一不可逆的一步（24h 外只能 deprecate，版本号永久占用），
+   把它排在所有能反悔的动作之后。tag 则必须排在 publish 之后。
 4. **凭据类东西从不在聊天里贴**：npm token、access token、recovery codes、密码——一律让用户在他自己终端粘贴到 `~/.npmrc` 或环境变量。
 5. **发布后必须验证**（[验证发版成功](#验证发版成功) 4 项）。
 6. **流程有变化？发完最后必须做的事**：
@@ -458,7 +510,7 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
 
-- **0.14.0** (2026-08-24) — 新功能：**回到首页**；UI 优化：**标签筛选区重做**。① 「回到首页」（`public/app.js` / `index.html` / `styles.css`）：0.12.0 把右侧空白做成了首页概览（待看队列 / 最近打开 / 收藏），但**打开第一篇文档之后就再也回不去了**——`state.activeFilePath` 一旦被赋值就没有任何路径让它回到 `null`，iframe 永远挂着最后打开的那篇，顶栏那三组「针对当前文档」的按钮永远可用，想再看一眼首页只能刷新整个页面。全项目只有一处内联的复位代码（设置里切换扫描类型、当前文件恰好失效时那 6 行），而且它自己也漏了关对比面板、漏了把顶栏按钮收回禁用态。现在抽出 `goHome()` 作为 `setActiveFile()` 的反操作：卸载 iframe（走 `about:blank` 而不是 `src=''`，后者在部分内核里会重新 GET 当前目录、闪一个 `Cannot GET`，与 `reloadPreviewDoc` 同一个理由）、清 `loading` 类（残留 `opacity:0` 会让下次打开先闪一下空白）、收起 md 编辑器与对比面板、清掉树里的 `.active`、把 9 个顶栏按钮逐个置回 `disabled`（它们此前只在 `setActiveFile` 里被 `= false` 打开过，反向路径根本不存在）、并重画首页与收藏 / 最近列表。编辑态下走 `confirmDiscardIfDirty()` 确认，选「继续编辑」则整个动作中止（返回 `false`）；草稿仍按既有机制落到 `atlas:mdDrafts` 留 7 天。② 三个入口：**面包屑最左段**（主入口）——面包屑原来是「项目 › 文件名」，压根没有根，而面包屑的第一段本来就该是可点回根的，这个缺口正是"没法回首页"的直接原因；现在是「⌂ 首页 › HTML 项目 › 文件名」。没打开文档时同一位置是不可点的占位，两个形态用同一套 markup（图标 + 文字），位置逐像素对齐、来回切换不横跳——第一版占位只有纯文字，切换时"首页"二字会横跳 13px，看起来像两个不同的东西。**侧栏左上角的 Atlas logo** 改成 button（点 logo 回首页是通用肌肉记忆，白捡一个入口且不占新的界面位置）。**`Esc`**——原来只处理"焦点在搜索框时清空搜索"，现在整理成一条由近及远的退出阶梯：关弹窗（在既有的 capture 层就被吃掉）→ 清空搜索 → 收起对比面板 → 回首页；编辑态整段跳过，那时 Esc 的候选动作是"放弃改动"，不该由一个顺手按下的键来决定。③ 这里有个不改就等于白做的坑：目录树的 keydown 原来**无条件**把 Escape 解释成"退出列表回搜索框"，而文件行是 `tabIndex = -1`、鼠标点击也会让它获得焦点——于是"从侧栏点开一篇文档"（最常见的动线）之后按 Esc，事件被树吃掉，全局那条阶梯永远走不到最后一级。改成只在行上真的有 `.kbd-focus`（即确实在用键盘逐行导航）时才拦截，并补上 `stopPropagation()`。④ 一个刻意的取舍：**`Esc` 不加进预览 iframe 的快捷键桥**（`PREVIEW_BRIDGED_BARE_KEYS`）。带 lightbox / 浮层的 HTML 报告普遍用 Escape 关闭自己的弹层，抢过来会把文档本身的交互弄坏——和单键 `/` 不转发是同一个理由。代价是读文档时按 Esc 不回首页，但那个场景鼠标本来就在手上，面包屑和 logo 两个入口都在视野里；README 与快捷键说明里都写明了这一点。⑤ 顺带收口三个**当前文档已经不存在了却不复位**的既有缺陷：归档分组、文档在磁盘上被删、切换扫描文档类型。前两个此前完全没有任何复位——侧栏树里已经找不到那篇文档了，预览区却还挂着它，顶栏按钮全可用，点刷新 / 分享 / 导出全是 404。现在统一放在 `fetchState()` 里：拿到新 `state.files` 后发现 `activeFilePath` 不在其中就 `goHome({ confirmDirty: false })`（文件都没了，弹「放弃改动吗」只会拦住必须发生的复位）。⑥ 标签筛选区重做（`public/styles.css` / `app.js` / `index.html`）：0.10.0 加的标签筛选条 `padding: 0 12px 8px`，**顶部间距是 0**，一排裸 chip 直接顶在排序栏的分隔线上，既没有"这排东西是干什么的"的锚点，标签一多还会无声地把文件树往下挤。现在改成与「收藏 / 最近打开」同构的可折叠分区：`section-head` 分区头（标签图标 + 「标签」+ 计数徽章）+ 内容区，顶部有 11px 呼吸空间；整行可点折叠、状态持久化到 `atlas:tagsCollapsed`；计数平时是标签总数、筛选中变成「已选 / 总数」并转成 accent 色——收起来之后这是唯一还能看出"树被过滤过"的地方，所以必须带上已选数。chip 从 20px 提到 22px、圆角改 `--r-full`、选中态加一圈 inset 描边把 1px 边"加粗"到看得清；chips 区左缘缩进 24px 与分区标题文字对齐，`max-height` 按「4 行」算（`calc(22px*4 + 5px*3 + 6px)`）而不是拍一个 96px——差半行的截断看起来像渲染坏了，而滚动停在行与行之间是干净的；溢出时底部渐隐提示"下面还有"，**滚到底自动撤掉渐隐**（继续淡着反而像没渲染完），渐隐 class 由 `syncTagChipsOverflow()` 维护并挂了 `ResizeObserver` 应对侧栏拖宽。⑦ 测试：临时写了 49 项断言覆盖三个入口、`Esc` 的四级优先级、编辑态确认与草稿保留、文件删除与归档后的自动复位、chips 溢出与滚到底的渐隐状态，全绿后按项目惯例删除（未新增 spec 文件）。全套 35 个 spec 全绿（`e2e-install` 按流程单独 `npm pack` 后跑，`scroll-after-toggle` 的跳过经 `git stash` 前后对比确认是既有行为而非本次回归）。现有 spec 里用到面包屑的几处断言（`#crumbs .crumb-name`、`textContent` 含文件名）不受结构变化影响。README 与 landing page 同步。
+- **0.14.0** (2026-08-24) — 新功能：**回到首页**；UI 优化：**标签筛选区重做**。① 「回到首页」（`public/app.js` / `index.html` / `styles.css`）：0.12.0 把右侧空白做成了首页概览（待看队列 / 最近打开 / 收藏），但**打开第一篇文档之后就再也回不去了**——`state.activeFilePath` 一旦被赋值就没有任何路径让它回到 `null`，iframe 永远挂着最后打开的那篇，顶栏那三组「针对当前文档」的按钮永远可用，想再看一眼首页只能刷新整个页面。全项目只有一处内联的复位代码（设置里切换扫描类型、当前文件恰好失效时那 6 行），而且它自己也漏了关对比面板、漏了把顶栏按钮收回禁用态。现在抽出 `goHome()` 作为 `setActiveFile()` 的反操作：卸载 iframe（走 `about:blank` 而不是 `src=''`，后者在部分内核里会重新 GET 当前目录、闪一个 `Cannot GET`，与 `reloadPreviewDoc` 同一个理由）、清 `loading` 类（残留 `opacity:0` 会让下次打开先闪一下空白）、收起 md 编辑器与对比面板、清掉树里的 `.active`、把 9 个顶栏按钮逐个置回 `disabled`（它们此前只在 `setActiveFile` 里被 `= false` 打开过，反向路径根本不存在）、并重画首页与收藏 / 最近列表。编辑态下走 `confirmDiscardIfDirty()` 确认，选「继续编辑」则整个动作中止（返回 `false`）；草稿仍按既有机制落到 `atlas:mdDrafts` 留 7 天。② 三个入口：**面包屑最左段**（主入口）——面包屑原来是「项目 › 文件名」，压根没有根，而面包屑的第一段本来就该是可点回根的，这个缺口正是"没法回首页"的直接原因；现在是「⌂ 首页 › HTML 项目 › 文件名」。没打开文档时同一位置是不可点的占位，两个形态用同一套 markup（图标 + 文字），位置逐像素对齐、来回切换不横跳——第一版占位只有纯文字，切换时"首页"二字会横跳 13px，看起来像两个不同的东西。**侧栏左上角的 Atlas logo** 改成 button（点 logo 回首页是通用肌肉记忆，白捡一个入口且不占新的界面位置）。**`Esc`**——原来只处理"焦点在搜索框时清空搜索"，现在整理成一条由近及远的退出阶梯：关弹窗（在既有的 capture 层就被吃掉）→ 清空搜索 → 收起对比面板 → 回首页；编辑态整段跳过，那时 Esc 的候选动作是"放弃改动"，不该由一个顺手按下的键来决定。③ 这里有个不改就等于白做的坑：目录树的 keydown 原来**无条件**把 Escape 解释成"退出列表回搜索框"，而文件行是 `tabIndex = -1`、鼠标点击也会让它获得焦点——于是"从侧栏点开一篇文档"（最常见的动线）之后按 Esc，事件被树吃掉，全局那条阶梯永远走不到最后一级。改成只在行上真的有 `.kbd-focus`（即确实在用键盘逐行导航）时才拦截，并补上 `stopPropagation()`。④ 一个刻意的取舍：**`Esc` 不加进预览 iframe 的快捷键桥**（`PREVIEW_BRIDGED_BARE_KEYS`）。带 lightbox / 浮层的 HTML 报告普遍用 Escape 关闭自己的弹层，抢过来会把文档本身的交互弄坏——和单键 `/` 不转发是同一个理由。代价是读文档时按 Esc 不回首页，但那个场景鼠标本来就在手上，面包屑和 logo 两个入口都在视野里；README 与快捷键说明里都写明了这一点。⑤ 顺带收口三个**当前文档已经不存在了却不复位**的既有缺陷：归档分组、文档在磁盘上被删、切换扫描文档类型。前两个此前完全没有任何复位——侧栏树里已经找不到那篇文档了，预览区却还挂着它，顶栏按钮全可用，点刷新 / 分享 / 导出全是 404。现在统一放在 `fetchState()` 里：拿到新 `state.files` 后发现 `activeFilePath` 不在其中就 `goHome({ confirmDirty: false })`（文件都没了，弹「放弃改动吗」只会拦住必须发生的复位）。⑥ 标签筛选区重做（`public/styles.css` / `app.js` / `index.html`）：0.10.0 加的标签筛选条 `padding: 0 12px 8px`，**顶部间距是 0**，一排裸 chip 直接顶在排序栏的分隔线上，既没有"这排东西是干什么的"的锚点，标签一多还会无声地把文件树往下挤。现在改成与「收藏 / 最近打开」同构的可折叠分区：`section-head` 分区头（标签图标 + 「标签」+ 计数徽章）+ 内容区，顶部有 11px 呼吸空间；整行可点折叠、状态持久化到 `atlas:tagsCollapsed`；计数平时是标签总数、筛选中变成「已选 / 总数」并转成 accent 色——收起来之后这是唯一还能看出"树被过滤过"的地方，所以必须带上已选数。chip 从 20px 提到 22px、圆角改 `--r-full`、选中态加一圈 inset 描边把 1px 边"加粗"到看得清；chips 区左缘缩进 24px 与分区标题文字对齐，`max-height` 按「4 行」算（`calc(22px*4 + 5px*3 + 6px)`）而不是拍一个 96px——差半行的截断看起来像渲染坏了，而滚动停在行与行之间是干净的；溢出时底部渐隐提示"下面还有"，**滚到底自动撤掉渐隐**（继续淡着反而像没渲染完），渐隐 class 由 `syncTagChipsOverflow()` 维护并挂了 `ResizeObserver` 应对侧栏拖宽。⑦ 测试：临时写了 49 项断言覆盖三个入口、`Esc` 的四级优先级、编辑态确认与草稿保留、文件删除与归档后的自动复位、chips 溢出与滚到底的渐隐状态，全绿后按项目惯例删除（未新增 spec 文件）。全套 35 个 spec 全绿（`e2e-install` 按流程单独 `npm pack` 后跑，`scroll-after-toggle` 的跳过经 `git stash` 前后对比确认是既有行为而非本次回归）。现有 spec 里用到面包屑的几处断言（`#crumbs .crumb-name`、`textContent` 含文件名）不受结构变化影响。README 与 landing page 同步。⑧ **发版流程本身改了两处**（本文档已同步）：其一，标准命令序列从「publish → push → tag」调整为「**push → 等 CI 绿 → publish → tag**」——`npm publish` 是唯一不可逆的一步，原顺序的风险是发完包才发现推不上去（git 凭据过期 / CI 红），npm 上就留下一个 GitHub 上找不到对应代码的版本；唯一的硬约束「tag 必须在 publish 之后」（否则 Release 里的 npm 链接是坏链）仍然满足。其二，本次前置检查时 `gh auth status` 报 keyring token 失效，追查后确认 **`gh` 与 `git push` 用的是两套凭据**（keyring vs `osxkeychain`），且本仓库是 public、CI 状态与 Release 都能用匿名 `api.github.com` 读到，所以 gh 失效**不阻塞发版**——已把这条例外、替代命令、以及"匿名 curl 会间歇返回空响应、判失败前先重试 2~3 次"（本次验证 ② 就先误红了一次）都写进前置检查 / 步骤 4 / 验证章节 / 故障排查。
 
 - **0.13.0** (2026-08-24) — Bug 修复：**「全部标为已读」点完还剩几篇未读**；新功能：**目录树全部折叠 / 全部展开**。① 未读口径修复（`server.js`）：归档过滤此前只做在 `reconcile()` 这一层（建目录树时跳过 `store.archivedProjects` 里的 projectName），而 `/api/state` 返回给前端的 `fileMap` 用的是**全量** `scanned`。底栏「N 篇文档 · M 未读」和首页「待看」都基于 `files`，于是把归档分组的文档也算进去了；偏偏 `/api/seen/all` 遍历的是**已过滤**的 `store.tree`，那几篇根本不在里面——形成一个自相矛盾的状态：侧边栏树里看不到它们，底栏却一直挂着未读数，点多少次「全部标为已读」都清不掉。现在抽出 `visibleFiles(scanned, store)`，树 / 统计 / 未读 / 正文搜索 / ⌘K 共用同一个可见集合。这里要区分两个集合：清理类逻辑（recent 剪枝、收藏与标签的惰性剪枝）继续按**磁盘全量** `diskPaths` 判断——归档只是隐藏，文件还在磁盘上，按可见集合判断会把用户手工投入的收藏和标签当成"文件已删"清掉，取消归档后就找不回来了；返回给前端的一切（`fileMap` / `favorites` / `allTags` / `recent` / `scannedCount`）才按可见集合过滤。② 同源修掉三处：**「全部标为已读」改成按当前扫描结果标记而不是走 `store.tree`**——树会滞后于磁盘（刚落地、还没被 reconcile 收进树的新文件不在里面），按树标会漏掉它们，这是同一句用户抱怨的第二个成因，与归档无关也能复现；新增 `markSeenAt(mtime)` 把已读时间戳改成 `max(Date.now(), mtime)`，因为未读判定是 `seen < mtime`，文件 mtime 落在未来时（时钟漂移、网络盘、被 touch 过）只写 `Date.now()` 红点是清不掉的，`/api/seen` 与 `/api/diff/accept` 一并改；watcher 的 `onEvent` 里归档分组不再 emit SSE 事件、也不再清 `seen`——否则会弹一条「文档已更新」桌面通知，点开去树里却找不到那篇文档。`/api/search` 也过滤归档，不然正文命中回到前端拿 `state.files` 查不到条目，等于一条点不开的死结果。③ 新功能「全部折叠」（`public/index.html` / `app.js` / `styles.css`）：分组一多，逐个点开点关是这个界面里最费手的操作。「全部文档」标题栏右侧加一个按钮，做成**一个按钮两个状态**（已全部折叠 → 图标翻成 `⌄⌄` 变「全部展开」），比并排放两个按钮省一格空间，也不用先判断该点哪个；沿用已有的 `atlas:collapsed` 持久化，刷新后保持。新增 `allFolderIds()` 递归收集含子分组的全部 id、`toggleCollapseAll()`、`updateCollapseAllBtn()`（挂在 `render()` 末尾与 `toggleFolder()`、拖拽悬停自动展开这两条会改折叠状态的路径上）。一个刻意的取舍：**搜索 / 标签筛选生效时该按钮禁用**并在 title 里说明原因——筛选态下目录树是被强制展开的（0.10.1 修的那个"筛选了但什么都没出来"），此时折叠会写进 `state.collapsed` 却没有任何视觉变化，点起来像坏的。图标两版：先画的"两个箭头向中线聚拢 + 一条横线"在 13px 下三条线间距不到 1.5px，糊成一团，换成双 chevron（向上=收起 / 向下=展开），和分组行自己的 chevron 同一套语义。④ 测试：新增 `archive-and-collapse-all.spec.js`（34 项），覆盖归档前后的 files 口径 / tree 与 scannedCount 一致 / 全部标为已读后一篇未读不剩 / mtime 在未来的文档也能标掉 / 正文搜索不捞归档文档 / 取消归档后原样回来（且仍是未读）/ 前端底栏文案与首页待看空态 / 折叠按钮的两个状态与图标翻转、localStorage、刷新后保持、筛选态禁用；已挂进 `npm test`。全套 35 个 spec 全绿，`npm test` 616 项断言。README 与 landing page 同步。
 
