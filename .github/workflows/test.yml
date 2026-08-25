@@ -50,6 +50,9 @@ jobs:
         run: |
           set -e
           for spec in \
+            rich-render \
+            sandbox-trust \
+            plain-formats \
             preview-live-edit \
             favorites-and-tags \
             archive-and-collapse-all \

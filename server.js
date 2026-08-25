@@ -17,6 +17,7 @@ const editBackup = require('./lib/edit-backup');
 const versionStore = require('./lib/version-store');
 const diffLib = require('./lib/diff');
 const markdown = require('./public/vendor/markdown.js');
+const plainRender = require('./lib/plain-render');
 const pkg = require('./package.json');
 
 // 路径注入：CLI（bin/atlas.js）通过环境变量传，开发模式落到默认 ~/.atlas/
@@ -56,13 +57,25 @@ function getMaxDepth() {
   return config.maxDepth || 6;
 }
 
-// 文档类型：HTML 与 Markdown 可共存。config.docTypes 是启用类型的数组，
-// 例如 ['html','md']（默认两者都扫）。决定扫描哪些文件、如何预览/编辑。
+// 文档类型：多种可共存。config.docTypes 是启用类型的数组，
+// 例如 ['html','md']（默认这两种）。决定扫描哪些文件、如何预览/编辑。
+//
+// csv / json / txt / svg 默认关闭。它们是"需要时才打开"的：AI 顺手导出的
+// 数据文件通常比正文多得多（一次分析吐十几个 csv 很常见），无条件扫进来
+// 会把目录树冲淡，未读红点也跟着失真——而红点的价值全在于稀缺。
 const DOC_EXTENSIONS = {
   html: ['.html', '.htm'],
   md: ['.md', '.markdown'],
+  csv: ['.csv', '.tsv'],
+  json: ['.json'],
+  txt: ['.txt', '.text'],
+  svg: ['.svg'],
 };
-const ALL_DOC_TYPES = ['html', 'md'];
+const ALL_DOC_TYPES = ['html', 'md', 'csv', 'json', 'txt', 'svg'];
+const DEFAULT_DOC_TYPES = ['html', 'md'];
+// 这几种只读预览，没有编辑器（Atlas 的定位是"看 AI 产出了什么"，
+// 改数据文件该用对应的专业工具）
+const READONLY_DOC_TYPES = new Set(['csv', 'json', 'txt', 'svg']);
 // 返回当前启用的类型数组（含旧配置兼容：单选 docType → 数组）
 function getEnabledDocTypes() {
   if (Array.isArray(config.docTypes)) {
@@ -72,8 +85,8 @@ function getEnabledDocTypes() {
   // 旧版单选字段兼容
   if (config.docType === 'md') return ['md'];
   if (config.docType === 'html') return ['html'];
-  // 全新默认：两种都扫（共存）
-  return ['html', 'md'];
+  // 全新默认：HTML + Markdown
+  return DEFAULT_DOC_TYPES.slice();
 }
 // 当前启用类型对应的所有扩展名
 function currentExtensions() {
@@ -85,10 +98,14 @@ function matchesDocType(name) {
   const lower = name.toLowerCase();
   return currentExtensions().some(ext => lower.endsWith(ext));
 }
-// 单个文件的文档类型（按扩展名判断，与启用配置无关）——用于逐文件标注
+// 单个文件的文档类型（按扩展名判断，与启用配置无关）——用于逐文件标注。
+// html 兜底：走到这里的一定是索引里的文档，扩展名都在名单内
 function docTypeOfPath(p) {
   const lower = String(p).toLowerCase();
-  if (DOC_EXTENSIONS.md.some(ext => lower.endsWith(ext))) return 'md';
+  for (const type of ALL_DOC_TYPES) {
+    if (type === 'html') continue;   // 放最后当兜底
+    if (DOC_EXTENSIONS[type].some(ext => lower.endsWith(ext))) return type;
+  }
   return 'html';
 }
 
@@ -102,6 +119,9 @@ function emptyStore() {
     favorites: {},
     // path → string[]（标签，已去重、保持用户输入顺序）
     tags: {},
+    // path → epochMs（用户显式信任这份 HTML 的时间）。
+    // 未信任的 HTML 在沙箱 iframe 里预览，拿不到 Atlas 的同源权限。
+    trusted: {},
   };
 }
 
@@ -126,6 +146,7 @@ function migrateStore(raw) {
     raw.seenVersions = (raw.seenVersions && typeof raw.seenVersions === 'object') ? raw.seenVersions : {};
     raw.favorites = (raw.favorites && typeof raw.favorites === 'object') ? raw.favorites : {};
     raw.tags = (raw.tags && typeof raw.tags === 'object') ? raw.tags : {};
+    raw.trusted = (raw.trusted && typeof raw.trusted === 'object') ? raw.trusted : {};
     return raw;
   }
   // 旧版 {folders: [{id,name,files:[]}], seen}
@@ -751,6 +772,10 @@ app.use((req, res, next) => {
   if (LOCAL_ADDRS.has(addr)) return next();
   // 非本机：只放行 /share/<token>/* 这一系列分享路径
   if (req.path.startsWith('/share/')) return next();
+  // 以及 /vendor/ 下的渲染库——分享出去的 Markdown 页面要靠它渲染
+  // 图表与公式。里面是 mermaid / KaTeX / Sortable / qrcode 和 Atlas 自己的
+  // Markdown 渲染器，全是公开的前端代码，不含任何本机信息。
+  if (req.path.startsWith('/vendor/')) return next();
   res.status(403).type('html').send(
     '<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>Atlas</title>' +
     '<style>body{font-family:-apple-system,system-ui,"PingFang SC",sans-serif;color:#444;background:#f6f7f9;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:2rem;text-align:center;line-height:1.6}main{max-width:520px}h1{font-size:18px;margin:0 0 12px}p{font-size:14px;color:#666}code{background:#fff;padding:2px 6px;border-radius:4px;border:1px solid #e3e6ec}</style>' +
@@ -759,6 +784,58 @@ app.use((req, res, next) => {
     '</main></body></html>'
   );
 });
+
+// 写类请求的 Origin 校验。
+//
+// 要挡的是什么：预览的 HTML 是 AI 生成的，它跑在 Atlas 自己的源上（localhost:PORT）。
+// 只要它的脚本发一个 fetch("/api/save-md", …)，浏览器就会认为这是同源请求照发不误——
+// 一份文档因此能改写磁盘上的别的文档、能开分享链接、能读扫描根配置。
+// 现在预览默认走沙箱（见 /api/trust），沙箱文档的源是 opaque，它发出的请求
+// Origin 头是字面量 "null"，在这里被挡住；这一层是沙箱之外的第二道锁，
+// 万一将来某条路径漏了 sandbox 属性，写操作仍然进不来。
+//
+// 没有 Origin 的请求放行：curl、atlas 自己的 CLI、node 里的测试脚本都不带这个头，
+// 而浏览器对 fetch/XHR 的写请求一定会带。挡住浏览器就够了。
+const TRUSTED_ORIGIN_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+function isTrustedOrigin(origin) {
+  if (typeof origin !== 'string' || !origin) return false;
+  let u;
+  try { u = new URL(origin); } catch { return false; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  if (!TRUSTED_ORIGIN_HOSTS.has(u.hostname)) return false;
+  // 端口必须是 dashboard 自己的：本机上另一个服务的页面同样不该能写这里
+  return (u.port || '80') === String(PORT);
+}
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+  const origin = req.headers.origin;
+  if (!origin) return next();
+  if (isTrustedOrigin(origin)) return next();
+  return res.status(403).json({
+    error: 'origin-forbidden',
+    message: '这个来源不允许改动 Atlas 的数据。沙箱预览里的文档没有写权限。',
+  });
+});
+
+// 第三方渲染库（固定版本，只随 Atlas 升级变化）允许协商缓存。
+// 必须排在下面那个 no-store 的 static 之前才生效。
+//
+// 为什么要单独开这个口子：mermaid.min.js 是 3.5MB。它挂在 no-store 上时，
+// 每打开一篇带图表的文档都要把这 3.5MB 重新传一遍——本机传输虽然快，
+// 但白等的那一下是能看出来的，而这个文件的内容在两次启动之间根本不会变。
+// markdown.js 不在名单里：它是 Atlas 自己的渲染器，自升级后必须立刻生效。
+const CACHEABLE_VENDOR = /^\/(?:mermaid\.min\.js|Sortable\.min\.js|qrcode\.min\.js|katex\/)/;
+app.use('/vendor', express.static(path.join(PUBLIC_DIR, 'vendor'), {
+  setHeaders(res, filePath) {
+    const rel = '/' + path.relative(path.join(PUBLIC_DIR, 'vendor'), filePath).split(path.sep).join('/');
+    if (CACHEABLE_VENDOR.test(rel)) {
+      // ETag（express.static 默认开）负责校验，max-age 只是省掉一次条件请求
+      res.set('Cache-Control', 'public, max-age=3600');
+    } else {
+      res.set('Cache-Control', 'no-store');
+    }
+  },
+}));
 
 // Dashboard 会在运行中自升级；禁止浏览器保留旧 shell/脚本，避免重启窗口命中空文档或旧资源。
 app.use(express.static(PUBLIC_DIR, {
@@ -818,10 +895,15 @@ async function getFileText(filePath, mtime) {
   }
   try {
     const raw = await fsp.readFile(filePath, 'utf8');
+    const kind = docTypeOfPath(filePath);
     let text;
-    if (docTypeOfPath(filePath) === 'md') {
-      // Markdown 基本就是纯文本，直接归一化空白即可
+    if (kind === 'md' || kind === 'csv' || kind === 'json' || kind === 'txt') {
+      // 这几种本身就是纯文本，直接归一化空白即可。
+      // CSV / JSON 的原文最有搜索价值——列名、键名、字段值都在里面
       text = raw.replace(/\s+/g, ' ');
+    } else if (kind === 'svg') {
+      // SVG 只取标签里的文字（<text>/<title>/<desc>），路径坐标不值得进索引
+      text = plainRender.toSearchText('svg', raw).replace(/\s+/g, ' ');
     } else {
       text = raw
         .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
@@ -1045,6 +1127,9 @@ app.get('/api/state', async (_req, res) => {
       scannedCount: visible.length,
       docTypes: getEnabledDocTypes(),
       archivedProjects,
+      // 已被用户显式信任的 HTML（其余在沙箱里预览）
+      trusted: Object.keys(store.trusted || {}).filter(p => allPaths.has(p)),
+      trustAllHtml: !!config.trustAllHtml,
     });
   } catch (e) {
     console.error(e);
@@ -1280,6 +1365,28 @@ app.get('/share/:token/*', async (req, res) => {
       return res.type('html').send(html);
     } catch (e) {
       console.error('share render-md 失败:', e);
+      return res.status(500).type('html').send('<h1>500 — 渲染失败</h1>');
+    }
+  }
+  // CSV / JSON / 纯文本：同样渲染成页面。不这么做的话浏览器会把 .csv 直接
+  // 下载下来，收到链接的同事得先存盘再找个软件打开——分享的意义就没了。
+  // SVG 例外：它本来就是浏览器能直接显示的图，交给 sendFile 即可
+  const sharedKind = docTypeOfPath(resolved.abs);
+  if (sharedKind === 'csv' || sharedKind === 'json' || sharedKind === 'txt') {
+    try {
+      const stat = fs.statSync(resolved.abs);
+      const tooBig = stat.size > plainRender.MAX_BYTES;
+      const raw = tooBig ? '' : await fsp.readFile(resolved.abs, 'utf8');
+      const html = plainRender.renderPage({
+        kind: tooBig ? 'txt' : sharedKind,
+        text: tooBig ? `这个文件有 ${fmtBytes(stat.size)}，超过了预览上限。` : raw,
+        title: path.basename(resolved.abs),
+        ext: path.extname(resolved.abs).toLowerCase(),
+      });
+      res.set('Cache-Control', 'no-store');
+      return res.type('html').send(html);
+    } catch (e) {
+      console.error('share render-doc 失败:', e);
       return res.status(500).type('html').send('<h1>500 — 渲染失败</h1>');
     }
   }
@@ -1765,6 +1872,41 @@ app.post('/api/favorite', (req, res) => {
   });
 });
 
+// ---------- 信任 ----------
+// AI 生成的 HTML 默认在沙箱 iframe 里预览（没有 allow-same-origin），
+// 它因此拿不到 Atlas 的同源权限——碰不到 /api/*，读不到父页面。
+// 代价是 Atlas 那几项需要注入的能力（预览内编辑、正文高亮、快捷键转发、
+// 滚动位置恢复）在沙箱里做不到，所以给用户一个显式的开关：信任这一篇。
+//
+// 为什么按文件粒度记而不是一个全局开关了事：一份自己写的仪表盘和一份刚从
+// 网上让 AI 抓下来的报告，风险完全不同。全局开关也留着（config.trustAllHtml），
+// 给"我知道我在做什么"的用户一条回到旧行为的路。
+app.post('/api/trust', (req, res) => {
+  const { path: filePath, trusted } = req.body || {};
+  if (!filePath || !isPathInScanRoots(filePath)) {
+    return res.status(400).json({ error: '路径非法' });
+  }
+  const store = loadStore();
+  store.trusted = store.trusted || {};
+  const next = trusted === undefined ? !store.trusted[filePath] : !!trusted;
+  if (next) {
+    if (!store.trusted[filePath]) store.trusted[filePath] = Date.now();
+  } else {
+    delete store.trusted[filePath];
+  }
+  saveStore(store);
+  res.json({ ok: true, trusted: !!store.trusted[filePath] });
+});
+
+// 一次性收回所有单篇信任。用于"我刚从别处拷进来一批 HTML，先全部收回沙箱"
+app.post('/api/trust/clear', (_req, res) => {
+  const store = loadStore();
+  const count = Object.keys(store.trusted || {}).length;
+  store.trusted = {};
+  saveStore(store);
+  res.json({ ok: true, cleared: count });
+});
+
 // ---------- 标签 ----------
 // 整组覆盖式写入（不做单个 add/remove）：编辑入口是一个"逗号分隔"的输入框，
 // 用户看到的就是全集，覆盖语义和界面一致，也省掉一半端点。
@@ -1870,8 +2012,10 @@ app.post('/api/export-pdf', async (req, res) => {
   const lowerPath = filePath.toLowerCase();
   const isHtml = lowerPath.endsWith('.html') || lowerPath.endsWith('.htm');
   const isMd = isMarkdownPath(filePath);
-  if (!isHtml && !isMd) {
-    send({ phase: 'error', reason: 'unsupported', message: '只支持 HTML 与 Markdown 文件' });
+  const plainKind = docTypeOfPath(filePath);
+  const isPlain = READONLY_DOC_TYPES.has(plainKind) && plainKind !== 'svg';
+  if (!isHtml && !isMd && !isPlain) {
+    send({ phase: 'error', reason: 'unsupported', message: '只支持 HTML / Markdown / CSV / JSON / 文本' });
     return res.end();
   }
   if (!fs.existsSync(filePath)) {
@@ -1891,9 +2035,33 @@ app.post('/api/export-pdf', async (req, res) => {
       const html = markdown.renderPage(raw, {
         title: path.basename(filePath),
         baseHref: pdfExport.dirFileUrl(path.dirname(filePath)),
+        // 图表 / 公式的库要用 file:// 绝对地址：这份 HTML 是在 file:// 下被
+        // Chromium 打开的，"/vendor/mermaid.min.js" 会被解析到文件系统根目录。
+        // 注意不能用相对路径——baseHref 已经指向 md 的原目录了
+        assetBase: pdfExport.dirFileUrl(path.join(PUBLIC_DIR, 'vendor')),
         forPrint: true,
       });
       tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'atlas-mdpdf-'));
+      renderPath = path.join(tempDir, 'doc.html');
+      await fsp.writeFile(renderPath, html, 'utf8');
+    } else if (isPlain) {
+      // CSV / JSON / 文本走同一套：渲染成打印版 HTML 落到临时目录，
+      // 再交给同一个 Chromium 管线。这些页面不引用外部资源，不需要 base href
+      send({ phase: 'launching', message: '正在渲染文档…' });
+      const stat = await fsp.stat(filePath);
+      if (stat.size > plainRender.MAX_BYTES) {
+        send({ phase: 'error', reason: 'too-large', message: `文件超过 ${fmtBytes(plainRender.MAX_BYTES)}，不支持导出` });
+        return res.end();
+      }
+      const raw = await fsp.readFile(filePath, 'utf8');
+      const html = plainRender.renderPage({
+        kind: plainKind,
+        text: raw,
+        title: path.basename(filePath),
+        ext: path.extname(filePath).toLowerCase(),
+        forPrint: true,
+      });
+      tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'atlas-docpdf-'));
       renderPath = path.join(tempDir, 'doc.html');
       await fsp.writeFile(renderPath, html, 'utf8');
     }
@@ -2071,6 +2239,70 @@ app.get('/api/render-md', async (req, res) => {
     res.type('html').send(html);
   } catch (e) {
     console.error('render-md 失败:', e);
+    res.status(500).type('text/plain').send('渲染失败: ' + (e && e.message || e));
+  }
+});
+
+// ---------- CSV / JSON / 纯文本 / SVG 预览 ----------
+function fmtBytes(n) {
+  const b = Number(n) || 0;
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(b < 10 * 1024 ? 1 : 0) + ' KB';
+  return (b / 1024 / 1024).toFixed(b < 10 * 1024 * 1024 ? 1 : 0) + ' MB';
+}
+
+// GET /api/render-doc?path=<abs>：渲染成完整 HTML 页面，用于 iframe 只读预览。
+//
+// 这些格式没有独立的编辑器：Atlas 要回答的是"AI 刚生成了什么"，
+// 改数据文件该用对应的专业工具。所以只有这一条渲染入口。
+app.get('/api/render-doc', async (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath || typeof filePath !== 'string' || !isPathInScanRoots(filePath)) {
+    return res.status(400).type('text/plain').send('路径非法');
+  }
+  const kind = docTypeOfPath(filePath);
+  if (!READONLY_DOC_TYPES.has(kind)) {
+    return res.status(400).type('text/plain').send('这个类型不走这条渲染路径');
+  }
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).type('text/plain').send('文件不存在');
+  }
+  const theme = req.query.theme === 'light' || req.query.theme === 'dark'
+    ? req.query.theme : undefined;
+  try {
+    const stat = await fsp.stat(filePath);
+    // SVG 不读内容：它是用 <img src="/raw/…"> 引进去的（浏览器不执行 <img>
+    // 里的脚本，这条路径天然隔离），只需要一个尺寸描述
+    if (kind === 'svg') {
+      return res.set('Cache-Control', 'no-store').type('html').send(plainRender.renderPage({
+        kind: 'svg',
+        title: path.basename(filePath),
+        rawUrl: buildFileUrl(filePath),
+        sizeText: fmtBytes(stat.size),
+        theme,
+      }));
+    }
+    if (stat.size > plainRender.MAX_BYTES) {
+      return res.set('Cache-Control', 'no-store').type('html').send(plainRender.renderPage({
+        kind: 'txt',
+        title: path.basename(filePath),
+        text: `这个文件有 ${fmtBytes(stat.size)}，超过了 ${fmtBytes(plainRender.MAX_BYTES)} 的预览上限。\n`
+          + '请用「在访达中显示」打开原文件。',
+        theme,
+      }));
+    }
+    const raw = await fsp.readFile(filePath, 'utf8');
+    const html = plainRender.renderPage({
+      kind,
+      text: raw,
+      title: path.basename(filePath),
+      ext: path.extname(filePath).toLowerCase(),
+      theme,
+    });
+    res.set('Cache-Control', 'no-store');
+    res.type('html').send(html);
+  } catch (e) {
+    console.error('render-doc 失败:', e);
     res.status(500).type('text/plain').send('渲染失败: ' + (e && e.message || e));
   }
 });
@@ -2347,6 +2579,10 @@ app.put('/api/config', (req, res) => {
     next.docTypes = cleaned;
     delete next.docType; // 清掉旧单选字段，避免歧义
     // docTypes 变化无需重启 watcher：事件回调按 matchesDocType 实时过滤
+  }
+  // 全局信任开关：打开后所有 HTML 都以同源方式预览（等于回到 0.17 及更早的行为）
+  if (typeof body.trustAllHtml === 'boolean') {
+    next.trustAllHtml = body.trustAllHtml;
   }
   saveConfig(next);
   // 扫描根 / ignore / maxDepth 变了 → 文件索引必须重建。

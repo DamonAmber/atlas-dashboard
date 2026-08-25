@@ -355,10 +355,14 @@ body.resizing iframe { pointer-events: none; }
 /* 首页态（没有打开任何文档）：整条文档工具栏直接收起，而不是把 10 个
  * 32% 透明的灰图标摆在那儿。一排"看起来坏掉"的按钮比没有按钮更糟——
  * 用户第一眼会以为功能失效，而它们其实只是没有作用对象。
- * 判据沿用 #btn-edit:disabled（打开文档后它就会启用，工具栏随之出现）。
- * 只隐藏 :disabled 的那些，match-badge / update-badge 这类状态指示不受影响。 */
-.main-header:has(#btn-edit:disabled) .main-actions > button:disabled,
-.main-header:has(#btn-edit:disabled) .tb-sep { display: none; }
+ * 只隐藏 :disabled 的那些，match-badge / update-badge 这类状态指示不受影响。
+ *
+ * 判据是 body.no-active-doc，由 setActiveFile / goHome 维护。原来写的是
+ * :has(#btn-edit:disabled)——"编辑按钮不可用"当时确实等价于"没打开文档"，
+ * 但只读格式（csv / json / txt / svg）进来之后就不成立了：那些文档的编辑按钮
+ * 本来就禁用，于是打开一篇 CSV 会让编辑按钮凭空消失，而不是变灰。 */
+body.no-active-doc .main-actions > button:disabled,
+body.no-active-doc .tb-sep { display: none; }
 
 .actions button.scanning svg,
 .main-actions button.spinning svg {
@@ -1109,6 +1113,13 @@ body.resizing iframe { pointer-events: none; }
  * 几乎占满，再加一圈金边整个按钮会变成一块"金砖"，在一排线性图标里过分抢戏 */
 #btn-favorite.on { color: var(--fav); }
 #btn-favorite.on svg { fill: var(--fav); }
+
+/* 顶栏信任盾牌。两态刻意都不刺眼：
+ * 受保护（默认）是常态，不该像警告一样一直亮着；已信任是用户自己的选择，
+ * 用一点绿色确认它生效了就够，不需要红色去"提醒风险"——那样每篇自己写的
+ * 仪表盘都在挨骂。 */
+#btn-trust.is-trusted { color: var(--ok, #3fb950); }
+#btn-trust:disabled { opacity: .5; }
 
 /* ---------- 分享 modal ---------- */
 .share-panel {
@@ -2798,6 +2809,14 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
 }
 .doctype-label { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
 .doctype-label .muted { font-size: 12px; }
+/* 次要格式（csv / json / txt / svg）两列排布：六项全部竖排会把这一屏拉得很长，
+ * 而它们本来就是"需要时才勾一下"的东西 */
+.doctype-choice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.doctype-more-hint { margin-top: 14px; }
 
 /* ==================== 文档类型区分（HTML / Markdown）==================== */
 .file-type-badge {
@@ -2821,6 +2840,29 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
   color: var(--accent);
   background: var(--accent-soft);
   border-color: var(--accent-ring);
+}
+/* 其余格式（默认不扫，勾选后才出现）。四种各给一个色相，扫目录树时
+ * 「哪些是正文、哪些是顺手导出的数据」一眼能分开。饱和度压得比 HTML/MD 低一档：
+ * 它们是配角，不该比正文更抢眼。 */
+.file-type-badge.type-csv {
+  color: light-dark(#8a5a00, #d29922);
+  background: light-dark(rgba(210, 153, 34, .12), rgba(210, 153, 34, .16));
+  border-color: rgba(210, 153, 34, .3);
+}
+.file-type-badge.type-json {
+  color: light-dark(#6f42c1, #a371f7);
+  background: light-dark(rgba(163, 113, 247, .12), rgba(163, 113, 247, .16));
+  border-color: rgba(163, 113, 247, .3);
+}
+.file-type-badge.type-txt {
+  color: var(--text-dim);
+  background: var(--bg-elev-2);
+  border-color: var(--border);
+}
+.file-type-badge.type-svg {
+  color: light-dark(#b02a37, #f85149);
+  background: light-dark(rgba(248, 81, 73, .1), rgba(248, 81, 73, .16));
+  border-color: rgba(248, 81, 73, .28);
 }
 /* 树里的角标：默认淡一点，hover/选中该行时更明显 */
 .tree .file .file-type-badge { opacity: 0.75; transition: opacity var(--dur-fast) ease; }

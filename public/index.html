@@ -24,7 +24,10 @@
     })();
   </script>
 </head>
-<body>
+<!-- no-active-doc：还没打开任何文档（首页态）。整条文档工具栏靠它收起。
+     由 setActiveFile / goHome 维护——不能再靠 #btn-edit:disabled 反推，
+     只读格式（csv / json / txt / svg）的编辑按钮本来就是禁用的 -->
+<body class="no-active-doc">
   <!-- ============================================================
        图标 sprite：全站唯一的图标来源
        ------------------------------------------------------------
@@ -60,6 +63,14 @@
       <symbol id="i-file-down" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h6"/><path d="M12 18v-6"/><path d="m9 15 3 3 3-3"/></symbol>
       <symbol id="i-compare" viewBox="0 0 24 24"><circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="18" r="2.5"/><path d="M12 6h5a2 2 0 0 1 2 2v7"/><path d="M12 18H7a2 2 0 0 1-2-2V8.5"/></symbol>
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></symbol>
+      <!-- 沙箱预览（受保护）与已信任：同一个盾牌轮廓，信任态里面多一个对勾 -->
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 2.5 4.5 5.5v6c0 4.6 3.1 8.4 7.5 10 4.4-1.6 7.5-5.4 7.5-10v-6z"/></symbol>
+      <symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M12 2.5 4.5 5.5v6c0 4.6 3.1 8.4 7.5 10 4.4-1.6 7.5-5.4 7.5-10v-6z"/><path d="m8.8 11.8 2.4 2.4 4-4.4"/></symbol>
+      <!-- 多格式：表格（csv）/ 花括号（json）/ 纯文本（txt）/ 图形（svg） -->
+      <symbol id="i-table" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9.5h18"/><path d="M9 9.5V20"/><path d="M15 9.5V20"/></symbol>
+      <symbol id="i-braces" viewBox="0 0 24 24"><path d="M8 3c-2 0-2.5 1.2-2.5 3v2.5c0 1.4-.7 2.3-2 3.5 1.3 1.2 2 2.1 2 3.5V18c0 1.8.5 3 2.5 3"/><path d="M16 3c2 0 2.5 1.2 2.5 3v2.5c0 1.4.7 2.3 2 3.5-1.3 1.2-2 2.1-2 3.5V18c0 1.8-.5 3-2.5 3"/></symbol>
+      <symbol id="i-align-left" viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 10.5h11"/><path d="M4 15h16"/><path d="M4 19.5h8"/></symbol>
+      <symbol id="i-shapes" viewBox="0 0 24 24"><path d="M8 3.5 13.5 13H2.5z"/><circle cx="17" cy="17" r="4.5"/></symbol>
       <symbol id="i-panel-left" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9.5 3v18"/></symbol>
       <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></symbol>
       <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
@@ -221,6 +232,9 @@
         </button>
         <button id="btn-diff" disabled title="和上次已读版本对比" aria-label="和上次已读版本对比">
           <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-compare"/></svg>
+        </button>
+        <button id="btn-trust" class="hidden" title="此文档在沙箱中预览" aria-label="信任此文档" aria-pressed="false">
+          <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-shield"/></svg>
         </button>
         <button id="btn-edit" disabled title="编辑此文档（改文案 / 拖动列表）" aria-label="编辑此文档">
           <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-pencil"/></svg>
@@ -456,6 +470,9 @@
           <button class="settings-nav-item" type="button" role="tab" data-goto="appearance" aria-selected="false">
             <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-monitor"/></svg><span>外观与通知</span>
           </button>
+          <button class="settings-nav-item" type="button" role="tab" data-goto="security" aria-selected="false">
+            <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-shield"/></svg><span>安全</span>
+          </button>
           <button class="settings-nav-item" type="button" role="tab" data-goto="share" aria-selected="false">
             <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-share"/></svg><span>分享</span>
           </button>
@@ -466,7 +483,7 @@
         <div class="settings-content" id="settings-content">
       <section class="modal-section" data-pane="scan">
         <h3>扫描根目录</h3>
-        <p class="muted">Atlas 会扫描以下所有目录中的 HTML 文件（按 <code>maxDepth</code> 限制深度）。</p>
+        <p class="muted">Atlas 会扫描以下所有目录中的文档（类型见下一节，按 <code>maxDepth</code> 限制深度）。</p>
         <ul class="root-list" id="root-list"></ul>
         <div class="root-add">
           <input id="root-input" type="text" placeholder="点击右侧浏览，或粘贴绝对路径" />
@@ -491,7 +508,7 @@
       </section>
       <section class="modal-section" data-pane="scan">
         <h3>文档类型</h3>
-        <p class="muted">勾选 Atlas 要扫描并预览的文档类型，两种可同时启用。至少保留一项。</p>
+        <p class="muted">勾选 Atlas 要扫描并预览的文档类型，可同时启用多种。至少保留一项。</p>
         <div class="doctype-choice" role="group" aria-label="文档类型">
           <label class="doctype-option">
             <input type="checkbox" name="doctype" value="html" />
@@ -500,6 +517,26 @@
           <label class="doctype-option">
             <input type="checkbox" name="doctype" value="md" />
             <span class="doctype-label"><strong>Markdown</strong><span class="muted">扫描 .md / .markdown 文件，支持实时预览与编辑</span></span>
+          </label>
+        </div>
+        <p class="muted doctype-more-hint">下面这几种默认不扫。AI 顺手导出的数据文件通常比正文多得多，
+          全打开会把目录树冲淡，需要时再单独勾选。</p>
+        <div class="doctype-choice doctype-choice-grid" role="group" aria-label="其他文本格式">
+          <label class="doctype-option">
+            <input type="checkbox" name="doctype" value="csv" />
+            <span class="doctype-label"><strong>CSV</strong><span class="muted">扫描 .csv / .tsv 文件，渲染成可读表格</span></span>
+          </label>
+          <label class="doctype-option">
+            <input type="checkbox" name="doctype" value="json" />
+            <span class="doctype-label"><strong>JSON</strong><span class="muted">扫描 .json 文件，格式化并高亮显示</span></span>
+          </label>
+          <label class="doctype-option">
+            <input type="checkbox" name="doctype" value="txt" />
+            <span class="doctype-label"><strong>文本</strong><span class="muted">扫描 .txt / .text 文件，等宽排版</span></span>
+          </label>
+          <label class="doctype-option">
+            <input type="checkbox" name="doctype" value="svg" />
+            <span class="doctype-label"><strong>SVG</strong><span class="muted">扫描 .svg 文件，作为图片安全展示</span></span>
           </label>
         </div>
       </section>
@@ -533,9 +570,29 @@
         <h3>桌面通知</h3>
         <label class="row">
           <input type="checkbox" id="notify-toggle" />
-          <span>HTML 文件有新增 / 更新时弹出系统通知</span>
+          <span>文档有新增 / 更新时弹出系统通知</span>
         </label>
         <p class="muted" id="notify-hint">需要浏览器允许通知权限。</p>
+      </section>
+      <section class="modal-section" data-pane="security">
+        <h3>HTML 预览沙箱</h3>
+        <p class="muted">
+          HTML 文档默认在沙箱里预览：它自己的脚本照常运行（图表能画出来），
+          但拿不到 Atlas 的同源权限——碰不到本机接口，也读不到别的文档。
+          代价是预览内编辑、正文高亮、快捷键转发这几项需要注入的能力用不了，
+          需要时在顶栏点盾牌单独信任那一篇。
+        </p>
+        <label class="row">
+          <input type="checkbox" id="trust-all-toggle" />
+          <span>信任所有本地 HTML（回到 0.17 及更早的行为）</span>
+        </label>
+        <p class="muted" id="trust-all-hint">
+          打开后所有 HTML 都以同源方式加载，任何一篇文档里的脚本都能调用 Atlas 的接口
+          （包括改写磁盘上的其它文档、生成分享链接）。只在你清楚扫描根里全是自己产出的内容时才开。
+        </p>
+        <div class="row-end">
+          <button id="trust-clear-btn" type="button">清空单篇信任记录</button>
+        </div>
       </section>
       <section class="modal-section" data-pane="share">
         <div class="section-head">
@@ -549,7 +606,7 @@
       </section>
       <section class="modal-section" data-pane="archive">
         <h3>已归档分组</h3>
-        <p class="muted">归档的项目分组不再扫描显示——磁盘上的 HTML 文件不会被删，只是从树里隐藏。点"恢复"让它重新出现。</p>
+        <p class="muted">归档的项目分组不再扫描显示——磁盘上的文件不会被删，只是从树里隐藏。点"恢复"让它重新出现。</p>
         <ul class="archive-list" id="archive-list">
           <li class="archive-empty">没有归档的分组</li>
         </ul>

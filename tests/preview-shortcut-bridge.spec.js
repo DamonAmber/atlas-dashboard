@@ -10,6 +10,10 @@
 //   ① 该转发的转发：焦点在 iframe 内时 ⌘K / ⌘B 生效，编辑态下 ⌘S 生效
 //   ② 该让位的让位：文档内正在打字时不抢 ⌘K / ⌘B；非编辑态不抢 ⌘S；
 //      单键 `/` 一律不转发（不少 HTML 报告自己就用 `/` 做站内搜索）
+//
+// 注意这个桥只在**同源**预览下成立：往文档里挂监听需要能拿到 contentDocument，
+// 而未信任的 HTML 默认在沙箱里预览（opaque origin）。所以本 spec 用
+// trustAllHtml 起实例。沙箱下桥不可用这件事由 rich-and-sandbox.spec 明确钉住。
 const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const { chromium } = require(path.join(ROOT, 'node_modules', 'playwright'));
@@ -34,6 +38,7 @@ function check(name, actual, expected) {
       'proj/other.html': '<!doctype html><html><body><h1>另一篇</h1></body></html>',
       'proj/note.md': '# 笔记\n\n正文。\n',
     },
+    config: { trustAllHtml: true },
   });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });

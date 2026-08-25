@@ -12,9 +12,14 @@ function check(name, ok, detail = '') {
 (async () => {
   // 自起隔离 Atlas 实例：需要长文档与可滚动的长列表，
   // 直连用户本机 :4321 会污染真实数据。fixture 规模按本用例需要生成。
+  // trustAllHtml：这个 spec 要从宿主页面读 iframe 的 contentDocument 来确认
+  // "滚动没被 pointer-events:none 卡住"。HTML 预览默认走沙箱（opaque origin），
+  // 那条路读不到 contentDocument。沙箱本身有专门的 spec 覆盖，这里关掉它，
+  // 让用例专注在布局与 pointer-events 上。
   const atlas = await startAtlas({
     prefix: 'atlas-scroll-stuck-spec-',
     files: makeTreeFixtures({ projects: 8, filesPerProject: 15, longContent: true }),
+    config: { trustAllHtml: true },
   });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });

@@ -1044,7 +1044,7 @@
   <div class="wrap">
     <div class="eyebrow">
       <span class="pulse"></span>
-      <span>v<span id="cur-version">0.17.1</span> · 已上架 npm</span>
+      <span>v<span id="cur-version">0.18.0</span> · 已上架 npm</span>
     </div>
     <h1>你让 AI 写了 30 份 HTML / Markdown 报告——<br/><span class="grad">它们现在在哪？</span></h1>
     <p class="lede">
@@ -1191,14 +1191,38 @@
         <h3>
           <span class="feat-ico">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2 3.5h12M2 8h12M2 12.5h12"/>
+              <path d="M6 3.5v9"/>
+            </svg>
+          </span>
+          Mermaid 图表与数学公式
+        </h3>
+        <p>AI 写的架构说明、时序、流程几乎默认用 <code>```mermaid</code>，推导和指标定义常带 <code>$…$</code>。这些以前在 Atlas 里只是一段灰色代码和一串美元符号——现在<strong>图表渲染成图，公式交给 KaTeX</strong>（<code>$…$</code> / <code>$$…$$</code> / <code>\(…\)</code> / <code>\[…\]</code> 都认）。<br><strong>渲染失败一定可读</strong>：图表语法写错时显示 mermaid 的原始报错（好让你知道该让 AI 改哪一行），源码仍在原处；公式渲染不出来就显示原文。不会出现空白框。渲染好的图右上角有<strong>「源码」开关</strong>，随时切回去核对节点关系。<br><strong>不会把价格当公式</strong>：<code>单价 $5，折后 $4</code> 这类句子原样显示。<strong>按需加载</strong>：没有图表 / 公式的文档一个字节都不下载（mermaid 有 3.5MB）；库全在本地，离线可用。只读预览、编辑器的实时预览、导出的 PDF 与局域网分享页，四条路径一致生效。</p>
+      </div>
+      <div class="feat">
+        <h3>
+          <span class="feat-ico">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 1.8 3 3.8v4c0 3.07 2.07 5.6 5 6.67 2.93-1.07 5-3.6 5-6.67v-4z"/>
+              <path d="m5.9 7.9 1.6 1.6 2.7-2.9"/>
+            </svg>
+          </span>
+          HTML 沙箱预览与信任分级
+        </h3>
+        <p>预览用的是 Atlas 自己那个源上的 iframe，而里面那份 HTML 是 AI 写的。同源意味着它的脚本能调 Atlas 的接口——<strong>改写磁盘上别的文档、开局域网分享链接、读扫描根配置</strong>。所以现在 HTML <strong>默认在沙箱里预览</strong>：保留 <code>allow-scripts</code>，文档自己的图表、交互、动画照常运行；但不给 <code>allow-same-origin</code>，它的源变成 opaque，碰不到 Atlas 的任何数据。<br>代价是那几项需要注入的能力用不了（预览内编辑、正文命中高亮、快捷键转发、滚动位置恢复）。需要时点顶栏的<strong>盾牌</strong>信任这一篇，立刻切回同源、能力全部恢复——点编辑按钮时也会直接问你要不要信任。信任按文件记住。<br>Markdown / CSV / JSON / 文本 / SVG 的预览页是 Atlas 自己渲染的，内容全部转义过，<strong>不走沙箱</strong>。设置 → 安全 里另有全局开关与「清空单篇信任记录」。服务端还有第二道锁：<strong>写类接口校验 Origin</strong>，沙箱文档、别的站点、本机其它端口的页面都会被挡掉。</p>
+      </div>
+      <div class="feat">
+        <h3>
+          <span class="feat-ico">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
               <path d="M4 2.5h5.5L13 6v7.5a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5z"/>
               <path d="M9 2.5V6h4"/>
               <path d="M5.5 8.5h5M5.5 10.5h5"/>
             </svg>
           </span>
-          HTML + Markdown 双模
+          HTML + Markdown 双模（另有四种可选）
         </h3>
-        <p>不止 HTML——设置里勾选文档类型，<strong>HTML 与 Markdown 可同时扫描共存</strong>，目录树用紧凑的类型 icon 区分并把更多空间留给标题。Markdown 内建渲染预览：<strong>本地相对路径的图片正常显示</strong>、YAML front matter 渲染成安静的元信息块、代码块带语言标签与一键复制、<code>- [ ]</code> 任务列表是真复选框、标题 hover 出锚点、<strong>跟随系统深浅色</strong>；长文档自动带可折叠侧边目录（层级折叠、平滑跳转、滚动高亮当前章节，<strong>宽度可拖拽</strong>并记住，标题长的文档不必再忍受截断）。<br><strong>右上角三档阅读宽度</strong>：推荐（约每行 54 字）/ 加宽 / 占满全屏，点一下就换（也可以按 <kbd>[</kbd> <kbd>]</kbd> 逐档调），记住后跨文档保持——十几列的数据表切到全屏一屏看全，长文回到推荐宽度读。<strong>表格按 data table 的规矩排</strong>：表头与数据列严格对齐、外框圈住边界、表头一层浅底、极淡斑马纹、行 hover、首列加重、数字按位对齐；宽表横向滚动并在右缘给出「还有内容」的提示，不会再把中文压成一列一个字。<strong>GFM 提示块</strong>（<code>&gt; [!NOTE]</code> / <code>TIP</code> / <code>IMPORTANT</code> / <code>WARNING</code> / <code>CAUTION</code>）渲染成带图标和配色的 callout，而不是一段带 <code>[!NOTE]</code> 字面量的普通引用。<br>还带一个<strong>源码 / 预览分栏编辑器</strong>：分栏宽度可拖拽、两侧滚动同步、可开侧边大纲；<strong>光标或选区落在一边，另一边会同步高亮对应的内容块</strong>（两个方向都生效，长文档里再也不用自己数对应到哪儿了）；回车自动续列表（有序列表序号自增）、<kbd>Tab</kbd> 多行缩进、<kbd>⌘B</kbd> <kbd>⌘I</kbd> <kbd>⌘K</kbd> 与一条格式工具栏、<kbd>⌘S</kbd> 保存。<strong>预览区还能直接所见即所得地改</strong>，而且只重写你真正碰过的那几个块——表格对齐、段落软换行都逐字节保留，不会给 git 留下满屏无意义 diff。编辑期间内容会自动存本地草稿，浏览器意外关闭也能恢复。</p>
+        <p>不止 HTML——设置里勾选文档类型，<strong>HTML 与 Markdown 可同时扫描共存</strong>（默认就是这两种），目录树用紧凑的类型 icon 区分并把更多空间留给标题。<br>另有<strong>四种可选开启</strong>：<code>.csv</code>/<code>.tsv</code> 渲染成可读表格（数字列自动右对齐，解析按 RFC 4180 来——字段里的逗号、换行、<code>""</code> 转义都不会把行切错，分隔符还会自动嗅探）、<code>.json</code> 重新缩进并语法高亮（<strong>不合法的 JSON 不白屏</strong>，报出出错行列再按原文显示）、<code>.txt</code> 等宽排版、<code>.svg</code> 以 <code>&lt;img&gt;</code> 安全展示。它们<strong>默认关闭</strong>：AI 顺手导出的数据文件通常比正文多得多，全打开会把目录树冲淡、未读红点跟着失真，而红点的价值全在于稀缺。这四种在 Atlas 里只读，但未读红点、版本对比、收藏、标签、⌘K、全文搜索、局域网分享、导出 PDF 都照常可用。Markdown 内建渲染预览：<strong>本地相对路径的图片正常显示</strong>、YAML front matter 渲染成安静的元信息块、代码块带语言标签与一键复制、<code>- [ ]</code> 任务列表是真复选框、标题 hover 出锚点、<strong>跟随系统深浅色</strong>；长文档自动带可折叠侧边目录（层级折叠、平滑跳转、滚动高亮当前章节，<strong>宽度可拖拽</strong>并记住，标题长的文档不必再忍受截断）。<br><strong>右上角三档阅读宽度</strong>：推荐（约每行 54 字）/ 加宽 / 占满全屏，点一下就换（也可以按 <kbd>[</kbd> <kbd>]</kbd> 逐档调），记住后跨文档保持——十几列的数据表切到全屏一屏看全，长文回到推荐宽度读。<strong>表格按 data table 的规矩排</strong>：表头与数据列严格对齐、外框圈住边界、表头一层浅底、极淡斑马纹、行 hover、首列加重、数字按位对齐；宽表横向滚动并在右缘给出「还有内容」的提示，不会再把中文压成一列一个字。<strong>GFM 提示块</strong>（<code>&gt; [!NOTE]</code> / <code>TIP</code> / <code>IMPORTANT</code> / <code>WARNING</code> / <code>CAUTION</code>）渲染成带图标和配色的 callout，而不是一段带 <code>[!NOTE]</code> 字面量的普通引用。<br>还带一个<strong>源码 / 预览分栏编辑器</strong>：分栏宽度可拖拽、两侧滚动同步、可开侧边大纲；<strong>光标或选区落在一边，另一边会同步高亮对应的内容块</strong>（两个方向都生效，长文档里再也不用自己数对应到哪儿了）；回车自动续列表（有序列表序号自增）、<kbd>Tab</kbd> 多行缩进、<kbd>⌘B</kbd> <kbd>⌘I</kbd> <kbd>⌘K</kbd> 与一条格式工具栏、<kbd>⌘S</kbd> 保存。<strong>预览区还能直接所见即所得地改</strong>，而且只重写你真正碰过的那几个块——表格对齐、段落软换行都逐字节保留，不会给 git 留下满屏无意义 diff。编辑期间内容会自动存本地草稿，浏览器意外关闭也能恢复。</p>
       </div>
       <div class="feat">
         <h3>
@@ -1243,7 +1267,7 @@
           </span>
           桌面通知
         </h3>
-        <p>HTML 新增 / 修改时弹系统通知。设置面板一键开关，浏览器原生 Notification API + chokidar + SSE。</p>
+        <p>文档新增 / 修改时弹系统通知。设置面板一键开关，浏览器原生 Notification API + chokidar + SSE。</p>
       </div>
       <div class="feat">
         <h3>

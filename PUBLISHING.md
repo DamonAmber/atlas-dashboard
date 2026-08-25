@@ -132,7 +132,7 @@ for spec in tests/*.spec.js; do
 done
 ```
 
-> 验证过：把本机 Atlas 完全停掉，全套 38 个 spec 依然全绿，且 `~/.atlas/config.json`
+> 验证过：把本机 Atlas 完全停掉，全套 41 个 spec 依然全绿，且 `~/.atlas/config.json`
 > 与 `store.json` 校验和逐字节未变。若将来某个 spec 在服务停止时失败，说明它偷偷依赖了
 > 你的真实实例，按下面的约定改掉。
 
@@ -154,13 +154,16 @@ done
 >   期望末行 `总计 10 项，失败 0 项`。**记得删掉 tgz**，否则会被 `git add -A` 带进 commit。
 > - `scroll-after-toggle.spec.js` 在 iframe 还没加载出内容时打印 `!! HTML 不够长，没法测试` 并跳过（也是 exit 0）。这是它长期的既有行为，不是本次改动引入的；判断是否回归的办法是 `git stash` 后对比同一行输出。
 
-当前 spec 清单（38 个）。除 `landing-demo`（`file://`）与 `diff-algorithm`（纯函数单测）
+当前 spec 清单（41 个）。除 `landing-demo`（`file://`）与 `diff-algorithm`（纯函数单测）
 外，其余都通过
 `tests/helpers/isolated-atlas.js` 的 `startAtlas()` 起独立实例：临时 `ATLAS_HOME`
 （自带 config/store）+ 临时扫描根 + 临时 fixture + 随机端口，结束即删。
 需要"有规模的文档树"的用例（帧率 / 滚动 / 拖拽）用 `makeTreeFixtures()` 现造，
 不再依赖你本机那几百篇真实文档。
 
+> - `rich-render.spec.js` — Mermaid 图表与数学公式（0.18.0 新增）：解析边界（价格 `$5` / `$100 到 $200` 不被当公式、句中 `$$…$$` 不留孤立的 `$`、代码里的 `$` 不算、`\(…\)` 也认）/ 图表渲染成 SVG 且语法错误显示 mermaid 原始报错并保留源码 / 行内与块级公式渲染成 KaTeX / 图表块不再被套代码块头部 / **按需加载**（没有图表公式的文档不下载那 3.5MB）/ 编辑器实时预览同样出图 / **往返保真**（改标题后图表与公式源码逐字节不变）/ 打印版挂上渲染器且主题钉浅色 / 局域网分享页能渲染且 `/vendor/` 对访客放行（39 项）
+> - `sandbox-trust.spec.js` — HTML 预览沙箱与信任分级（0.18.0 新增）：默认带 sandbox 且不含 `allow-same-origin`、保留 `allow-scripts`（文档自己的脚本要能跑）/ **沙箱里的文档确实读不到父页面、读不到也写不了 Atlas 接口** / Atlas 自渲染的预览页（md / csv）不被沙箱化 / 点信任后切同源、编辑按钮可用、落盘、刷新后仍有效、可收回 / **写类接口的 Origin 校验**（`null` 与别的站点、本机其它端口一律 403，不带 Origin 的 CLI 放行）（33 项）
+> - `plain-formats.spec.js` — CSV / JSON / 纯文本 / SVG（0.18.0 新增）：默认只扫 html+md、勾选后才出现 / **CSV 解析**（引号内的分隔符与换行、`""` 转义、空字段、分号 / Tab 嗅探）/ 数字列右对齐而文本列不、宽表横向滚动层 / JSON 缩进与语法高亮、非法 JSON 报出行列并按原文显示 / SVG 用 `<img>` 引入且里面的脚本不执行 / 只读（编辑禁用）与 SVG 不支持导出 PDF / 全文搜索命中四种格式（svg 只索引标签文字）/ 分享 CSV 返回渲染好的网页而不是让浏览器下载（44 项）
 > - `folder-rename-persistence.spec.js` — 一级分组重命名的持久性（0.16.0 新增）：服务端按 `autoFor` 身份键认领而非按名字（改名后 reconcile 仍认得、新文件归进改名后的分组、分组临时变空不丢名字、未改名的自动空壳照旧回收、手工建的空分组不被当空壳清掉、改过名的分组能归档且取消归档后名字回来）；前端两条 race（改名后紧接一次 `fetchState` 不把改动冲掉——直接读 `store.json` 验证落盘的真实内容；编辑进行中不被 `render()` 的 `innerHTML=''` 打断）（24 项）
 > - `diff-versions-and-revert.spec.js` — 底本版本历史与回退（0.16.0 新增）：同内容重写不报"有改动"（内容核对，不只看 mtime）/ 内容真变了才报 / 打开文档不再吃掉想看的那次差异 / 只有内容变化才追加版本、反复打开不追加 / 指定版本对比与不存在版本的 404 / 回退（参数校验、磁盘内容、备份里是回退前的内容、不把自我写入标成未读）/ 站内编辑保存后不把自己的改动算成变更 / **`ack` 分界的两个方向**（打开时自动记的底本不当基准，用户点过「标记为已看过」之后就干净了，之后的新改动又能看到）（37 项）
 > - `folder-reveal-and-toc-resize.spec.js` — 分组「在访达中显示」+ Markdown 目录栏调宽（0.16.0 新增）：按钮只渲染给带 `autoFor` 的自动分组、`/api/reveal-folder` 的 4 条校验分支（缺参数 / 路径穿越 / 含分隔符 / 目录不存在——**成功路径会真的 spawn `open -R` 弹出文件管理器窗口，故意不进自动化**）；目录栏拖拽与 180~520px 钳制、双击复位、方向键 ±8 与 Shift ±24、`localStorage` 持久化与跨文档保持、收起目录时拖拽条隐藏且正文占满（26 项）
@@ -260,7 +263,9 @@ npm publish --dry-run
 检查输出：
 - `name: atlas-dashboard`
 - `version: <新版本>`
-- `total files:` 应在 20~26 之间（当前为 23；bin/lib/public/server/README/LICENSE，包含 vendored 前端依赖）
+- `total files:` 应在 45~50 之间（当前为 47；bin/lib/public/server/README/LICENSE，包含 vendored 前端依赖）。
+  0.18.0 起这个数从 23 跳到 47、unpacked 从约 300KB 跳到 5.0MB —— mermaid 与 KaTeX
+  （含 20 个 woff2 字体）进了 `public/vendor/`。**这是预期的**，看到 47 不要以为打包出了错。
 - 不应含 `tests/`、`data/`、`*.tgz`、`config.json`（这些在 `package.json` 的 `files` 白名单外）
 
 ### 步骤 4：commit + push
@@ -353,7 +358,7 @@ atlas restart      # 让本机服务也用新版
 
 | 触发 | Workflow | 做什么 |
 |---|---|---|
-| `git push` 到 main | `.github/workflows/test.yml` | CLI smoke + landing demo + e2e install + 17 个隔离 spec（各自起实例，无需预置 fixture 与共享服务）+ 帧率非阻塞观测 |
+| `git push` 到 main | `.github/workflows/test.yml` | CLI smoke + landing demo + e2e install + 20 个隔离 spec（各自起实例，无需预置 fixture 与共享服务）+ 帧率非阻塞观测 |
 | `git push origin v*` (tag) | `.github/workflows/release.yml` | 抽取 PUBLISHING.md 该版本段落 → 创建 GitHub Release |
 | 任何 push 到 main | GitHub Pages（仓库设置） | 自动重新部署 `docs/` 到 https://damonamber.github.io/atlas-dashboard/ |
 | `npm publish` | npm registry | 包上架 + CDN 同步（约 1-2 分钟） |
@@ -526,6 +531,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.18.0** (2026-08-25) — 三项新功能：**Mermaid 图表与数学公式**、**HTML 预览沙箱与信任分级**、**CSV / JSON / 文本 / SVG 可选扫描**。① **Mermaid + KaTeX**（`public/vendor/markdown.js` + 新增 vendor 文件）：AI 写的架构说明、时序、流程几乎默认用 ` ```mermaid `，指标定义常带 `$…$`，而这些在 Atlas 里此前只是一段灰代码和一串美元符号——这是"用户会因为一张流程图流走"的那类基线缺失（同期新出的 markview / showmd 都把它当卖点）。做法是**服务端只产出降级可读的 DOM、渲染放到浏览器**：mermaid 块输出成 `<pre class="md-mermaid"><code class="language-mermaid">`，没渲染时它就是个正常代码块；`enhanceRich()` 在浏览器里串行调 `mermaid.render`（mermaid 对并发 render 不友好），失败时显示 mermaid 的**原始报错**并保留源码（AI 写错 mermaid 语法是常事，报错本身就是给 AI 的修改依据），成功后加一个「源码」开关。公式走同一套：块级 `$$…$$` / `\[…\]` 在 `render()` 里识别，行内 `$…$` / `$$…$$` / `\(…\)` 在 `inline()` **最前面**抠出来占位（必须排在转义与强调之前，否则 `$a_1 * b$` 里的 `_` 和 `*` 会被强调规则吃掉），交给 KaTeX 渲染，失败就显示原文。`$` 的边界规则照 Pandoc 来（开定界符后紧跟非空白、闭定界符前非空白、闭定界符后不紧跟数字），所以 `单价 $5，折后 $4` 和 `$100 到 $200` 原样显示——不用 lookbehind 而是用捕获组约束末字符，因为 Safari 16.4 之前不支持 lookbehind 而这份文件要在用户浏览器里跑。**按需加载**：`detectRichInHtml()` 基于渲染产物判断（零误判），没有图表公式的文档一个字节都不下载（mermaid 有 3.5MB）。四条路径一致生效——只读预览、编辑器实时预览（另开一档 350ms 防抖，跟着每次按键跑的话打一段话就是几十次图布局）、PDF 导出（`assetBase` 换成 `public/vendor` 的绝对 `file://` URL，否则 `/vendor/…` 会被解析到文件系统根）、局域网分享页（`/vendor/` 对非本机放行，否则访客只能看到源码）。第三方库按现有 `Sortable.min.js` 的先例进 `public/vendor/`（mermaid 11.17.1 / KaTeX 0.18.4 + 20 个 woff2），而不是加 npm 依赖——后者会拖进 84MB 的传递依赖树；`/vendor` 单独挂一条允许 ETag 协商缓存的静态路由（那 3.5MB 挂在 `no-store` 上每次预览都要重传一遍，而它的内容在两次启动之间不会变）。② **预览沙箱与信任分级**（`server.js` / `public/app.js`）：预览用的是同源 iframe，而里面那份 HTML 是 AI 写的——它的脚本能 `fetch('/api/save-md')` 改写磁盘上别的文档、能开局域网分享链接、能读扫描根配置。**实测确认过这条路是通的**。现在 HTML 默认 `sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads"`——**刻意不给 `allow-same-origin`**（两者同时给等于没沙箱，文档能自己把属性摘掉），文档自己的图表交互照常运行，但源变成 opaque：实测读父页面报 `SecurityError`、读写 Atlas 接口都被挡。代价是那几项需要注入的能力用不了（预览内编辑、正文命中高亮、⌘K/⌘B 转发、滚动位置恢复），所以给顶栏加了盾牌开关（`POST /api/trust`，按文件记在 `store.trusted`），点编辑按钮时会直接问要不要信任；`sandbox` 属性只在创建文档那一刻生效，所以切换后必须走一次 `about:blank → url` 的真实导航（给同一个 `src` 重新赋值不算导航）。md / csv / json / txt / svg 的预览页是 Atlas 自己渲染、内容全部转义过，**不沙箱化**——那样只会白白砍掉滚动恢复和高亮。服务端加了第二道锁：**非 GET 请求校验 Origin**，沙箱文档发出的 `Origin: null`、别的站点、本机其它端口的页面一律 403，不带 Origin 的 curl / CLI 放行（浏览器对 fetch 的写请求一定带这个头，挡住浏览器就够了）；这样将来哪条路径漏了 `sandbox` 属性，写操作仍然进不来。设置里新增「安全」分区：全局开关 `config.trustAllHtml`（回到 0.17 及更早的行为，打开前有一次带风险说明的确认）与「清空单篇信任记录」。③ **CSV / JSON / 文本 / SVG**（新增 `lib/plain-render.js`）：`DOC_EXTENSIONS` 扩到六种，但**默认仍只有 html + md**——AI 顺手导出的数据文件通常比正文多得多（一次分析吐十几个 csv 很常见），无条件扫进来会把目录树冲淡、未读红点跟着失真，而红点的价值全在于稀缺。CSV 用手写状态机按 RFC 4180 解析（字段里的分隔符、换行、`""` 转义都不会切错行——用 split 会从某行开始整张表错位，而带引号的长备注在 AI 导出里非常常见），分隔符自动嗅探且引号内不计数，**整列判断后数字列右对齐**，复用 Markdown 那套 data table 排版与宽表滚动提示（为此把表格遮罩逻辑从 `enhanceScript` 里拆成独立的 `tableOverflowScript` 复用）。JSON 重新缩进 + 按 key / 字符串 / 数字 / 布尔 / null 上色；非法 JSON 不白屏，报出行列位置——V8 的报错格式变过三轮（`line X column Y` / `position N` / Node 22+ 只在消息里嵌一段原文上下文），三种都处理，最后那种靠把片段拿回原文 `indexOf` 定位并要求唯一命中。SVG 用 `<img src="/raw/…">` 引入而不是内联：浏览器不执行 `<img>` 里的 SVG 脚本（实测 `<script>` 没跑），这条路径天然隔离、因此也不需要沙箱。这四种只读（没有编辑器），但未读红点、版本对比、收藏、标签、⌘K、全文搜索（csv/json 索引原文，svg 只索引 `<text>`/`<title>`/`<desc>` 里的文字）、局域网分享（渲染成网页返回，否则浏览器会把 .csv 直接下载走）、导出 PDF（SVG 除外）都照常。④ **修掉一处自己引入的副作用**：`styles.css` 一直用 `:has(#btn-edit:disabled)` 反推"首页态"来收起整条文档工具栏——"编辑按钮不可用"当时确实等价于"没打开文档"，但只读格式进来后就不成立了，表现是打开一篇 CSV 时编辑按钮**凭空消失**而不是变灰。改成显式的 `body.no-active-doc`（`index.html` 初始带上，`setActiveFile` 移除 / `goHome` 添加），三态实测正确。⑤ **测试**：新增 `rich-render.spec.js`（39 项）、`sandbox-trust.spec.js`（33 项）、`plain-formats.spec.js`（44 项），都做过反向验证；三个既有 spec 加 `config: { trustAllHtml: true }`——`scroll-stuck` / `preview-shortcut-bridge` / `shortcuts-panel` 都要从宿主页面读 iframe 的 `contentDocument`，而那正是沙箱切断的东西，它们测的是布局与快捷键桥、不该顺带承担沙箱的职责（沙箱本身由新 spec 覆盖）。全套 41 个 spec 全绿，`e2e-install` 10 项通过。⑥ **包体积**：unpacked 从约 300KB 涨到 5.0MB / 47 个文件（mermaid 3.6MB + KaTeX 0.4MB），`npx atlas-dashboard` 首次下载会慢几秒——这是"离线可用 + 不引入 84MB 依赖树"的代价，步骤 3 的 `total files` 预期值已同步更新。⑦ 顺手记一个**既有**问题（本版未改，基线同样如此）：PDF 导出每次都要 30 秒，因为 Chrome `--headless=old` 打印完 PDF 后不自己退出，一直靠 `pdf-export.js` 里的 30s 硬超时收尾（文件其实早就写完了）。可以改成"检测到 PDF 写完且大小稳定就主动 kill"，但那是动导出管线，留给后续版本。
 
 - **0.17.1** (2026-08-25) — 修 0.17.0 的宽表遮罩：**加大阅读宽度后，表格右侧那道阴影还留着，而那个位置已经没有表格了**。两个独立缺陷叠在一起，缺一个都不会长成用户看到的样子（都在 `public/vendor/markdown.js`）。① **遮罩状态一直落后一档**：`.md-inner` 的 `max-width` 带 `transition: .18s`，而切档时 `widthScript` 的 `apply()` 是**同步**调 `__atlasSyncTableOverflow()` 的——那一刻布局还是旧宽度，量出来的 `clientWidth` 还是上一档的值，于是"表格已经放得下了"这件事永远晚一步被发现，而动画结束后没有任何人再测量一次。0.17.0 发版前的验证之所以没抓到，是因为当时只在推荐宽度档下截图核对过；而从加宽档切到全屏档时同步测量恰好也得出"不溢出"、蒙对了，更掩盖了这一点。现在改用 `ResizeObserver` 观察 `.md-table-scroll`：它在 transition 的每一帧都触发，遮罩跟着动画淡入淡出，不需要去猜动画什么时候结束。顺带修掉三条原先根本没有重测入口的路径——**拖 TOC 宽度**、**收起 / 展开 TOC**、以及带动画的档位切换，因为 0.17.0 只监听了 `window resize`，而这三条都不发 resize 事件（正文宽度却实打实变了）。② **遮罩画在表格外面**：`.md-table-block` 是 block、宽度铺满整个正文，而遮罩是挂在它身上的 `::after`、贴的是**它**的右缘。表格比正文窄时（窄表，或者切到更宽档位之后），遮罩就落在表格右边那片空白上——实测偏离表格右缘 275px。这一条和 ① 独立：就算判定完全正确，只要哪次遮罩该亮，位置也是错的。改成 `width: fit-content; max-width: 100%`，这一层于是收缩到 `min(表格自然宽度, 正文宽度)`，右缘永远等于可见内容的右缘（实测偏差 0px）。③ 测试：在 `md-render-and-roundtrip.spec.js` 里把这件事收成一条**不变式**——「遮罩亮 ⟺ 真的还能往右滚，且亮着时遮罩右缘必须贴住表格右缘（偏差 ≤ 2px）」，三个档位各查一次，比写死"哪张表在哪档下该不该亮"稳得多。fixture 加了一张 8 列短内容的表（列宽由 `min-width: 5em` 决定所以宽度可预测，约 790px），正好卡在「推荐宽度档 724px 装不下、全屏档 874px 装得下」——这个"从溢出变成不溢出"的转变是遮罩状态出错时唯一会露馅的场景。**这条转变本身也被断言出来了**（比的是 `canScrollRight` 这个真实布局事实，不是 `hint` 那个可能正错着的状态），否则将来字体或列宽一变，前提不成立，上面三条会静默空转。撤掉两处修复复验过会红，实际值 `{hint:true, canScrollRight:false, gap:39}` 同时暴露两个缺陷，不是陪跑。另外手工验了五条路径（三档切换 / 收起展开 TOC / 拖 TOC 到 500px / 视口 1000↔1800 / 把宽表滚到最右遮罩要灭）与 `fit-content` 没把宽表压扁（12 列表仍可横向滚动、窄表不可滚）。全套 38 个 spec / 844 项断言全绿。④ 记一个本机环境坑：`npm pack` 报 `EACCES ... _cacache/content-v2/...`，是 `~/.npm/_cacache` 里有目录属主为 `root`（历史上某次 `sudo npm` 留下的），与本仓库无关；不要去 `sudo chown` 用户的缓存，加 `--cache /tmp/<临时目录>` 跑就行（已补进「故障排查」表）。
 

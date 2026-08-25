@@ -121,6 +121,17 @@
       + render(alert.rest) + '</blockquote>';
   }
 
+  // 块级数学公式的起始行：`$$`（可同行闭合）或 `\[`。
+  // 必须让 isBlockStart 认得它，否则上一段的段落收集会把 `$$` 当普通文字吃掉。
+  function matchMathFenceOpen(line) {
+    if (line == null) return null;
+    var m = /^\s*\$\$(.*)$/.exec(line);
+    if (m) return { close: '$$', rest: m[1] };
+    m = /^\s*\\\[(.*)$/.exec(line);
+    if (m) return { close: '\\]', rest: m[1] };
+    return null;
+  }
+
   function isBlockStart(line, next) {
     if (line == null) return false;
     return /^\s*(```+|~~~+)/.test(line)
@@ -128,7 +139,21 @@
       || /^\s*>/.test(line)
       || isMarker(line)
       || /^\s*([-*_])(\s*\1){2,}\s*$/.test(line)
+      || !!matchMathFenceOpen(line)
       || (line.indexOf('|') >= 0 && isSeparatorRow(next));
+  }
+
+  // ---------- 数学公式 ----------
+  // 只做"把 TeX 源码原样交给前端的 KaTeX"这一件事：这里不解析 TeX，
+  // 只负责识别边界、把源码安全地藏进 data-md-tex 属性。渲染在浏览器里做，
+  // 没有 KaTeX（或渲染失败）时降级显示原始 TeX，不会变成一堆乱码。
+  function mathHtml(tex, display) {
+    var raw = String(tex == null ? '' : tex).trim();
+    return '<' + (display ? 'div' : 'span') + ' class="md-math' + (display ? ' md-math-block' : '') + '"'
+      + ' data-md-tex="' + escapeHtml(raw) + '"'
+      + (display ? ' data-md-display="1"' : '')
+      + '><code class="md-math-fallback">' + escapeHtml(display ? '$$' + raw + '$$' : '$' + raw + '$') + '</code></'
+      + (display ? 'div' : 'span') + '>';
   }
 
   // ---------- 行内渲染 ----------
@@ -139,6 +164,27 @@
       codes.push('<code>' + escapeHtml(code) + '</code>');
       return '\u0000C' + (codes.length - 1) + '\u0000';
     });
+
+    // 1.5) 再保护行内数学 $…$ / \(…\)。必须排在转义与强调之前：
+    // `$a_1 * b_2$` 里的 _ 和 * 会被强调规则吃掉，公式就废了。
+    //
+    // $ 的边界规则照 Pandoc 来，否则「单价 $5，折后 $4」会被当成一个公式：
+    //   · 开定界符后面紧跟非空白
+    //   · 闭定界符前面是非空白
+    //   · 闭定界符后面不紧跟数字（挡住 $1$2 这类价格连写）
+    // 不用 lookbehind 表达"前面非空白"——Safari 16.4 之前不支持，
+    // 这份文件要在用户的浏览器里跑，用捕获组自己约束末字符更稳。
+    var maths = [];
+    var holdMath = function (tex, display) {
+      maths.push(mathHtml(tex, display));
+      return '\u0000M' + (maths.length - 1) + '\u0000';
+    };
+    text = text.replace(/\\\(([\s\S]+?)\\\)/g, function (m, tex) { return holdMath(tex, false); });
+    // 句子中间出现的 $$…$$ 要先吃掉，否则单 $ 规则会从第一个 $ 起匹配、
+    // 在行尾漏下一个孤零零的 $。这里按行内渲染（而不是 display）：
+    // 它出现在句子里，强行断行排版会更难看。行首独占的 $$ 早已被块级规则接走。
+    text = text.replace(/\$\$([^\n]+?)\$\$/g, function (m, tex) { return holdMath(tex, false); });
+    text = text.replace(/\$(\S(?:[^$\n]*?[^\s$])?)\$(?!\d)/g, function (m, tex) { return holdMath(tex, false); });
 
     // 2) 转义（此后 < > & " ' 已安全；* _ ` [ ] ( ) 保留用于标记匹配）
     text = escapeHtml(text);
@@ -174,7 +220,9 @@
     text = text.replace(/(^|[^\w_])_([^\s_][\s\S]*?)_/g, '$1<em>$2</em>');
     text = text.replace(/~~([\s\S]+?)~~/g, '<del>$1</del>');
 
-    // 7) 还原行内代码
+    // 7) 还原行内数学与行内代码（数学先还原：它的 HTML 里不含占位符，顺序无害，
+    //    但放在代码之前能保证两类占位符都不会被对方的正则误伤）
+    text = text.replace(/\u0000M(\d+)\u0000/g, function (m, i) { return maths[+i]; });
     text = text.replace(/\u0000C(\d+)\u0000/g, function (m, i) { return codes[+i]; });
     return text;
   }
@@ -324,8 +372,60 @@
           buf.push(lines[i]);
           i++;
         }
+        var code = buf.join('\n');
+        // ```mermaid：交给前端的 mermaid 渲染成图。
+        // 外层仍然是 <pre><code class="language-mermaid">，只是多挂一个 class：
+        //   · 渲染失败 / 没有 mermaid 库时，看到的就是一个正常的代码块（可读的降级）
+        //   · 所见即所得编辑的反解析走 serializeBlock 的 PRE 分支，
+        //     从 <code> 的 textContent 拿回源码，即使 data-md-raw 丢了也能还原成
+        //     ```mermaid 围栏，不会把图表源码写坏
+        if (/^mermaid$/i.test(lang)) {
+          push('<pre class="md-mermaid"><code class="language-mermaid">'
+            + escapeHtml(code) + '</code></pre>');
+          continue;
+        }
         var cls = lang ? ' class="language-' + escapeHtml(lang) + '"' : '';
-        push('<pre><code' + cls + '>' + escapeHtml(buf.join('\n')) + '</code></pre>');
+        push('<pre><code' + cls + '>' + escapeHtml(code) + '</code></pre>');
+        continue;
+      }
+
+      // 块级数学公式：$$ … $$ 与 \[ … \]（可单行闭合，也可跨行）
+      var mathOpen = matchMathFenceOpen(line);
+      if (mathOpen) {
+        var closeTok = mathOpen.close;
+        var mbuf = [];
+        var closed = false;
+        var firstRest = mathOpen.rest;
+        var endIdx = firstRest.indexOf(closeTok);
+        if (endIdx >= 0) {
+          // 同一行就闭合了：$$ x^2 $$
+          mbuf.push(firstRest.slice(0, endIdx));
+          closed = true;
+          i++;
+        } else {
+          if (firstRest.trim()) mbuf.push(firstRest);
+          i++;
+          while (i < n) {
+            var ci = lines[i].indexOf(closeTok);
+            if (ci >= 0) {
+              if (lines[i].slice(0, ci).trim()) mbuf.push(lines[i].slice(0, ci));
+              i++;
+              closed = true;
+              break;
+            }
+            mbuf.push(lines[i]);
+            i++;
+          }
+        }
+        // 没闭合的 $$ 不当公式：孤零零一个 $$ 更可能是普通文字，
+        // 硬当公式会把它后面整篇文档都吞进一个块里。把游标退回起始行的下一行，
+        // 只把这一行当段落吐掉，后面的内容照常按块解析
+        if (!closed) {
+          i = blockStart + 1;
+          push('<p>' + inline(line) + '</p>');
+          continue;
+        }
+        push(mathHtml(mbuf.join('\n'), true));
         continue;
       }
 
@@ -631,6 +731,49 @@
     'border-radius:0 8px 8px 0;pointer-events:none;opacity:0;transition:opacity .15s ease;',
     'background:linear-gradient(to right,transparent,var(--md-fade));}',
     '.md-body .md-table-block.md-can-scroll-right::after{opacity:1;}',
+    // ---------- Mermaid 图表 ----------
+    // 未渲染时它就是一个普通代码块（继承上面 pre 的样式），所以这里只写
+    // 「渲染成功之后」的长相。图是内容而不是代码，去掉代码块的底色和边框，
+    // 只留一层极淡的容器边界，让图自己说话。
+    '.md-body pre.md-mermaid.is-rendered{white-space:normal;background:transparent;',
+    'border:1px solid var(--md-border);padding:14px 16px 10px;text-align:center;}',
+    '.md-body pre.md-mermaid.is-rendered>code{display:none;}',
+    '.md-body .md-mermaid-figure{display:block;overflow-x:auto;}',
+    '.md-body .md-mermaid-figure svg{max-width:100%;height:auto;}',
+    // 头部：一个安静的类型标签 + 「源码」切换。切换是必要的——图渲染出来之后
+    // 想核对一下 AI 写的节点关系，不该被迫回到编辑器
+    '.md-body .md-mermaid-head{display:flex;align-items:center;justify-content:space-between;',
+    'gap:8px;margin:-4px 0 8px;font:500 11px/1.4 -apple-system,system-ui,sans-serif;}',
+    '.md-body .md-mermaid-tag{color:var(--md-fg-faint);letter-spacing:.04em;text-transform:uppercase;}',
+    '.md-body .md-mermaid-btn{border:1px solid var(--md-border-strong);border-radius:5px;',
+    'background:transparent;color:var(--md-fg-muted);padding:2px 8px;font:inherit;cursor:pointer;',
+    'transition:color .12s,border-color .12s;}',
+    '.md-body .md-mermaid-btn:hover{color:var(--md-fg);border-color:var(--md-fg-muted);}',
+    // 显示源码时把 code 放回来（此时才需要代码块的等宽与左对齐）
+    '.md-body pre.md-mermaid.is-rendered.show-source{text-align:left;background:var(--md-pre-bg);}',
+    '.md-body pre.md-mermaid.is-rendered.show-source>code{display:block;white-space:pre;}',
+    '.md-body pre.md-mermaid.is-rendered.show-source .md-mermaid-figure{display:none;}',
+    // 渲染失败：不藏错误。AI 写错 mermaid 语法是常事，直接把 mermaid 的报错
+    // 显示出来，用户才知道要让 AI 改哪一行，而不是对着一个空白框发呆
+    '.md-body pre.md-mermaid.has-error{border-color:color-mix(in srgb,var(--md-alert-caution) 40%,var(--md-border));}',
+    '.md-body .md-mermaid-err{margin:10px 0 0;padding:8px 10px;border-radius:6px;text-align:left;',
+    'background:color-mix(in srgb,var(--md-alert-caution) 8%,transparent);color:var(--md-alert-caution);',
+    'font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;}',
+    // ---------- 数学公式 ----------
+    // 未渲染时显示的是 $…$ 原文（.md-math-fallback），渲染成功后被换成 KaTeX 输出。
+    // 降级态刻意保留美元符号：读者一眼能看出"这里是一条公式，只是没渲染出来"。
+    '.md-body .md-math-fallback{background:var(--md-code-bg);border-radius:4px;padding:.15em .35em;',
+    'font-size:.9em;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}',
+    '.md-body .md-math-block{margin:0 0 1em;text-align:center;overflow-x:auto;overflow-y:hidden;}',
+    '.md-body .md-math-block.is-rendered{padding:.2em 0;}',
+    // KaTeX 的 .katex-display 自带 margin，和上面的 margin 叠起来间距过大
+    '.md-body .md-math-block .katex-display{margin:0;}',
+    '.md-body .md-math.is-rendered .md-math-fallback{display:none;}',
+    // 公式里的字号跟着正文走，不要 KaTeX 默认的 1.21em——正文 15px 时它会明显跳字号
+    '.md-body .katex{font-size:1.05em;}',
+    // 渲染失败的公式：标出来但不打断阅读
+    '.md-body .md-math.has-error .md-math-fallback{color:var(--md-alert-caution);',
+    'background:color-mix(in srgb,var(--md-alert-caution) 10%,transparent);}',
   ].join('\n');
 
   // ---------- HTML → Markdown（反向序列化，仅浏览器端所见即所得编辑用）----------
@@ -1078,6 +1221,299 @@
   // 只读预览页的运行时增强：给代码块加「语言标签 + 复制」，给宽表格套横向滚动层。
   // 特意只在 iframe 预览页里做、不写进 render() 的输出——编辑器右侧的所见即所得
   // 预览面板要靠 htmlToMarkdown() 反解析回源码，DOM 里多出按钮会污染结果。
+  // ==================== 富内容：Mermaid 图表 / KaTeX 公式 ====================
+  //
+  // 分工：块级渲染器只产出**降级可读**的 DOM（mermaid 是普通代码块、公式是 $…$ 原文），
+  // 真正的图形渲染放到浏览器里做。这样：
+  //   · 服务端不需要跑 headless 图形栈，渲染失败也永远有可读的兜底
+  //   · 三条路径（iframe 预览页 / 编辑器实时预览 / 打印版）共用这一份逻辑
+  //   · 库按需加载——mermaid 压过来是 3.5MB，绝大多数文档一个图表都没有
+  var RICH_MERMAID_SEL = 'pre.md-mermaid';
+  var RICH_MATH_SEL = '.md-math[data-md-tex]';
+
+  // 渲染结果里到底有没有用到这两样。基于产出的 HTML 判断而不是猜源码，
+  // 零误判——块级规则已经跑过一遍了。
+  function detectRichInHtml(html) {
+    var s = String(html == null ? '' : html);
+    return {
+      mermaid: s.indexOf('md-mermaid') >= 0,
+      math: s.indexOf('data-md-tex') >= 0,
+    };
+  }
+
+  function richAssetUrl(base, rel) {
+    var b = base == null ? '/vendor/' : String(base);
+    if (b && b.charAt(b.length - 1) !== '/') b += '/';
+    return b + rel;
+  }
+
+  // 往 document 里挂一次 <script> / <link>，同 URL 复用同一个 Promise。
+  // 反复打开同一篇文档、或一篇文档里有十个图表，都只加载一次。
+  function loadOnce(doc, kind, url) {
+    var win = doc.defaultView || (typeof window !== 'undefined' ? window : null);
+    var cacheHost = win || doc;
+    var cache = cacheHost.__atlasRichLoads || (cacheHost.__atlasRichLoads = {});
+    if (cache[url]) return cache[url];
+    cache[url] = new Promise(function (resolve, reject) {
+      var el;
+      if (kind === 'css') {
+        el = doc.createElement('link');
+        el.rel = 'stylesheet';
+        el.href = url;
+      } else {
+        el = doc.createElement('script');
+        el.src = url;
+        el.async = false;
+      }
+      el.setAttribute('data-atlas-rich', '1');
+      el.onload = function () { resolve(true); };
+      el.onerror = function () { reject(new Error('加载失败: ' + url)); };
+      (doc.head || doc.documentElement).appendChild(el);
+    });
+    return cache[url];
+  }
+
+  // mermaid 的主题名（'default' / 'dark'）。theme 显式给了就用它，
+  // 否则跟随该文档所在窗口的系统配色——图表底色和正文背景必须是同一边，
+  // 否则深色页面里会嵌一张纯白的图。
+  function richMermaidTheme(doc, theme) {
+    if (theme === 'dark') return 'dark';
+    if (theme === 'light') return 'default';
+    try {
+      var win = doc.defaultView;
+      if (win && win.matchMedia && win.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
+    } catch (_) {}
+    return 'default';
+  }
+
+  // 渲染成功后的图表外壳：一个安静的类型标签 + 「源码」开关 + 图。
+  // 原来的 <code> 留在 DOM 里（CSS 隐藏）——它同时是「切回源码」的内容源
+  // 和所见即所得反解析的依据，删掉会让编辑保存把图表源码写坏。
+  function buildMermaidShell(doc, pre) {
+    if (pre.querySelector('.md-mermaid-figure')) return pre.querySelector('.md-mermaid-figure');
+    var head = doc.createElement('div');
+    head.className = 'md-mermaid-head';
+    head.setAttribute('contenteditable', 'false');
+    var tag = doc.createElement('span');
+    tag.className = 'md-mermaid-tag';
+    tag.textContent = 'Mermaid';
+    var btn = doc.createElement('button');
+    btn.type = 'button';
+    btn.className = 'md-mermaid-btn';
+    btn.textContent = '源码';
+    btn.setAttribute('aria-label', '切换图表与源码');
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var on = pre.classList.toggle('show-source');
+      btn.textContent = on ? '图表' : '源码';
+    });
+    head.appendChild(tag);
+    head.appendChild(btn);
+    var fig = doc.createElement('div');
+    fig.className = 'md-mermaid-figure';
+    fig.setAttribute('contenteditable', 'false');
+    pre.insertBefore(head, pre.firstChild);
+    pre.insertBefore(fig, head.nextSibling);
+    return fig;
+  }
+
+  function markMermaidError(doc, pre, message) {
+    pre.classList.remove('is-rendered');
+    pre.classList.add('has-error');
+    pre.setAttribute('data-md-rich', 'error');
+    var old = pre.querySelector('.md-mermaid-err');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    var box = doc.createElement('div');
+    box.className = 'md-mermaid-err';
+    box.setAttribute('contenteditable', 'false');
+    box.textContent = String(message || '图表渲染失败');
+    pre.appendChild(box);
+  }
+
+  // mermaid 对并发 render 不友好（内部有全局状态），所以串行跑。
+  // 一篇文档里十几张图的场景下这也只是几十毫秒的事。
+  function renderMermaidAll(doc, nodes, theme) {
+    var win = doc.defaultView || (typeof window !== 'undefined' ? window : null);
+    var mermaid = win && win.mermaid;
+    if (!mermaid) {
+      nodes.forEach(function (pre) {
+        markMermaidError(doc, pre, '没有找到 mermaid 渲染库，已按源码显示。');
+      });
+      return Promise.resolve();
+    }
+    try {
+      mermaid.initialize({
+        startOnLoad: false,
+        // strict：mermaid 会转义节点文本里的 HTML。图表源码同样是 AI 生成的，
+        // 不该因为一个 <img onerror> 就在预览页里拿到执行权
+        securityLevel: 'strict',
+        theme: richMermaidTheme(doc, theme),
+        fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif',
+      });
+    } catch (_) {}
+    var seq = 0;
+    return nodes.reduce(function (chain, pre) {
+      return chain.then(function () { return renderOneMermaid(doc, mermaid, pre, ++seq); });
+    }, Promise.resolve());
+  }
+
+  function renderOneMermaid(doc, mermaid, pre, seq) {
+    var codeEl = pre.querySelector('code');
+    var src = (codeEl ? codeEl.textContent : pre.textContent) || '';
+    var id = 'atlas-mmd-' + Date.now().toString(36) + '-' + seq;
+    pre.setAttribute('data-md-rich', 'pending');
+    return Promise.resolve()
+      .then(function () { return mermaid.render(id, src); })
+      .then(function (out) {
+        var svg = out && out.svg ? out.svg : String(out || '');
+        if (!svg) throw new Error('渲染结果为空');
+        var fig = buildMermaidShell(doc, pre);
+        fig.innerHTML = svg;
+        if (out && typeof out.bindFunctions === 'function') {
+          try { out.bindFunctions(fig); } catch (_) {}
+        }
+        pre.classList.remove('has-error');
+        pre.classList.add('is-rendered');
+        pre.setAttribute('data-md-rich', 'done');
+      })
+      .catch(function (err) {
+        // mermaid 解析失败时会往 body 上留一个临时容器，不清掉的话
+        // 页面底部会多出一块「Syntax error in graph」的孤儿内容
+        try {
+          [id, 'd' + id].forEach(function (x) {
+            var orphan = doc.getElementById(x);
+            if (orphan && orphan.parentNode) orphan.parentNode.removeChild(orphan);
+          });
+        } catch (_) {}
+        markMermaidError(doc, pre, (err && err.message) || String(err));
+      });
+  }
+
+  function renderMathAll(doc, nodes) {
+    var win = doc.defaultView || (typeof window !== 'undefined' ? window : null);
+    var katex = win && win.katex;
+    if (!katex) return;
+    nodes.forEach(function (el) {
+      var tex = el.getAttribute('data-md-tex') || '';
+      var display = el.getAttribute('data-md-display') === '1';
+      try {
+        // throwOnError:false —— 局部写错的命令渲染成红字，公式其余部分照样可读。
+        // output:'html' 而不是默认的 htmlAndMathml：后者会把同一条公式输出两份
+        // （视觉 + MathML），反解析降级路径读 textContent 时会拿到重复内容。
+        // 无障碍用 aria-label 兜住原始 TeX。
+        var html = katex.renderToString(tex, {
+          displayMode: display,
+          throwOnError: false,
+          output: 'html',
+        });
+        var box = doc.createElement(display ? 'div' : 'span');
+        box.className = 'md-math-out';
+        box.setAttribute('contenteditable', 'false');
+        box.setAttribute('role', 'math');
+        box.setAttribute('aria-label', tex);
+        box.innerHTML = html;
+        el.insertBefore(box, el.firstChild);
+        el.classList.remove('has-error');
+        el.classList.add('is-rendered');
+        el.setAttribute('data-md-rich', 'done');
+      } catch (err) {
+        el.classList.add('has-error');
+        el.setAttribute('data-md-rich', 'error');
+        el.setAttribute('title', (err && err.message) || String(err));
+      }
+    });
+  }
+
+  // 把已渲染的富内容还原成初始状态，供主题切换后重渲染用
+  function resetRich(root) {
+    var scope = root || (typeof document !== 'undefined' ? document : null);
+    if (!scope || !scope.querySelectorAll) return;
+    Array.prototype.forEach.call(scope.querySelectorAll(RICH_MERMAID_SEL), function (pre) {
+      pre.classList.remove('is-rendered', 'has-error', 'show-source');
+      pre.removeAttribute('data-md-rich');
+      ['.md-mermaid-head', '.md-mermaid-figure', '.md-mermaid-err'].forEach(function (sel) {
+        var n = pre.querySelector(sel);
+        if (n && n.parentNode) n.parentNode.removeChild(n);
+      });
+    });
+    Array.prototype.forEach.call(scope.querySelectorAll(RICH_MATH_SEL), function (el) {
+      el.classList.remove('is-rendered', 'has-error');
+      el.removeAttribute('data-md-rich');
+      var out = el.querySelector('.md-math-out');
+      if (out && out.parentNode) out.parentNode.removeChild(out);
+    });
+  }
+
+  /**
+   * 渲染 root 里所有未处理的 Mermaid 图表与数学公式。
+   * 只碰没标记过的节点，可以在实时预览里反复调用。
+   *
+   * @param {Document|Element} root 文档或容器
+   * @param {object} [opts] { base: 资源前缀（默认 /vendor/）, theme: 'light'|'dark' }
+   * @returns {Promise} 全部渲染尝试结束后 resolve（单个失败不 reject）
+   */
+  function enhanceRich(root, opts) {
+    opts = opts || {};
+    var scope = root || (typeof document !== 'undefined' ? document : null);
+    if (!scope || !scope.querySelectorAll) return Promise.resolve();
+    var doc = scope.nodeType === 9 ? scope : (scope.ownerDocument || scope);
+    var pick = function (sel) {
+      return Array.prototype.filter.call(scope.querySelectorAll(sel), function (el) {
+        return !el.getAttribute('data-md-rich');
+      });
+    };
+    var mermaidNodes = pick(RICH_MERMAID_SEL);
+    var mathNodes = pick(RICH_MATH_SEL);
+    if (!mermaidNodes.length && !mathNodes.length) return Promise.resolve();
+
+    var base = opts.base;
+    var jobs = [];
+    if (mermaidNodes.length) {
+      jobs.push(
+        loadOnce(doc, 'js', richAssetUrl(base, 'mermaid.min.js'))
+          .then(function () { return renderMermaidAll(doc, mermaidNodes, opts.theme); })
+          .catch(function (err) {
+            mermaidNodes.forEach(function (pre) {
+              markMermaidError(doc, pre, (err && err.message) || '图表库加载失败');
+            });
+          }),
+      );
+    }
+    if (mathNodes.length) {
+      jobs.push(
+        Promise.all([
+          loadOnce(doc, 'css', richAssetUrl(base, 'katex/katex.min.css')),
+          loadOnce(doc, 'js', richAssetUrl(base, 'katex/katex.min.js')),
+        ])
+          .then(function () { renderMathAll(doc, mathNodes); })
+          .catch(function () {
+            // 公式库加载不上就保持 $…$ 原文，不额外报错——一行原始 TeX
+            // 比一条红色的"库加载失败"更接近用户想看的东西
+            mathNodes.forEach(function (el) { el.setAttribute('data-md-rich', 'error'); });
+          }),
+      );
+    }
+    return Promise.all(jobs);
+  }
+
+  // iframe 预览页 / 打印页里的引导脚本。markdown.js 已经由 renderPage 一起挂进去，
+  // 所以这里直接调用上面那份逻辑，不需要把函数体序列化一遍。
+  function richBootScript(base, theme) {
+    var opts = JSON.stringify({ base: base || '/vendor/', theme: theme || null });
+    return '(function(){var o=' + opts + ';'
+      + 'function go(){if(window.AtlasMarkdown&&window.AtlasMarkdown.enhanceRich)'
+      + 'window.AtlasMarkdown.enhanceRich(document,{base:o.base,theme:o.theme||undefined});}'
+      + 'if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",go);else go();'
+      // 跟随系统配色时，切换深浅色要把图表重画一遍：mermaid 把颜色烧进了 SVG，
+      // 不重画的话深色页面里会留着一张浅色的图
+      + 'if(!o.theme&&window.matchMedia){try{var mq=window.matchMedia("(prefers-color-scheme: dark)");'
+      + 'var onChange=function(){if(!window.AtlasMarkdown)return;window.AtlasMarkdown.resetRich(document);go();};'
+      + 'if(mq.addEventListener)mq.addEventListener("change",onChange);else if(mq.addListener)mq.addListener(onChange);'
+      + '}catch(_){}}'
+      + '})();';
+  }
+
   var enhanceScript = '(function(){'
     // 页内锚点：本页注入了 <base href="/raw/…/">，href="#id" 会被解析成
     // /raw/…/#id —— 点一下标题锚点或 md 里的 [x](#y) 就整页跳走变 404。
@@ -1098,6 +1534,8 @@
     + 'ta.setAttribute("aria-hidden","true");ta.style.position="fixed";ta.style.top="-1000px";ta.style.opacity="0";'
     + 'document.body.appendChild(ta);ta.select();document.execCommand("copy");document.body.removeChild(ta);done();}catch(e){}}'
     + 'Array.prototype.forEach.call(document.querySelectorAll(".md-body pre"),function(pre){'
+    // mermaid 块自己带头部（类型标签 + 源码开关），别再套一层"MERMAID / 复制"
+    + 'if(pre.classList&&pre.classList.contains("md-mermaid"))return;'
     + 'var code=pre.querySelector("code");if(!code)return;'
     + 'var lang="";var m=(code.className||"").match(/language-([\\w+#.-]+)/);if(m)lang=m[1];'
     + 'var head=document.createElement("div");head.className="md-code-head";'
@@ -1113,11 +1551,17 @@
     + '}else{fallbackCopy(t,done);}});'
     + 'head.appendChild(btn);pre.insertBefore(head,pre.firstChild);'
     + '});'
-    // 宽表格：套两层——外层 .md-table-block 负责定位右侧的"还有内容"渐变遮罩，
-    // 内层 .md-table-scroll 负责横向滚动。分两层是因为 overflow 容器内的
-    // absolute 定位元素会跟着内容一起滚走，遮罩必须挂在不滚动的那一层上。
-    // 只在只读预览页里注入：编辑器右侧的预览面板要靠 htmlToMarkdown() 反解析
-    // 回源码，DOM 里多出包裹层会污染结果。
+    + '})();';
+
+  // 宽表格：套两层——外层 .md-table-block 负责定位右侧的"还有内容"渐变遮罩，
+  // 内层 .md-table-scroll 负责横向滚动。分两层是因为 overflow 容器内的
+  // absolute 定位元素会跟着内容一起滚走，遮罩必须挂在不滚动的那一层上。
+  // 只在只读预览页里注入：编辑器右侧的预览面板要靠 htmlToMarkdown() 反解析
+  // 回源码，DOM 里多出包裹层会污染结果。
+  //
+  // 单独抽出来是为了给 CSV 预览页复用——那边整页就是一张表，同样需要
+  // "右边还有五列"这个信号，而它不需要 enhanceScript 里的锚点与代码块逻辑。
+  var tableOverflowScript = '(function(){'
     + 'var blocks=[];'
     + 'Array.prototype.forEach.call(document.querySelectorAll(".md-body table"),function(tbl){'
     + 'if(tbl.parentNode&&tbl.parentNode.classList&&tbl.parentNode.classList.contains("md-table-scroll"))return;'
@@ -1216,13 +1660,28 @@
       : '';
     // 打印模式：不要固定定位的目录侧栏（会盖在每页正文上）、不要代码块复制按钮
     // （纸上点不了）、不要标题 hover 锚点。只要干净的正文。
+    // 富内容（图表 / 公式）的库前缀。三条路径各不相同：
+    //   · iframe 预览页与分享页走 HTTP，用 /vendor/
+    //   · 打印版在 file:// 下渲染，必须换成 public/vendor 的绝对 file:// URL，
+    //     否则 /vendor/mermaid.min.js 会被解析到文件系统根目录
+    var richBase = opts.assetBase || '/vendor/';
+
     if (opts.forPrint) {
+      var printBody = renderBody(src);
+      var printNeeds = detectRichInHtml(printBody);
+      var printRich = (printNeeds.mermaid || printNeeds.math)
+        // 打印一律用浅色主题：正文配色也被 printCss 钉回浅色了，
+        // 深色的图表印在白纸上是一块墨疙瘩
+        ? '<script src="' + escapeHtml(richAssetUrl(richBase, 'markdown.js')) + '"></script>'
+          + '<script>' + richBootScript(richBase, 'light') + '</script>'
+        : '';
       return '<!doctype html><html lang="zh"><head><meta charset="utf-8" />'
         + baseTag
         + '<meta name="color-scheme" content="light" />'
         + '<title>' + title + '</title>'
         + '<style>' + markdownCss + printCss + '</style></head>'
-        + '<body class="md-body">' + renderBody(src)
+        + '<body class="md-body">' + printBody
+        + printRich
         + '<script>' + printFitScript + '</script>'
         + '</body></html>';
     }
@@ -1254,6 +1713,14 @@
         + ' title="拖拽调整目录宽度，双击复位"></div>'
       : '';
 
+    // 只有文档真的用到图表 / 公式时才挂库。mermaid 压过来 3.5MB，
+    // 无条件注入等于给每次预览都加一次几 MB 的本地传输。
+    var needs = detectRichInHtml(body);
+    var richParts = (needs.mermaid || needs.math)
+      ? '<script src="' + escapeHtml(richAssetUrl(richBase, 'markdown.js')) + '"></script>'
+        + '<script>' + richBootScript(richBase, opts.theme) + '</script>'
+      : '';
+
     return head
       + '<style>' + pageCss + tocCss + markdownCss + forced + '</style></head>'
       + '<body' + (hasToc ? '' : ' class="md-no-toc"') + '>'
@@ -1262,7 +1729,9 @@
       + '<div class="md-content"><div class="md-inner md-body">' + body + '<div class="md-tail-space" aria-hidden="true"></div></div></div>'
       + (hasToc ? '<script>' + tocScript + '</script>' : '')
       + '<script>' + enhanceScript + '</script>'
+      + '<script>' + tableOverflowScript + '</script>'
       + '<script>' + widthScript + '</script>'
+      + richParts
       + '</body></html>';
   }
 
@@ -1273,9 +1742,16 @@
     htmlToMarkdown: htmlToMarkdown,
     markdownCss: markdownCss,
     pageCss: pageCss,
+    tocCss: tocCss,
     forcedThemeCss: forcedThemeCss,
     printCss: printCss,
     splitFrontMatter: splitFrontMatter,
     escapeHtml: escapeHtml,
+    // 宽表右缘的"还有内容"提示。CSV 预览页复用它
+    tableOverflowScript: tableOverflowScript,
+    // 富内容（Mermaid / KaTeX）：浏览器端渲染，服务端只用得到 detect
+    enhanceRich: enhanceRich,
+    resetRich: resetRich,
+    detectRichInHtml: detectRichInHtml,
   };
 });

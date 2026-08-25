@@ -30,6 +30,10 @@ function check(name, actual, expected) {
         + '<p>正文段落，用来承载点击落点。</p>'.repeat(20) + '</body></html>',
       'proj/note.md': '# 笔记\n\n正文。\n',
     },
+    // "在 iframe 正文里按 ? 也能唤出" 依赖注入到预览文档里的快捷键桥，
+    // 而桥需要同源。HTML 预览默认走沙箱，所以这里显式信任
+    // （沙箱本身由 rich-and-sandbox.spec 覆盖）
+    config: { trustAllHtml: true },
   });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });

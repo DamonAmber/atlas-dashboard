@@ -25,6 +25,10 @@ const state = {
   sortMode: localStorage.getItem('atlas:sortMode') || 'name',
   // path → { token, urls } —— 用于文件行渲染时判断是否已分享 + 状态角标
   sharesByPath: new Map(),
+  // 已显式信任的 HTML 路径。未信任的走沙箱 iframe 预览（拿不到同源权限）
+  trusted: new Set(),
+  // 设置里的全局开关：打开后所有 HTML 都按信任处理
+  trustAllHtml: false,
 };
 
 // 预览区轻量编辑模式状态
@@ -85,6 +89,7 @@ const els = {
   diffRevert: document.getElementById('diff-revert'),
   diffAccept: document.getElementById('diff-accept'),
   diffClose: document.getElementById('diff-close'),
+  btnTrust: document.getElementById('btn-trust'),
   btnEdit: document.getElementById('btn-edit'),
   btnEditSave: document.getElementById('btn-edit-save'),
   btnEditCancel: document.getElementById('btn-edit-cancel'),
@@ -116,6 +121,8 @@ const els = {
   dirCancel: document.getElementById('dir-cancel'),
   dirSelect: document.getElementById('dir-select'),
   notifyToggle: document.getElementById('notify-toggle'),
+  trustAllToggle: document.getElementById('trust-all-toggle'),
+  trustClearBtn: document.getElementById('trust-clear-btn'),
   notifyHint: document.getElementById('notify-hint'),
   ignoreInput: document.getElementById('ignore-input'),
   ignoreSaveBtn: document.getElementById('ignore-save-btn'),
@@ -169,12 +176,33 @@ const els = {
 
 // 文档扩展名工具：显示名去扩展名 / 预览 URL 路由
 function stripDocExt(name) {
-  return String(name || '').replace(/\.(html?|md|markdown)$/i, '');
+  return String(name || '').replace(/\.(html?|md|markdown|csv|tsv|json|txt|text|svg)$/i, '');
 }
 function isMdFile(file) {
   if (!file) return false;
   if (file.docType) return file.docType === 'md';
   return /\.(md|markdown)$/i.test(file.name || '');
+}
+// 只读格式：有预览、没有编辑器。改 csv/json 该用对应的专业工具，
+// Atlas 要回答的是"AI 刚生成了什么"
+const READONLY_DOC_TYPES = new Set(['csv', 'json', 'txt', 'svg']);
+function isReadonlyDoc(file) {
+  return READONLY_DOC_TYPES.has(docTypeOf(file));
+}
+// 目录树 / 面包屑 / ⌘K 里的类型角标文字
+const DOC_TYPE_BADGE = {
+  html: 'HTML', md: 'MD', csv: 'CSV', json: 'JSON', txt: 'TXT', svg: 'SVG',
+};
+// 类型图标：md 是带文字行的文件、html 是地球（能在浏览器里打开）、
+// csv 是表格、json 是花括号、txt 是文本行、svg 是图形
+const DOC_TYPE_ICON = {
+  html: 'globe', md: 'file-text', csv: 'table', json: 'braces', txt: 'align-left', svg: 'shapes',
+};
+function docTypeBadge(file) {
+  return DOC_TYPE_BADGE[docTypeOf(file)] || 'HTML';
+}
+function docTypeIconName(file) {
+  return DOC_TYPE_ICON[docTypeOf(file)] || 'globe';
 }
 // ---------- 图标 ----------
 // 全站图标只有一个来源：index.html 顶部内嵌的 <symbol> sprite。
@@ -183,26 +211,183 @@ function ic(name, size = 14, extraClass = '') {
   const cls = 'ico' + (extraClass ? ' ' + extraClass : '');
   return `<svg class="${cls}" width="${size}" height="${size}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 }
-// 文档类型图标：md = 带文字行的文件，html = 地球（对应"能在浏览器里打开"）
+// 文档类型图标：md = 带文字行的文件，html = 地球（对应"能在浏览器里打开"），
+// csv/json/txt/svg 各有自己的形状
 function docTypeIcon(file, size = 13) {
-  return ic(isMdFile(file) ? 'file-text' : 'globe', size);
+  return ic(docTypeIconName(file), size);
 }
 // 当前生效的主题：system 不传给服务端，让预览页自己跟随系统
 function forcedTheme() {
   const t = document.documentElement.getAttribute('data-theme');
   return t === 'light' || t === 'dark' ? t : '';
 }
-// iframe 预览地址：md 走服务端渲染，html 用原始 /raw/ 地址
+// iframe 预览地址：
+//   html          → 原始 /raw/ 地址（文档自己就是一个网页）
+//   md            → /api/render-md
+//   csv/json/txt/svg → /api/render-doc
+// 后两类都是 Atlas 自己渲染的页面，所以要带上 theme：iframe 里的
+// prefers-color-scheme 读系统设置、不继承父文档，主题钉死时它得跟着钉
 function previewUrlFor(file) {
   if (!file) return '';
+  const th = forcedTheme();
+  const themeQs = th ? '&theme=' + th : '';
   if (isMdFile(file)) {
-    // 带上 theme：md 预览页是 Atlas 自己渲染的，主题钉死时它要跟着钉
-    // （iframe 里的 prefers-color-scheme 不继承父文档）
-    const th = forcedTheme();
-    return '/api/render-md?path=' + encodeURIComponent(file.path)
-      + (th ? '&theme=' + th : '');
+    return '/api/render-md?path=' + encodeURIComponent(file.path) + themeQs;
+  }
+  if (isReadonlyDoc(file)) {
+    return '/api/render-doc?path=' + encodeURIComponent(file.path) + themeQs;
   }
   return file.url;
+}
+
+// ==================== 预览沙箱与信任分级 ====================
+//
+// 问题：预览用的是同源 iframe（localhost:4321），而里面那份 HTML 是 AI 写的。
+// 同源意味着它的脚本能 fetch("/api/save-md")、能开分享链接、能读扫描根配置——
+// 一篇文档因此可以改写磁盘上别的文档。同源不是疏忽，是换来的能力：预览内编辑、
+// 正文高亮、⌘K/⌘B 转发、滚动位置恢复，全都要访问 contentDocument。
+//
+// 所以做成分级：默认沙箱（保留 allow-scripts，图表照样能画，但没有
+// allow-same-origin —— 文档的源变成 opaque，同源那套权限一并失效），
+// 用户对某一篇按下"信任"之后才切回同源，把那几项增强能力交还给它。
+//
+// allow-scripts 与 allow-same-origin 只有同时给出才危险（文档能自己把
+// sandbox 属性摘掉）。只给 allow-scripts 是安全的。
+const PREVIEW_SANDBOX = [
+  'allow-scripts',
+  'allow-popups',
+  'allow-popups-to-escape-sandbox',
+  'allow-forms',
+  'allow-modals',
+  'allow-downloads',
+].join(' ');
+
+// 文件的文档类型。服务端会给 docType，兜底按扩展名推断
+function docTypeOf(file) {
+  if (!file) return 'html';
+  if (file.docType) return file.docType;
+  const n = String(file.name || '');
+  if (/\.(md|markdown)$/i.test(n)) return 'md';
+  if (/\.(csv|tsv)$/i.test(n)) return 'csv';
+  if (/\.json$/i.test(n)) return 'json';
+  if (/\.txt$/i.test(n)) return 'txt';
+  if (/\.svg$/i.test(n)) return 'svg';
+  return 'html';
+}
+
+// 只有原始 HTML 需要沙箱。其余类型的预览页都是 Atlas 自己渲染的：
+// 内容全部转义过，不会有来自文档的脚本在里面执行（SVG 也是用 <img> 嵌进去的，
+// 那条路径下浏览器本来就不执行 SVG 里的脚本）。
+function isSandboxableType(file) {
+  return docTypeOf(file) === 'html';
+}
+function isTrustedDoc(file) {
+  if (!file) return false;
+  if (state.trustAllHtml) return true;
+  return state.trusted.has(file.path);
+}
+function needsSandbox(file) {
+  return isSandboxableType(file) && !isTrustedDoc(file);
+}
+
+// 把 sandbox 属性调整到与当前文件匹配的状态。
+// 返回是否发生了变化——变了就必须重新加载 iframe：sandbox 是在文档创建时
+// 生效的，改属性对已经载入的文档没有任何作用。
+function applyPreviewSandbox(file) {
+  const ifr = els.preview;
+  if (!ifr) return false;
+  const want = needsSandbox(file) ? PREVIEW_SANDBOX : null;
+  const has = ifr.getAttribute('sandbox');
+  if (want === has) return false;
+  if (want === null) ifr.removeAttribute('sandbox');
+  else ifr.setAttribute('sandbox', want);
+  return true;
+}
+
+// 顶栏盾牌按钮：只在预览原始 HTML 时出现（其它类型的预览页是 Atlas 自己渲染的，
+// 没有"要不要信任"这回事，摆一个常灰的图标只是噪音）。
+function updateTrustButton() {
+  const btn = els.btnTrust;
+  if (!btn) return;
+  const file = state.files[state.activeFilePath];
+  if (!file || !isSandboxableType(file)) {
+    btn.classList.add('hidden');
+    return;
+  }
+  btn.classList.remove('hidden');
+  const trusted = isTrustedDoc(file);
+  const forcedByConfig = state.trustAllHtml;
+  btn.classList.toggle('is-trusted', trusted);
+  btn.setAttribute('aria-pressed', trusted ? 'true' : 'false');
+  btn.disabled = forcedByConfig;   // 全局开关打开时，单篇开关没有意义
+  const use = btn.querySelector('use');
+  if (use) use.setAttribute('href', trusted ? '#i-shield-check' : '#i-shield');
+  btn.title = forcedByConfig
+    ? '设置里已开启「信任所有本地 HTML」，全部文档都以同源方式预览'
+    : trusted
+      ? '已信任：以同源方式预览，可用预览内编辑 / 正文高亮 / 快捷键转发。点击撤销'
+      : '在沙箱中预览：文档脚本碰不到 Atlas 的数据。点击信任以启用编辑与正文高亮';
+}
+
+// 切换信任态。改完必须重新导航一次预览，sandbox 才会真的换挡。
+async function toggleTrust(force) {
+  const file = state.files[state.activeFilePath];
+  if (!file || !isSandboxableType(file)) return false;
+  if (state.trustAllHtml) return true;
+  const next = force === undefined ? !isTrustedDoc(file) : !!force;
+  if (next === isTrustedDoc(file)) return next;
+  // 先动本地状态：sandbox 属性要在重新导航之前就位
+  if (next) state.trusted.add(file.path);
+  else state.trusted.delete(file.path);
+  updateTrustButton();
+  applyPreviewSandbox(file);
+  if (!editState.active) reloadPreviewSandboxed(previewUrlFor(file));
+  try {
+    const res = await fetch('/api/trust', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: file.path, trusted: next }),
+    });
+    if (!res.ok) throw new Error('save-failed');
+  } catch {
+    // 回滚：信任态是安全相关的开关，不能让它只在界面上生效
+    if (next) state.trusted.delete(file.path);
+    else state.trusted.add(file.path);
+    updateTrustButton();
+    applyPreviewSandbox(file);
+    showToast({ kind: 'error', text: '信任状态没能保存' });
+    return !next;
+  }
+  showToast(next
+    ? { kind: 'success', text: '已信任这份文档', secondary: '同源预览，编辑与正文高亮可用' }
+    : { kind: 'info', text: '已改回沙箱预览', secondary: '文档脚本碰不到 Atlas 的数据' });
+  return next;
+}
+
+// 未信任时提示一次就够。每打开一篇 AI 报告都弹一条"正在沙箱里"是纯噪音——
+// 沙箱是常态，用户需要知道的是"这件事存在、开关在哪"，不是每次都被通报一遍。
+const SANDBOX_HINT_KEY = 'atlas:sandboxHintShown';
+function maybeHintSandbox(file) {
+  if (!file || !needsSandbox(file)) return;
+  try {
+    if (localStorage.getItem(SANDBOX_HINT_KEY) === '1') return;
+    localStorage.setItem(SANDBOX_HINT_KEY, '1');
+  } catch { return; }
+  showToast({
+    kind: 'info',
+    text: 'HTML 默认在沙箱中预览',
+    secondary: '文档里的脚本碰不到 Atlas 的数据。需要预览内编辑或正文高亮时，点顶栏的盾牌信任它',
+    duration: 7000,
+  });
+}
+
+// 强制重新导航一次（不复用当前文档）。信任态变化后必须走这条路：
+// sandbox 属性只在创建文档的那一刻被读取，给同一个 src 重新赋值不算导航。
+function reloadPreviewSandboxed(url) {
+  const ifr = els.preview;
+  if (!ifr || !url) return;
+  ifr.src = 'about:blank';
+  requestAnimationFrame(() => { ifr.src = url; });
 }
 
 // 重载预览 iframe，使其停在 canonicalUrl 这份文档上。
@@ -771,6 +956,8 @@ async function fetchState() {
       if (!liveTags.has(t.toLowerCase())) state.tagFilter.delete(t);
     }
     state.archivedProjects = Array.isArray(data.archivedProjects) ? data.archivedProjects : [];
+    state.trusted = new Set(Array.isArray(data.trusted) ? data.trusted : []);
+    state.trustAllHtml = !!data.trustAllHtml;
     setSaveStatus('idle');
     // 正在预览的文档在这次扫描后不见了（被归档 / 磁盘上被删 / 改了扫描类型）：
     // 回首页。不做的话 iframe 会一直挂着一篇已经不在看板里的文档，顶栏按钮还全
@@ -1442,7 +1629,7 @@ function renderFile(file, node) {
     return terms.every(t => haystack.includes(t));
   })();
   const contentOnly = !!snippet && !isNameMatch;
-  const dtype = isMdFile(file) ? 'md' : 'html';
+  const dtype = docTypeOf(file);
   // 未读点的新鲜度：超过 24h 的变更降级成灰点（.stale）。
   // 红点的意思是"AI 刚动过这个文件"，可 588 个饱和红点铺满整个侧栏时，
   // 这个信号就等于不存在了。只有今天动过的才配得上红色。
@@ -1470,7 +1657,7 @@ function renderFile(file, node) {
   const displayName = file.alias || stripDocExt(file.name);
   const isShared = state.sharesByPath && state.sharesByPath.has(file.path);
   if (isShared) fileEl.classList.add('shared');
-  const typeIcon = ic(dtype === 'md' ? 'file-text' : 'globe', 12);
+  const typeIcon = ic(docTypeIconName(file), 12);
   // 星标是常驻按钮（不在 .file-actions 里）：收藏是高频二元操作，不该藏在 hover
   // 才出现的那排按钮里。代价是它落在拖拽把手区内，必须同时做两件事——
   //   ① 加进 initSortables 的 filter，否则按下星标会启动拖拽
@@ -1494,7 +1681,7 @@ function renderFile(file, node) {
     <span class="folder-icon file-type-icon">${typeIcon}</span>
     <span class="file-name" data-path="${escapeHtml(file.path)}">${escapeHtml(displayName)}</span>
     ${tagsHtml}
-    <span class="file-type-badge type-${dtype}">${dtype === 'md' ? 'MD' : 'HTML'}</span>
+    <span class="file-type-badge type-${dtype}">${docTypeBadge(file)}</span>
     <span class="share-badge" title="正在分享到局域网" aria-hidden="${isShared ? 'false' : 'true'}">
       ${ic('share', 11)}
     </span>
@@ -2154,6 +2341,8 @@ function updateUnreadDecorations() {
 
 function setActiveFile(filePath, doNavigate) {
   state.activeFilePath = filePath;
+  // 离开首页态：文档工具栏出现（CSS 靠 body.no-active-doc 收起它）
+  document.body.classList.remove('no-active-doc');
   els.tree.querySelectorAll('.file.active').forEach(e => e.classList.remove('active'));
   // 切换 active 时清除键盘焦点态，避免"两个被选中"的视觉异常
   els.tree.querySelectorAll('.file.kbd-focus').forEach(e => e.classList.remove('kbd-focus'));
@@ -2165,11 +2354,11 @@ function setActiveFile(filePath, doNavigate) {
   const aliasPart = file.alias
     ? `<span class="crumb-alias">${escapeHtml(file.alias)}</span><span class="crumb-original">（${escapeHtml(file.name)}）</span>`
     : `<span class="crumb-name">${escapeHtml(file.name)}</span>`;
-  const dtype = isMdFile(file) ? 'md' : 'html';
+  const dtype = docTypeOf(file);
   els.crumbs.innerHTML = `
     ${crumbHomeHtml()}
     <span class="crumb-sep">›</span>
-    <span class="file-type-badge type-${dtype}">${dtype === 'md' ? 'MD' : 'HTML'}</span>
+    <span class="file-type-badge type-${dtype}">${docTypeBadge(file)}</span>
     <span class="crumb-project">${escapeHtml(file.projectName)}</span>
     <span class="crumb-sep">›</span>
     ${aliasPart}
@@ -2183,11 +2372,23 @@ function setActiveFile(filePath, doNavigate) {
   els.btnExportPdf.disabled = false;
   els.btnExportPdf.title = '导出为 PDF 保存到 Downloads';
   els.btnShare.disabled = false;
-  els.btnEdit.disabled = false;
+  // csv / json / txt / svg 只读：没有编辑器，按钮直接禁用并说明原因，
+  // 而不是让用户点进去发现是个空壳
+  const readonlyDoc = isReadonlyDoc(file);
+  els.btnEdit.disabled = readonlyDoc;
+  els.btnEdit.title = readonlyDoc
+    ? `${docTypeBadge(file)} 文件在 Atlas 里只读（用「在访达中显示」打开原文件来修改）`
+    : '编辑此文档（改文案 / 拖动列表）';
+  // SVG 是二进制式的图形资源，导出 PDF 没有意义
+  const canExportPdf = docTypeOf(file) !== 'svg';
+  els.btnExportPdf.disabled = !canExportPdf;
+  if (!canExportPdf) els.btnExportPdf.title = 'SVG 不支持导出 PDF';
   // 已在分享中的文件，让顶栏 share 按钮高亮提示状态
   els.btnShare.classList.toggle('shared', state.sharesByPath && state.sharesByPath.has(file.path));
   updateFavButton();
   updateDiffButton();
+  updateTrustButton();
+  maybeHintSandbox(file);
 
   if (doNavigate) {
     // 切到别的文件时关掉对比面板（面板内容是上一个文件的）
@@ -2197,9 +2398,17 @@ function setActiveFile(filePath, doNavigate) {
     // 切换前淡出，加载完成后淡入；同 url 直接显示不闪烁
     const previewUrl = previewUrlFor(file);
     const targetUrl = new URL(previewUrl, location.href).href;
+    // sandbox 必须在文档载入之前定好：它是创建时生效的属性，
+    // 对已经载入的文档改它没有任何作用
+    const sandboxChanged = applyPreviewSandbox(file);
     if (els.preview.src !== targetUrl) {
       els.preview.classList.add('loading');
       els.preview.src = previewUrl;
+    } else if (sandboxChanged) {
+      // 同一篇文档，但信任态在别处变过了。给相同的 src 重新赋值不会触发导航，
+      // 必须真的走一次 about:blank → url 的往返，新的 sandboxing flags 才会生效
+      els.preview.classList.add('loading');
+      reloadPreviewSandboxed(previewUrl);
     } else {
       els.preview.classList.remove('loading');
       // 同一篇文档再打开一次不会触发 iframe load，
@@ -2230,6 +2439,7 @@ async function goHome({ confirmDirty = true } = {}) {
   if (diffState.open) closeDiff();
 
   state.activeFilePath = null;
+  document.body.classList.add('no-active-doc');   // 回到首页态：收起文档工具栏
   els.tree.querySelectorAll('.file.active').forEach(e => e.classList.remove('active'));
 
   // 卸载 iframe 走 about:blank 而不是 src=''：后者在部分内核里会重新 GET
@@ -2251,6 +2461,7 @@ async function goHome({ confirmDirty = true } = {}) {
   if (els.btnShare) els.btnShare.classList.remove('shared');
   updateFavButton();     // 这两个内部都按 activeFilePath == null 自动收敛
   updateDiffButton();
+  updateTrustButton();   // 同上：没有当前文档时它自己隐藏
   updateIframeHighlight();   // 收掉命中角标：iframe 已经空了，跳转无意义
   renderHome();              // 离开首页这段时间里数据可能变过
   renderRecent();            // 重画以清掉列表里的 active 高亮
@@ -2488,8 +2699,27 @@ function renderMdPreview() {
   els.mdPreview.innerHTML = window.AtlasMarkdown.renderBody(els.mdSource.value, { annotateRaw: true });
   rebuildMdBlockMap();     // innerHTML 换了，块 → 源码行的映射要重建
   scheduleMdOutline();
+  scheduleRichEnhance();   // 图表 / 公式：单独一档更慢的节流（见下）
   // 重渲染会抹掉标记，按当前光标位置立刻补回来，避免高亮闪断
   if (document.activeElement === els.mdSource) scheduleMdSync('source');
+}
+
+// 图表与公式的渲染比整篇 Markdown 重得多（mermaid 要布局一张有向图），
+// 而 innerHTML 每次重置都会把上一轮的成果抹掉。跟着每次按键跑的话，
+// 打一段话就是几十次图布局，编辑器会明显发涩。所以单独用一档 350ms 的
+// 静默节流：停手之后才出图，打字过程中图表位置暂时留着代码块的样子。
+let richEnhanceTimer = null;
+function scheduleRichEnhance() {
+  if (!els.mdPreview || !window.AtlasMarkdown || !window.AtlasMarkdown.enhanceRich) return;
+  if (richEnhanceTimer) clearTimeout(richEnhanceTimer);
+  richEnhanceTimer = setTimeout(() => {
+    richEnhanceTimer = null;
+    const theme = forcedTheme();
+    window.AtlasMarkdown.enhanceRich(els.mdPreview, {
+      base: '/vendor/',
+      theme: theme || undefined,
+    });
+  }, 350);
 }
 
 // 大纲重建比渲染重（要建 DOM 按钮），单独用一个更慢的节流，不跟着每帧渲染跑
@@ -3751,11 +3981,33 @@ function updateEditToolbar() {
   document.body.classList.toggle('editing-mode', editing);
 }
 
-els.btnEdit.addEventListener('click', () => {
+els.btnEdit.addEventListener('click', async () => {
   if (els.btnEdit.disabled) return;
   const file = state.activeFilePath && state.files[state.activeFilePath];
-  if (isMdFile(file)) enterMdEditMode();
-  else enterEditMode();
+  if (isMdFile(file)) return enterMdEditMode();
+  // 预览内编辑要往文档里注入锚点、样式和 Sortable，全都需要同源。
+  // 沙箱里做不到，所以顺手问一句——比让编辑按钮变灰、用户不知道为什么点不动要好。
+  if (needsSandbox(file)) {
+    const ok = await showConfirm({
+      title: '编辑需要信任这份文档',
+      body: '预览内编辑要把 Atlas 的脚本注入到文档里，沙箱预览下做不到。'
+        + '信任之后这份文档会以同源方式加载 —— 它自己的脚本也就能访问 Atlas 的接口了。',
+      confirmText: '信任并编辑',
+    });
+    if (!ok) return;
+    await toggleTrust(true);
+    // 信任后预览要重新导航一次，等它落地再进编辑态，否则注入会打在旧文档上
+    await new Promise((resolve) => {
+      const done = () => { els.preview.removeEventListener('load', done); resolve(); };
+      els.preview.addEventListener('load', done);
+      setTimeout(done, 3000);   // 兜底，别把编辑入口卡死
+    });
+  }
+  enterEditMode();
+});
+els.btnTrust.addEventListener('click', () => {
+  if (els.btnTrust.disabled) return;
+  toggleTrust();
 });
 els.btnEditSave.addEventListener('click', () => saveEdit());
 els.btnEditCancel.addEventListener('click', () => cancelEdit());
@@ -4207,6 +4459,19 @@ function applyPendingPreviewHighlight() {
   if (pendingPreviewHighlight.path !== state.activeFilePath) return false;
   const q = pendingPreviewHighlight.query;
   pendingPreviewHighlight = null;
+  // 沙箱预览下拿不到 contentDocument，正文里的命中位置标不出来。
+  // ⌘K 的「正文命中」是常用动线，静默不动比报错更让人困惑，所以明确说一句
+  // 并给出出路，而不是让用户以为搜错了。
+  const file = state.files[state.activeFilePath];
+  if (needsSandbox(file)) {
+    showToast({
+      kind: 'info',
+      text: '沙箱预览下无法跳到正文命中处',
+      secondary: '点顶栏盾牌信任这份文档后可用',
+      duration: 5000,
+    });
+    return true;
+  }
   highlightInIframe(q);
   if (els.matchBadge) els.matchBadge.title = '正文命中：' + q;
   return true;
@@ -4938,7 +5203,6 @@ function qoContentResults(nameResults, query) {
 // 而不是只写在底部图例里，眼睛不需要在列表和 footer 之间来回跑。
 function qoRowHtml(r, query) {
   const f = r.file;
-  const dtype = isMdFile(f) ? 'md' : 'html';
   // 正文命中的行：第二行给摘要（比路径有用得多），完整路径落到 title 上
   const second = r.content
     ? `<span class="qo-snippet">${qoMarkSnippet(r.content.snippet, query)}</span>`
@@ -4947,13 +5211,13 @@ function qoRowHtml(r, query) {
     ? `<span class="qo-hits" title="正文里出现 ${r.content.count >= 200 ? '200 以上' : r.content.count} 处">${r.content.count >= 200 ? '200+' : r.content.count} 处</span>`
     : '';
   return `
-    <span class="qo-icon" aria-hidden="true">${ic(dtype === 'md' ? 'file-text' : 'globe', 14)}</span>
+    <span class="qo-icon" aria-hidden="true">${ic(docTypeIconName(f), 14)}</span>
     <span class="qo-main">
       <span class="qo-name">${qoHighlight(r.label, r.hits)}</span>
       ${second}
     </span>
     ${hitCount}
-    <span class="qo-badge">${dtype === 'md' ? 'MD' : 'HTML'}</span>
+    <span class="qo-badge">${docTypeBadge(f)}</span>
     ${f.unread ? `<span class="qo-unread${isFreshUnread(f) ? '' : ' stale'}" title="未读"></span>` : ''}
     <span class="qo-action" aria-hidden="true"><kbd>↵</kbd><span>打开</span></span>
   `;
@@ -5192,6 +5456,10 @@ async function openSettings() {
   els.ignoreInput.value = (cfg.ignore || []).join(', ');
   els.notifyToggle.checked = state.notifyEnabled;
   updateNotifyHint();
+  if (els.trustAllToggle) {
+    els.trustAllToggle.checked = !!cfg.trustAllHtml;
+    state.trustAllHtml = !!cfg.trustAllHtml;
+  }
   // 文档类型多选：反映当前启用的类型（数组，可共存）
   const enabled = Array.isArray(cfg.docTypes) && cfg.docTypes.length ? cfg.docTypes : ['html'];
   els.doctypeRadios.forEach(cb => { cb.checked = enabled.includes(cb.value); });
@@ -5256,6 +5524,62 @@ document.querySelectorAll('[data-theme-pick]').forEach(btn => {
 });
 applyTheme(localStorage.getItem('atlas:theme') || 'system');
 
+// ---------- 安全：全局信任开关 ----------
+if (els.trustAllToggle) {
+  els.trustAllToggle.addEventListener('change', async () => {
+    const next = els.trustAllToggle.checked;
+    // 关掉沙箱是放宽安全边界，值得一次确认——它一次性影响所有文档
+    if (next) {
+      const ok = await showConfirm({
+        title: '信任所有本地 HTML？',
+        body: '打开后每一篇 HTML 都以同源方式加载，文档里的脚本能调用 Atlas 的接口，'
+          + '包括改写磁盘上的其它文档和生成局域网分享链接。'
+          + '只在你确定扫描根里全是自己产出的内容时才这么做。',
+        confirmText: '我了解，打开',
+        danger: true,
+      });
+      if (!ok) { els.trustAllToggle.checked = false; return; }
+    }
+    const okSaved = await updateConfig({ trustAllHtml: next });
+    if (!okSaved) { els.trustAllToggle.checked = !next; return; }
+    state.trustAllHtml = next;
+    updateTrustButton();
+    // 当前正在看的文档要按新规则重新加载一次
+    const f = state.files[state.activeFilePath];
+    if (f && isSandboxableType(f) && !editState.active) {
+      if (applyPreviewSandbox(f)) reloadPreviewSandboxed(previewUrlFor(f));
+    }
+    showToast(next
+      ? { kind: 'info', text: '已信任所有本地 HTML', secondary: '沙箱预览已关闭' }
+      : { kind: 'success', text: '已恢复沙箱预览', secondary: '单篇信任记录仍然有效' });
+  });
+}
+if (els.trustClearBtn) {
+  els.trustClearBtn.addEventListener('click', async () => {
+    const ok = await showConfirm({
+      title: '清空单篇信任记录？',
+      body: '所有此前被单独信任的 HTML 都会回到沙箱预览。这不影响上面那个全局开关。',
+      confirmText: '清空',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch('/api/trust/clear', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'failed');
+      state.trusted = new Set();
+      updateTrustButton();
+      const f = state.files[state.activeFilePath];
+      if (f && isSandboxableType(f) && !editState.active) {
+        if (applyPreviewSandbox(f)) reloadPreviewSandboxed(previewUrlFor(f));
+      }
+      showToast({ kind: 'success', text: '已清空信任记录', secondary: `${data.cleared || 0} 篇回到沙箱` });
+    } catch {
+      showToast({ kind: 'error', text: '清空失败' });
+    }
+  });
+}
+
 // 记录上一次的勾选，用于失败/非法回滚
 let lastDocTypes = null;
 // 切换启用的文档类型（html / md 可共存）：写配置 → 平滑刷新
@@ -5289,8 +5613,12 @@ els.doctypeRadios.forEach(cb => {
     await fetchState();
     setScanning(false);
     t.close();
-    const hasHtml = checked.includes('html'), hasMd = checked.includes('md');
-    const label = hasHtml && hasMd ? 'HTML + Markdown' : hasMd ? 'Markdown' : 'HTML';
+    // 按固定顺序列出启用的类型，而不是用户勾选的顺序——同一组选择每次
+    // 看到的文案要一样，否则会让人以为顺序有什么含义
+    const label = ['html', 'md', 'csv', 'json', 'txt', 'svg']
+      .filter(t => checked.includes(t))
+      .map(t => ({ html: 'HTML', md: 'Markdown', csv: 'CSV', json: 'JSON', txt: '文本', svg: 'SVG' })[t])
+      .join(' + ');
     showToast({ kind: 'success', text: '已更新扫描类型', secondary: label });
   });
 });
