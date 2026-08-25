@@ -31,6 +31,15 @@ const MD = [
   '| 左 | 右 |',
   '|:---|---:|',
   '| a | b |',
+  '',
+  '## 宽表',
+  '',
+  // 12 列的月度数据表：屏幕上靠横向滚动看全，纸上没有滚动，
+  // 不收紧就会被纸张边缘裁掉右边几列
+  '| 指标 | 2026-01 | 2026-02 | 2026-03 | 2026-04 | 2026-05 | 2026-06 | 2026-07 | 2026-08 | 同比 | 环比 | 归因 |',
+  '|------|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|-----:|-----:|------|',
+  '| 启动次数 | 128,304 | 133,900 | 141,220 | 139,880 | 152,301 | 160,442 | 158,900 | 171,220 | +18.2% | +7.8% | 新机型首发带量 |',
+  '| 成功次数 | 51,220 | 54,880 | 58,900 | 57,110 | 63,900 | 68,200 | 66,400 | 73,880 | +22.1% | +11.3% | 链路优化上线 |',
 ].join('\n');
 
 let failures = 0;
@@ -51,8 +60,13 @@ function check(name, actual, expected) {
   // 注意：只能断言"DOM 里没有这些元素"，不能断言字符串里不出现这些名字——
   // markdownCss 本身带着 .md-code-copy / .md-anchor 的样式规则
   check('不含目录侧栏元素', /class="md-toc/.test(printHtml), false);
-  check('完全不带 <script>（复制按钮靠 enhanceScript 注入，打印版不注入）',
-    /<script/.test(printHtml), false);
+  // 打印版唯一允许的脚本是「宽表塞不进纸宽就逐档收紧字号」的排版自适配。
+  // 交互类增强（复制按钮、hover 锚点、目录折叠）一律不进打印版——纸上点不动。
+  const printScripts = printHtml.match(/<script[\s\S]*?<\/script>/g) || [];
+  check('只带一段脚本', printScripts.length, 1);
+  check('那段脚本是表格收紧排版，不是交互增强',
+    /md-print-tight/.test(printScripts[0] || '')
+    && !/addEventListener|clipboard|scrollIntoView/.test(printScripts[0] || ''), true);
   check('不含标题 hover 锚点元素', /class="md-anchor"/.test(printHtml), false);
   check('注入了 base href', /<base href="file:\/\/\/tmp\/docs\/"/.test(printHtml), true);
   check('声明 color-scheme 为 light', /content="light"/.test(printHtml), true);
@@ -79,6 +93,32 @@ function check(name, actual, expected) {
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   await page.goto(atlas.base);
   await page.waitForSelector('.file');
+
+  // ---- ②' 打印版在纸宽下的实际排版 ----
+  // A4 纵向 210mm 减去 @page 的左右 14mm，正文可用约 688px @96dpi。
+  // 断言的是「一列都不许被裁掉」，而不是某个具体字号——收紧策略以后怎么调都行。
+  console.log('\n[纸宽 688px 下的表格排版]');
+  const paper = await browser.newPage({ viewport: { width: 688, height: 1100 } });
+  await paper.setContent(printHtml, { waitUntil: 'load' });
+  await paper.waitForTimeout(200);
+  const tableFit = await paper.evaluate(() => {
+    const pageW = document.body.clientWidth;
+    return {
+      pageW,
+      tables: [...document.querySelectorAll('table')].map(t => ({
+        cols: t.querySelectorAll('thead th').length,
+        w: Math.round(t.getBoundingClientRect().width),
+        tight: t.className || '',
+      })),
+    };
+  });
+  check('小表按内容自然宽度，不被拉满纸宽',
+    tableFit.tables[0].w < tableFit.pageW, true);
+  check('12 列宽表被收紧到纸宽内（右边几列不会被裁掉）',
+    tableFit.tables[1].cols === 12 && tableFit.tables[1].w <= tableFit.pageW, true);
+  check('宽表挂上了收紧 class', /md-print-tight/.test(tableFit.tables[1].tight), true);
+  check('小表没有被无谓地收紧', /md-print-tight/.test(tableFit.tables[0].tight), false);
+  await paper.close();
 
   console.log('\n[顶栏按钮]');
   await page.click('.file[data-doctype="md"] .file-name');

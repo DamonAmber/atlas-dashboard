@@ -82,6 +82,45 @@
       /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/.test(line);
   }
 
+  // ---------- GFM alert（> [!NOTE] 这类提示块）----------
+  // AI 生成的 md 里高频出现。不识别的话它会退化成一段带 `[!WARNING]` 字面量
+  // 的普通引用——「重要」和「顺带一提」在视觉上完全一样，长文档的结构就散了。
+  // 图标用 16×16 线性 SVG（currentColor），配色跟着 alert 类型走。
+  var ALERT_ICONS = {
+    note: '<circle cx="8" cy="8" r="6.25"/><path d="M8 7.1v4.1M8 4.8h.01"/>',
+    tip: '<path d="M8 2.1a3.9 3.9 0 0 0-2.35 7c.4.3.64.73.7 1.22h3.3c.06-.49.3-.92.7-1.22A3.9 3.9 0 0 0 8 2.1z"/><path d="M6.65 12.6h2.7"/>',
+    important: '<path d="M2.3 3.4h11.4v7.9H9.1L8 13.1l-1.1-1.8H2.3z"/><path d="M8 5.5v2.5M8 9.6h.01"/>',
+    warning: '<path d="M7.14 2.7a1 1 0 0 1 1.72 0l5 8.8A1 1 0 0 1 13 13H3a1 1 0 0 1-.86-1.5z"/><path d="M8 6v3M8 10.9h.01"/>',
+    caution: '<path d="M5.55 1.85h4.9l3.7 3.7v4.9l-3.7 3.7h-4.9l-3.7-3.7v-4.9z"/><path d="M8 5v3.4M8 10.6h.01"/>',
+  };
+  var ALERT_LABELS = {
+    note: '说明', tip: '提示', important: '重要', warning: '注意', caution: '警告',
+  };
+
+  // 引用块的首行是不是 alert 标记。GitHub 要求 `[!NOTE]` 独占一行，但实际
+  // 生成的文档常写成 `> [!NOTE] 正文接着写`——两种都收。
+  function matchAlert(qlines) {
+    if (!qlines.length) return null;
+    var m = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*(.*)$/i.exec(qlines[0].trim());
+    if (!m) return null;
+    var rest = qlines.slice(1);
+    if (m[2].trim()) rest.unshift(m[2].trim());
+    return { type: m[1].toLowerCase(), rest: rest.join('\n') };
+  }
+
+  function alertHtml(alert) {
+    var t = alert.type;
+    var icon = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"'
+      + ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ALERT_ICONS[t] + '</svg>';
+    // 标题行是渲染出来的装饰（源码里只有 `[!NOTE]`），不是文档内容。
+    // contenteditable=false 让它在编辑器的所见即所得预览里点不进去——
+    // 否则用户会去改「注意」这两个字，而保存时它们必然被丢弃。
+    return '<blockquote class="md-alert md-alert-' + t + '" data-md-alert="' + t + '">'
+      + '<p class="md-alert-title" contenteditable="false">'
+      + icon + '<span>' + ALERT_LABELS[t] + '</span></p>'
+      + render(alert.rest) + '</blockquote>';
+  }
+
   function isBlockStart(line, next) {
     if (line == null) return false;
     return /^\s*(```+|~~~+)/.test(line)
@@ -306,14 +345,15 @@
         continue;
       }
 
-      // 引用
+      // 引用（含 GFM alert）
       if (/^\s*>/.test(line)) {
         var qbuf = [];
         while (i < n && /^\s*>/.test(lines[i])) {
           qbuf.push(lines[i].replace(/^\s*>\s?/, ''));
           i++;
         }
-        push('<blockquote>' + render(qbuf.join('\n')) + '</blockquote>');
+        var alert = matchAlert(qbuf);
+        push(alert ? alertHtml(alert) : '<blockquote>' + render(qbuf.join('\n')) + '</blockquote>');
         continue;
       }
 
@@ -408,20 +448,39 @@
   // 取值对齐 styles.css 里的底座 token：灰阶去蓝味、border 淡化、链接跟主 accent
   // 走同一个紫蓝。正文的前景色比 UI 的 #101113 略柔（#1c1d21）——大段阅读时
   // 纯黑偏刺，UI 里的小字才需要那一档最高对比度。
+  // alert 五色取 GitHub Primer 的成熟值：这套颜色在浅/深底上都过对比度，
+  // 而且「蓝=说明 / 绿=提示 / 紫=重要 / 黄=注意 / 红=警告」是读者已有的直觉。
   var mdVarsLight = [
     '--md-fg:#1c1d21;--md-fg-muted:#57606a;--md-fg-faint:#818b98;',
     '--md-border:#e6e8eb;--md-border-strong:#c9cdd4;',
     '--md-code-bg:rgba(140,148,163,.20);--md-pre-bg:#f7f8f9;--md-pre-head:#eff0f2;',
-    '--md-link:#5b5bd6;--md-table-alt:#f7f8f9;--md-quote-fg:#57606a;',
-    '--md-fm-bg:#f7f8f9;--md-fm-border:#e6e8eb;'
+    '--md-link:#5b5bd6;--md-quote-fg:#57606a;',
+    '--md-table-head:#f4f5f7;--md-table-alt:#fafbfb;--md-table-hover:#eef0f2;',
+    '--md-fm-bg:#f7f8f9;--md-fm-border:#e6e8eb;--md-fade:rgba(16,24,40,.13);',
+    '--md-alert-note:#2f6feb;--md-alert-tip:#1a7f37;--md-alert-important:#8250df;',
+    '--md-alert-warning:#9a6700;--md-alert-caution:#cf222e;'
   ].join('');
   var mdVarsDark = [
     '--md-fg:#e7e9ec;--md-fg-muted:#9ea2a8;--md-fg-faint:#6f747c;',
     '--md-border:#1f2023;--md-border-strong:#303136;',
     '--md-code-bg:rgba(130,140,160,.20);--md-pre-bg:#16171a;--md-pre-head:#1e1f23;',
-    '--md-link:#8d8df0;--md-table-alt:#16171a;--md-quote-fg:#9ea2a8;',
-    '--md-fm-bg:#16171a;--md-fm-border:#1f2023;'
+    '--md-link:#8d8df0;--md-quote-fg:#9ea2a8;',
+    '--md-table-head:#1b1c20;--md-table-alt:#141518;--md-table-hover:#1f2024;',
+    '--md-fm-bg:#16171a;--md-fm-border:#1f2023;--md-fade:rgba(0,0,0,.5);',
+    '--md-alert-note:#4d8ef7;--md-alert-tip:#3fb950;--md-alert-important:#a371f7;',
+    '--md-alert-warning:#d29922;--md-alert-caution:#f85149;'
   ].join('');
+  // 打印时给「即使按纸宽排版也塞不下」的宽表用的两档紧凑样式。
+  // 由 printFitScript 测量后挂 class——12 列的月度数据表在 A4 纵向上物理放不下，
+  // 不缩就会被纸张边缘裁掉右边几列，导出 PDF 发给别人时那几列凭空消失。
+  // 宁可字小一点，也不能少信息。
+  var tablePrintTightCss = [
+    '.md-body table.md-print-tight{font-size:.72em;}',
+    '.md-body table.md-print-tight th,.md-body table.md-print-tight td{padding:4px 5px;}',
+    '.md-body table.md-print-tighter{font-size:.6em;letter-spacing:-.01em;}',
+    '.md-body table.md-print-tighter th,.md-body table.md-print-tighter td{padding:3px 4px;}',
+  ].join('');
+
   var markdownCss = [
     '.md-body{',
     mdVarsLight,
@@ -437,7 +496,8 @@
     // 正文第一个元素不要顶间距（h1 常在最前，但 front matter 之后也可能是别的块）
     '.md-body > :first-child{margin-top:0;}',
     '.md-body h3{font-size:1.16em;}.md-body h4{font-size:1.02em;}.md-body h5{font-size:.95em;}.md-body h6{font-size:.9em;color:var(--md-fg-muted);}',
-    '.md-body p{margin:0 0 1em;}',
+    // text-wrap:pretty 交给浏览器优化断行，避免段落末行只剩一个孤字
+    '.md-body p{margin:0 0 1em;text-wrap:pretty;}',
     '.md-body a{color:var(--md-link);text-decoration:none;}.md-body a:hover{text-decoration:underline;}',
     // 圆角跟着底座收紧一档（行内代码 4px、代码块 6px）：6px 的行内 code
     // 在 .88em 字号下几乎成了胶囊，和正文的方正感不搭
@@ -448,19 +508,69 @@
     '.md-body ul,.md-body ol{margin:0 0 1em;padding-left:1.8em;}',
     '.md-body li{margin:.25em 0;}',
     '.md-body li>ul,.md-body li>ol{margin:.25em 0;}',
+    // 列表符号退到次要色：项目符号是结构提示，不该和文字抢同一档对比度
+    '.md-body li::marker{color:var(--md-fg-faint);}',
     '.md-body hr{height:1px;border:0;background:var(--md-border-strong);margin:1.6em 0;}',
-    '.md-body img{max-width:100%;border-radius:6px;}',
-    // 表格：外层容器负责横向滚动，table 本身保持 table 布局
-    // （原来 table 自己 display:block 会脱离正常流，宽表格的滚动条很难发现）
-    '.md-body table{border-collapse:collapse;margin:0 0 1em;max-width:100%;}',
-    // 只留横线、去掉竖线和斑马纹（Stripe Docs 的表格就是这样）。
-    // 原来每个单元格四面都有 border + 隔行底色，等于用三种手段重复表达
-    // "这是一格"，密集表格会变成一张网格纸。横线足够分行，留白负责分列。
-    '.md-body table th,.md-body table td{border:0;border-bottom:1px solid var(--md-border);padding:8px 14px 8px 0;}',
-    '.md-body table th{background:transparent;font-weight:600;border-bottom:1px solid var(--md-border-strong);',
-    'color:var(--md-fg-muted);font-size:.92em;}',
-    '.md-body table tr:last-child td{border-bottom:0;}',
+    // 图片独占一行并居中：md 里的图片几乎都是配图，跟着文字左贴会显得歪
+    '.md-body img{display:block;max-width:100%;height:auto;margin:0 auto;border-radius:6px;}',
+    '.md-body p>img:only-child{margin:.4em auto;}',
+    // ---------- 表格 ----------
+    // 之前是「只留横线、不留竖线和斑马纹」的极简版。在 3 列的小表上好看，但
+    // AI 生成的对比表动不动十几列，光靠横线锁不住一行，眼睛横着扫过去会串行。
+    // 现在按 data table 的常规做法来（Vercel Design / Stripe Docs 都是这套）：
+    // 外框圈出边界、表头一层浅底、极淡的斑马纹、行 hover——四个信号各管一件事，
+    // 不是重复表达。
+    //
+    // width:max-content 是这里最关键的一行。原来写的是 max-width:100%，
+    // 结果宽表格永远不会溢出容器 → 外层 .md-table-scroll 的横向滚动条永远不出现，
+    // 浏览器只能拼命压缩列宽，把「归因说明」压成一列一个字的竖排。
+    // 现在让表格取内容自然宽度、大方地溢出，由滚动容器接管。
+    // display:block + width:max-content + max-width:100% 是 GitHub 用了很多年的
+    // 组合：窄表取自然宽度、宽表自己成为横向滚动容器，不需要任何包裹层。
+    // 编辑器右侧的预览面板正是这种场景（它不能被注入包裹层，否则反解析会被污染）。
+    '.md-body table{display:block;border-collapse:separate;border-spacing:0;',
+    'width:max-content;max-width:100%;overflow-x:auto;',
+    'margin:0 0 1em;border:1px solid var(--md-border);border-radius:8px;font-size:.94em;',
+    // 数字列按位对齐：价格 / 百分比一列扫下来才能比大小
+    'font-variant-numeric:tabular-nums;}',
+    // 只读预览页里 enhanceScript 会套上滚动容器 + 右侧渐变提示，那时滚动交给
+    // 外层，table 回到正常的 table 布局（否则遮罩会盖在滚动内容上一起滚走）
+    '.md-body .md-table-scroll table{display:table;max-width:none;overflow:visible;}',
+    // text-align:left 是修 bug：<th> 的浏览器默认值是 center，而 <td> 是 left，
+    // 于是每一张没写对齐语法的表，表头都和数据列错开——「结构不清晰」的头号元凶。
+    // Markdown 里写的 |:--:| 会输出成单元格自己的 style，优先级更高，照样生效。
+    '.md-body table th,.md-body table td{padding:9px 14px;text-align:left;vertical-align:top;',
+    // min-width 是给窄容器兜底的：编辑器右侧的预览面板只有 500 多像素宽，
+    // 没有它，浏览器会把「长文推理最强，成本高」压成一列一个字的竖排
+    'min-width:5em;border-bottom:1px solid var(--md-border);}',
+    // 单元格宽度上限：没有它，一句长备注会把整张表拉到几千像素宽
+    '.md-body table td{max-width:34ch;}',
+    '.md-body table thead th{background:var(--md-table-head);color:var(--md-fg-muted);',
+    'font-weight:600;font-size:.92em;white-space:nowrap;border-bottom:1px solid var(--md-border-strong);}',
+    // 表头底色要贴合外框圆角，否则四角会露出方角的色块
+    '.md-body table thead tr:first-child th:first-child{border-top-left-radius:7px;}',
+    '.md-body table thead tr:first-child th:last-child{border-top-right-radius:7px;}',
+    '.md-body table tbody tr:nth-child(even)>td{background:var(--md-table-alt);}',
+    '.md-body table tbody tr:hover>td{background:var(--md-table-hover);}',
+    '.md-body table tbody tr:last-child>td{border-bottom:0;}',
+    // 首列通常是行的名字。加重它，横向扫读时每一行有个锚点
+    '.md-body table tbody td:first-child{color:var(--md-fg);font-weight:500;}',
     '.md-body del{color:var(--md-fg-faint);}',
+    // ---------- GFM alert ----------
+    // 左侧色条 + 图标 + 类型名，底色是同色系的 6%。用 color-mix 而不是写死
+    // rgba：五种类型共用一条规则，深浅主题各自只要换一个色号。
+    '.md-body .md-alert{margin:0 0 1.2em;padding:12px 16px;border:0;border-radius:8px;',
+    'border-left:3px solid var(--md-alert-c);color:var(--md-fg);',
+    'background:color-mix(in srgb,var(--md-alert-c) 7%,transparent);}',
+    '.md-body .md-alert>:last-child{margin-bottom:0;}',
+    '.md-body .md-alert-title{display:flex;align-items:center;gap:6px;margin:0 0 .4em;',
+    'color:var(--md-alert-c);font-weight:600;font-size:.94em;}',
+    '.md-body .md-alert-title svg{flex:0 0 auto;width:15px;height:15px;}',
+    '.md-body .md-alert-note{--md-alert-c:var(--md-alert-note);}',
+    '.md-body .md-alert-tip{--md-alert-c:var(--md-alert-tip);}',
+    '.md-body .md-alert-important{--md-alert-c:var(--md-alert-important);}',
+    '.md-body .md-alert-warning{--md-alert-c:var(--md-alert-warning);}',
+    '.md-body .md-alert-caution{--md-alert-c:var(--md-alert-caution);}',
     // front matter 元信息块
     '.md-frontmatter{margin:0 0 1.4em;padding:10px 14px;border:1px solid var(--md-fm-border);',
     'border-radius:8px;background:var(--md-fm-bg);font-size:.86em;line-height:1.6;}',
@@ -496,10 +606,27 @@
     '.md-body pre{padding-top:14px !important;white-space:pre-wrap;word-break:break-word;}',
     '.md-body .md-anchor{display:none;}',
     '.md-body .md-table-scroll{overflow:visible;}',
+    // 纸上没有横向滚动。表格改回按纸宽排版、单元格自由换行，
+    // 遮罩也一起藏掉（否则每张表右边都印着一条灰渐变）
+    '.md-body .md-table-block::after{display:none;}',
+    '.md-body table{display:table;width:auto;max-width:100%;overflow:visible;font-size:.84em;}',
+    // min-width 归零：纸张没有横向滚动，宽表宁可挤一点也不能被裁掉右边几列
+    '.md-body table th,.md-body table td{min-width:0;padding:5px 7px;}',
+    '.md-body table td{max-width:none;}',
+    tablePrintTightCss,
     '}',
-    // 表格横向滚动包裹层，由 enhanceScript 注入
-    '.md-body .md-table-scroll{overflow-x:auto;margin:0 0 1em;}',
+    // 表格横向滚动包裹层，由 enhanceScript 注入（两层：外层定位遮罩，内层滚动）
+    '.md-body .md-table-block{position:relative;margin:0 0 1em;}',
+    // 圆角跟着 table 走，滚动裁切的边缘才不是直角
+    '.md-body .md-table-scroll{overflow-x:auto;overscroll-behavior-x:contain;border-radius:8px;}',
     '.md-body .md-table-scroll table{margin:0;}',
+    // 右侧还有内容被藏起来时，压一层投影渐变当提示。macOS 的滚动条平时是隐藏的，
+    // 没有这个信号，读者根本不会知道这张表还有 5 列在视野之外。
+    // 用半透明黑而不是背景色渐变：表格自己也是浅底，同色渐变等于看不见。
+    '.md-body .md-table-block::after{content:"";position:absolute;top:1px;bottom:1px;right:0;width:40px;',
+    'border-radius:0 8px 8px 0;pointer-events:none;opacity:0;transition:opacity .15s ease;',
+    'background:linear-gradient(to right,transparent,var(--md-fade));}',
+    '.md-body .md-table-block.md-can-scroll-right::after{opacity:1;}',
   ].join('\n');
 
   // ---------- HTML → Markdown（反向序列化，仅浏览器端所见即所得编辑用）----------
@@ -604,7 +731,18 @@
     if (tag === 'UL' || tag === 'OL') return serializeList(el, indent || '', tag === 'OL');
     if (tag === 'TABLE') return serializeTable(el);
     if (tag === 'BLOCKQUOTE') {
-      var inner = joinBlocks(serializeBlocksList(el));
+      // GFM alert：标题行（「说明」「注意」…）是渲染时加的装饰，不是文档内容。
+      // 序列化时必须把它换回 `[!NOTE]`，否则用户在预览里改一个字，源码里的
+      // 提示块类型就悄悄变成了一行中文正文。
+      var alertType = el.getAttribute && el.getAttribute('data-md-alert');
+      var scope = el;
+      if (alertType && el.cloneNode) {
+        scope = el.cloneNode(true);
+        var titleEl = scope.querySelector('.md-alert-title');
+        if (titleEl && titleEl.parentNode) titleEl.parentNode.removeChild(titleEl);
+      }
+      var inner = joinBlocks(serializeBlocksList(scope));
+      if (alertType) inner = '[!' + alertType.toUpperCase() + ']\n' + inner;
       return inner.split('\n').map(function (l) { return l ? '> ' + l : '>'; }).join('\n');
     }
     // P / DIV / 其它：当作一个段落
@@ -789,9 +927,34 @@
     '.md-toc-toggle:hover{background:var(--toc-hover);color:var(--toc-fg-strong);}',
     '.md-toc-toggle svg{width:17px;height:17px;}',
     '.md-content{margin-left:var(--toc-w);transition:margin-left .2s ease;}',
-    // 820px @15px ≈ 每行 54 个汉字，落在长文阅读的舒适区间；上下 padding 加大，
-    // 首屏标题不要一上来就贴着顶栏
-    '.md-content .md-inner{max-width:820px;margin:0 auto;padding:44px 48px 32px;box-sizing:border-box;}',
+    // 没有目录时（标题少于两个）不留左边距，正文自己居中
+    'body.md-no-toc .md-content{margin-left:0;}',
+    // ---------- 阅读宽度 ----------
+    // 三档，记在 localStorage，跨文档生效（见 widthScript）：
+    //   comfortable 820px @15px ≈ 每行 54 个汉字，长文阅读的舒适区间
+    //   wide       1120px ——十几列的宽表 / 代码为主的文档，820 太挤
+    //   full       占满 ——超宽屏上不想留白，或者要看完整的宽表
+    // 上下 padding 加大，首屏标题不要一上来就贴着顶栏。
+    // 属性挂在 <html> 而不是 <body>：这样 head 里的一行 boot 脚本就能在首次
+    // 绘制之前定档，长文档切档时不会先按 820px 排一帧再跳到全宽
+    ':root{--md-read-w:820px;}',
+    ':root[data-read-width="wide"]{--md-read-w:1120px;}',
+    ':root[data-read-width="full"]{--md-read-w:none;}',
+    '.md-content .md-inner{max-width:var(--md-read-w);margin:0 auto;padding:44px 48px 32px;box-sizing:border-box;',
+    'transition:max-width .18s ease;}',
+    // 宽度切换控件：右上角的三段胶囊。平时半透明退到背景里，hover 才完全显形——
+    // 它是偶尔用一次的设置，不该在每一次阅读中都占注意力。
+    '.md-width-switch{position:fixed;top:9px;right:14px;z-index:6;display:flex;gap:2px;padding:3px;',
+    'border:1px solid var(--toc-border);border-radius:9px;background:var(--toc-bg);',
+    'opacity:.72;transition:opacity .15s ease;}',
+    '.md-width-switch:hover,.md-width-switch:focus-within{opacity:1;}',
+    '.md-width-switch button{width:26px;height:24px;padding:0;display:flex;align-items:center;',
+    'justify-content:center;border:0;border-radius:6px;background:transparent;color:var(--toc-title);',
+    'cursor:pointer;transition:background .12s,color .12s;}',
+    '.md-width-switch button:hover{background:var(--toc-hover);color:var(--toc-fg-strong);}',
+    '.md-width-switch button[aria-pressed="true"]{background:var(--toc-active-soft);color:var(--toc-active);}',
+    '.md-width-switch button:focus-visible{outline:2px solid var(--toc-active);outline-offset:1px;}',
+    '.md-width-switch svg{width:16px;height:16px;}',
     // 底部留白：保证最后几个标题也能滚到视口顶部（锚点跳转不失效）
     '.md-tail-space{height:70vh;}',
     '.md-body h1,.md-body h2,.md-body h3,.md-body h4,.md-body h5,.md-body h6{scroll-margin-top:20px;}',
@@ -800,12 +963,61 @@
     '@media (max-width:900px){.md-content{margin-left:0;}.md-toc{box-shadow:2px 0 14px rgba(0,0,0,.1);}}',
     // 打印时目录侧栏是 fixed 定位，会盖在每一页正文上——直接隐藏，正文铺满纸张
     '@media print{',
-    '.md-toc,.md-toc-toggle,.md-toc-resizer,.md-tail-space{display:none !important;}',
+    '.md-toc,.md-toc-toggle,.md-toc-resizer,.md-width-switch,.md-tail-space{display:none !important;}',
     '.md-content{margin-left:0 !important;}',
     '.md-content .md-inner{max-width:none;padding:0;}',
     '@page{margin:16mm 14mm;}',
     '}',
   ].join('');
+
+  // 阅读宽度控件的图标：外框固定，内部填充条的宽度表示档位
+  // （窄 → 宽 → 满）。同一个隐喻走三档，不用去猜三个不同图标各自是什么意思。
+  var WIDTH_MODES = [
+    { id: 'comfortable', label: '推荐宽度', hint: '阅读宽度：推荐（约每行 54 字）  快捷键 [ ]', bar: 'M6.5 5.5h3v5h-3z' },
+    { id: 'wide', label: '加宽', hint: '阅读宽度：加宽（宽表格 / 代码多的文档）  快捷键 [ ]', bar: 'M4.5 5.5h7v5h-7z' },
+    { id: 'full', label: '占满全屏', hint: '阅读宽度：占满全屏（不留左右留白）  快捷键 [ ]', bar: 'M2.5 5.5h11v5h-11z' },
+  ];
+  function widthSwitchHtml() {
+    var btns = WIDTH_MODES.map(function (m) {
+      return '<button type="button" data-w="' + m.id + '" aria-pressed="false"'
+        + ' title="' + escapeHtml(m.hint) + '" aria-label="' + escapeHtml(m.label) + '">'
+        + '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true">'
+        + '<rect x="1.6" y="3.4" width="12.8" height="9.2" rx="1.6"/>'
+        + '<path d="' + m.bar + '" fill="currentColor" stroke="none" opacity=".85"/>'
+        + '</svg></button>';
+    }).join('');
+    return '<div class="md-width-switch" role="group" aria-label="阅读宽度">' + btns + '</div>';
+  }
+
+  // head 里的防闪脚本：在首次绘制前就把档位落到 <html> 上。
+  // 只做这一件事，所以短到可以直接内联。
+  var widthBootScript = '(function(){try{var v=localStorage.getItem("atlas:mdReadWidth");'
+    + 'if(v==="wide"||v==="full")document.documentElement.setAttribute("data-read-width",v);}catch(e){}})();';
+
+  // 宽度切换的交互：点按钮切档 + localStorage 持久化（跨文档、跨会话保持）
+  var widthScript = '(function(){var KEY="atlas:mdReadWidth",DEF="comfortable";'
+    + 'var MODES=["comfortable","wide","full"];var root=document.documentElement;'
+    + 'function cur(){var v=root.getAttribute("data-read-width");return MODES.indexOf(v)>=0?v:DEF;}'
+    + 'function apply(v,persist){if(MODES.indexOf(v)<0)v=DEF;root.setAttribute("data-read-width",v);'
+    + 'Array.prototype.forEach.call(document.querySelectorAll(".md-width-switch button"),function(b){'
+    + 'b.setAttribute("aria-pressed",b.getAttribute("data-w")===v?"true":"false");});'
+    + 'if(persist){try{localStorage.setItem(KEY,v);}catch(e){}}'
+    // 宽度变了 → 表格的可滚动范围也变了，遮罩要重新判定
+    + 'if(window.__atlasSyncTableOverflow)window.__atlasSyncTableOverflow();}'
+    + 'apply(cur(),false);'
+    + 'var sw=document.querySelector(".md-width-switch");'
+    + 'if(sw)sw.addEventListener("click",function(e){var b=e.target.closest?e.target.closest("button[data-w]"):null;'
+    + 'if(b)apply(b.getAttribute("data-w"),true);});'
+    // [ / ] 逐档收窄 / 放宽。这两个键在外壳里没有占用，也不会被转发进来
+    // （预览快捷键桥只转发带修饰键的组合和裸 ?），所以在这儿监听是安全的。
+    + 'document.addEventListener("keydown",function(e){'
+    + 'if(e.metaKey||e.ctrlKey||e.altKey)return;'
+    + 'if(e.key!=="["&&e.key!=="]")return;'
+    + 'var t=e.target;if(t&&(t.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName||"")))return;'
+    + 'var i=MODES.indexOf(cur())+(e.key==="]"?1:-1);'
+    + 'if(i<0||i>=MODES.length)return;'
+    + 'e.preventDefault();apply(MODES[i],true);});'
+    + '})();';
 
   // TOC 交互脚本：收起持久化、层级折叠、平滑滚动、滚动高亮当前章节
   var tocScript = '(function(){'
@@ -897,12 +1109,27 @@
     + '}else{fallbackCopy(t,done);}});'
     + 'head.appendChild(btn);pre.insertBefore(head,pre.firstChild);'
     + '});'
-    // 宽表格：套一层可横向滚动的容器，滚动条位置更符合预期
+    // 宽表格：套两层——外层 .md-table-block 负责定位右侧的"还有内容"渐变遮罩，
+    // 内层 .md-table-scroll 负责横向滚动。分两层是因为 overflow 容器内的
+    // absolute 定位元素会跟着内容一起滚走，遮罩必须挂在不滚动的那一层上。
+    // 只在只读预览页里注入：编辑器右侧的预览面板要靠 htmlToMarkdown() 反解析
+    // 回源码，DOM 里多出包裹层会污染结果。
+    + 'var blocks=[];'
     + 'Array.prototype.forEach.call(document.querySelectorAll(".md-body table"),function(tbl){'
     + 'if(tbl.parentNode&&tbl.parentNode.classList&&tbl.parentNode.classList.contains("md-table-scroll"))return;'
+    + 'var block=document.createElement("div");block.className="md-table-block";'
     + 'var wrap=document.createElement("div");wrap.className="md-table-scroll";'
-    + 'tbl.parentNode.insertBefore(wrap,tbl);wrap.appendChild(tbl);'
+    + 'tbl.parentNode.insertBefore(block,tbl);block.appendChild(wrap);wrap.appendChild(tbl);'
+    + 'blocks.push({block:block,wrap:wrap});'
+    + 'wrap.addEventListener("scroll",function(){syncOne(block,wrap);},{passive:true});'
     + '});'
+    // 容差 2px：子像素与滚动条舍入会让 scrollLeft 差个零点几，
+    // 没有容差的话滚到最右后遮罩仍然亮着
+    + 'function syncOne(block,wrap){var more=wrap.scrollWidth-wrap.clientWidth-wrap.scrollLeft>2;'
+    + 'block.classList.toggle("md-can-scroll-right",more);}'
+    + 'function syncAll(){blocks.forEach(function(b){syncOne(b.block,b.wrap);});}'
+    + 'window.__atlasSyncTableOverflow=syncAll;syncAll();'
+    + 'window.addEventListener("resize",syncAll);'
     + '})();';
 
   // 打印 / PDF 专用样式。
@@ -915,8 +1142,11 @@
     '--md-fg:#24292f;--md-fg-muted:#57606a;--md-fg-faint:#8a8f98;',
     '--md-border:#d8dce2;--md-border-strong:#c4cad2;',
     '--md-code-bg:rgba(175,184,193,.28);--md-pre-bg:#f6f8fa;--md-pre-head:#eceff3;',
-    '--md-link:#0b5cc4;--md-table-alt:#f6f8fa;--md-quote-fg:#57606a;',
-    '--md-fm-bg:#f6f8fa;--md-fm-border:#e3e6ec;}',
+    '--md-link:#0b5cc4;--md-quote-fg:#57606a;',
+    '--md-table-head:#f0f2f5;--md-table-alt:#fafbfc;--md-table-hover:transparent;',
+    '--md-fm-bg:#f6f8fa;--md-fm-border:#e3e6ec;--md-fade:transparent;',
+    '--md-alert-note:#0a58ca;--md-alert-tip:#136c2e;--md-alert-important:#6f42c1;',
+    '--md-alert-warning:#8a5a00;--md-alert-caution:#b02a37;}',
     'html,body{margin:0;background:#fff;}',
     'body{padding:0;}',
     '@page{margin:16mm 14mm;}',
@@ -926,11 +1156,28 @@
     '.md-body pre,.md-body table,.md-body blockquote,.md-body img,.md-body .md-frontmatter{',
     'break-inside:avoid;page-break-inside:avoid;}',
     '.md-body pre{white-space:pre-wrap;word-break:break-word;overflow:visible;}',
-    '.md-body table{width:100%;}',
+    // 纸张没有横向滚动：表格按纸宽排版，单元格自由换行（覆盖屏幕上的
+    // width:max-content / td max-width:34ch）
+    '.md-body table{display:table;width:auto;max-width:100%;overflow:visible;font-size:.84em;}',
+    // min-width 归零：纸张没有横向滚动，宽表宁可挤一点也不能被裁掉右边几列
+    '.md-body table th,.md-body table td{min-width:0;padding:5px 7px;}',
+    '.md-body table td{max-width:none;}',
+    tablePrintTightCss,
     // 链接在纸上点不动，把地址打出来才有意义（锚点链接除外）
     '.md-body a[href^="http"]::after{content:" (" attr(href) ")";font-size:.82em;color:var(--md-fg-faint);',
     'word-break:break-all;}',
   ].join('');
+
+  // PDF 导出专用：把塞不进纸宽的表格逐档收紧，直到不再溢出。
+  // 不去算缩放比例（padding 是固定 px，比例算不准），直接试两档、每档量一次——
+  // 表格数量是个位数，成本可以忽略。Chrome --print-to-pdf 带
+  // --virtual-time-budget，这段脚本会在出片前跑完。
+  var printFitScript = '(function(){var pageW=document.body.clientWidth;if(!pageW)return;'
+    + 'function over(t){return t.getBoundingClientRect().width>pageW+1;}'
+    + 'Array.prototype.forEach.call(document.querySelectorAll(".md-body table"),function(t){'
+    + 'if(!over(t))return;t.classList.add("md-print-tight");'
+    + 'if(!over(t))return;t.classList.remove("md-print-tight");t.classList.add("md-print-tighter");'
+    + '});})();';
 
   // 组装完整 HTML 预览页（供服务端 /api/render-md 使用）
   // opts.baseHref：必须传！预览页的 URL 是 /api/render-md?path=...，
@@ -964,7 +1211,9 @@
         + '<meta name="color-scheme" content="light" />'
         + '<title>' + title + '</title>'
         + '<style>' + markdownCss + printCss + '</style></head>'
-        + '<body class="md-body">' + renderBody(src) + '</body></html>';
+        + '<body class="md-body">' + renderBody(src)
+        + '<script>' + printFitScript + '</script>'
+        + '</body></html>';
     }
 
     var forced = forcedThemeCss(opts.theme);
@@ -977,33 +1226,32 @@
       + baseTag
       + '<meta name="viewport" content="width=device-width,initial-scale=1" />'
       + '<meta name="color-scheme" content="' + schemeMeta + '" />'
-      + '<title>' + title + '</title>';
-
-    if (!hasToc) {
-      return head
-        // 阅读宽度与有 TOC 的分支（.md-inner）保持一致：同一篇文档因为标题
-        // 多了两个就换一种行宽，读起来会明显不适
-        + '<style>html,body{margin:0;}body{padding:44px 48px 32px;max-width:820px;margin:0 auto;}'
-        + pageCss + markdownCss + forced + '</style></head>'
-        + '<body class="md-body">' + body
-        + '<script>' + enhanceScript + '</script>'
-        + '</body></html>';
-    }
+      + '<title>' + title + '</title>'
+      + '<script>' + widthBootScript + '</script>';
 
     var toggleSvg = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" '
       + 'stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg>';
 
+    // 有无目录只影响侧栏那部分 DOM，正文外壳（.md-content > .md-inner）两种情况
+    // 完全一致——否则同一篇文档因为标题多了两个就换一套行宽和一套增强逻辑，
+    // 读起来会明显不适，也容易出「只有一种情况下才有的 bug」。
+    var tocParts = hasToc
+      ? '<button class="md-toc-toggle" id="mdTocToggle" type="button" title="展开 / 收起目录" aria-label="展开或收起目录">' + toggleSvg + '</button>'
+        + '<nav class="md-toc" id="mdToc" aria-label="文档目录"><div class="md-toc-title">目录</div>' + tocListHtml(items) + '</nav>'
+        + '<div class="md-toc-resizer" id="mdTocResizer" role="separator" aria-orientation="vertical"'
+        + ' tabindex="0" aria-label="拖拽调整目录宽度（方向键可微调，双击复位）"'
+        + ' title="拖拽调整目录宽度，双击复位"></div>'
+      : '';
+
     return head
       + '<style>' + pageCss + tocCss + markdownCss + forced + '</style></head>'
-      + '<body>'
-      + '<button class="md-toc-toggle" id="mdTocToggle" type="button" title="展开 / 收起目录" aria-label="展开或收起目录">' + toggleSvg + '</button>'
-      + '<nav class="md-toc" id="mdToc" aria-label="文档目录"><div class="md-toc-title">目录</div>' + tocListHtml(items) + '</nav>'
-      + '<div class="md-toc-resizer" id="mdTocResizer" role="separator" aria-orientation="vertical"'
-      + ' tabindex="0" aria-label="拖拽调整目录宽度（方向键可微调，双击复位）"'
-      + ' title="拖拽调整目录宽度，双击复位"></div>'
+      + '<body' + (hasToc ? '' : ' class="md-no-toc"') + '>'
+      + tocParts
+      + widthSwitchHtml()
       + '<div class="md-content"><div class="md-inner md-body">' + body + '<div class="md-tail-space" aria-hidden="true"></div></div></div>'
-      + '<script>' + tocScript + '</script>'
+      + (hasToc ? '<script>' + tocScript + '</script>' : '')
       + '<script>' + enhanceScript + '</script>'
+      + '<script>' + widthScript + '</script>'
       + '</body></html>';
   }
 
