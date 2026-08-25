@@ -354,6 +354,14 @@
             <span class="diff-stats" id="diff-stats"></span>
           </div>
           <div class="diff-actions">
+            <!-- 历史版本选择：底本不再只留一份，这里可以挑和哪一版比。
+                 只有存在两份以上版本时才由 JS 显示出来。 -->
+            <label class="diff-ctx diff-ver hidden" id="diff-version-wrap">
+              <span>对比</span>
+              <select id="diff-version" aria-label="选择要对比的历史版本"></select>
+            </label>
+            <button type="button" id="diff-revert" class="diff-btn diff-btn-revert hidden"
+                    title="把磁盘上的文件内容改回选中的那一版（写入前会自动备份）">回退到这一版</button>
             <label class="diff-ctx">
               <span>上下文</span>
               <select id="diff-context" aria-label="上下文行数">

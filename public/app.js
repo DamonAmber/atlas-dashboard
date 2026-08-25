@@ -80,6 +80,9 @@ const els = {
   diffBody: document.getElementById('diff-body'),
   diffStats: document.getElementById('diff-stats'),
   diffContext: document.getElementById('diff-context'),
+  diffVersionWrap: document.getElementById('diff-version-wrap'),
+  diffVersion: document.getElementById('diff-version'),
+  diffRevert: document.getElementById('diff-revert'),
   diffAccept: document.getElementById('diff-accept'),
   diffClose: document.getElementById('diff-close'),
   btnEdit: document.getElementById('btn-edit'),
@@ -569,8 +572,9 @@ function updateStats() {
 const HOME_LIST_MAX = 7;
 function homeRow(file) {
   const name = file.alias || stripDocExt(file.name);
+  const stale = file.unread && !isFreshUnread(file);
   return `
-    <button class="home-row${file.unread ? ' unread' : ''}" type="button"
+    <button class="home-row${file.unread ? ' unread' : ''}${stale ? ' stale' : ''}" type="button"
             data-path="${escapeHtml(file.path)}" title="${escapeHtml(file.relPath)}">
       <span class="home-row-dot" aria-hidden="true"></span>
       <span class="home-row-ico">${docTypeIcon(file, 13)}</span>
@@ -592,16 +596,22 @@ function renderHome() {
   }
   const unread = all.filter(f => f.unread).sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
   const projects = new Set(all.map(f => f.projectName).filter(Boolean));
+  // 「今天改过」才是这个 dashboard 真正要回答的问题（"AI 刚动了什么"）。
+  // 原来 KPI 把「未读」标红，可未读会一直累积到几百篇——一个永远亮红的
+  // 三位数不是警报，是背景噪音。红色只留给这个 24h 窗口内的数字。
+  const fresh = unread.filter(isFreshUnread);
 
-  els.homeSub.textContent = unread.length
-    ? `有 ${unread.length} 篇文档在你上次看过之后被改动过`
-    : '所有文档都看过了';
+  els.homeSub.textContent = fresh.length
+    ? `今天有 ${fresh.length} 篇被改过${unread.length > fresh.length ? `，另有 ${unread.length - fresh.length} 篇更早的还没看` : ''}`
+    : unread.length
+      ? `今天没有新变动，还有 ${unread.length} 篇待看`
+      : '所有文档都看过了';
 
   els.homeMetrics.innerHTML = [
     { k: '文档', v: total },
-    { k: '未读', v: unread.length, hot: unread.length > 0 },
+    { k: '今天改过', v: fresh.length, hot: fresh.length > 0 },
+    { k: '待看', v: unread.length },
     { k: '项目', v: projects.size },
-    { k: '收藏', v: (state.favorites || []).filter(p => state.files[p]).length },
   ].map(m => `
     <div class="home-metric${m.hot ? ' hot' : ''}">
       <div class="home-metric-v">${m.v}</div>
@@ -617,29 +627,62 @@ function renderHome() {
         : '');
   } else {
     els.homeUnreadCount.textContent = '';
-    els.homeUnread.innerHTML = `<div class="home-empty">
-      <svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-check-circle"/></svg>
-      <span>没有未读文档</span></div>`;
+    els.homeUnread.innerHTML = homeEmpty({
+      icon: 'check-circle',
+      title: '没有未读文档',
+      hint: '有新改动时会自动回到这里排队',
+    });
   }
 
   // 最近打开
   const recent = (state.recent || []).filter(p => state.files[p]).slice(0, HOME_LIST_MAX);
   els.homeRecent.innerHTML = recent.length
     ? recent.map(p => homeRow(state.files[p])).join('')
-    : '<div class="home-empty"><span>还没打开过文档——从左侧目录树点一个开始</span></div>';
+    : homeEmpty({
+        icon: 'clock',
+        title: '还没有浏览记录',
+        hint: '打开过的文档会集中在这里',
+        action: { label: '快速打开', icon: 'search', kbd: '⌘K', attr: 'data-open-quickopen' },
+      });
 
   // 收藏（没有收藏就整张卡片不出现，不占版面）
   const favs = (state.favorites || []).filter(p => state.files[p]).slice(0, HOME_LIST_MAX);
   els.homeFavCard.classList.toggle('hidden', favs.length === 0);
   if (favs.length) els.homeFav.innerHTML = favs.map(p => homeRow(state.files[p])).join('');
 }
+// 首页卡片的空状态。
+// 三件套：图标 + 一句"这里为什么是空的" + 一个能立刻做点什么的按钮。
+// 原来是一行灰色小字顶在卡片里，既没解释也没出路，还让左右两张卡片高度差一大截。
+function homeEmpty({ icon, title, hint, action }) {
+  return `<div class="home-empty">
+    <span class="home-empty-ico">${ic(icon, 18)}</span>
+    <span class="home-empty-title">${escapeHtml(title)}</span>
+    ${hint ? `<span class="home-empty-hint">${escapeHtml(hint)}</span>` : ''}
+    ${action ? `<button class="home-empty-act" type="button" ${action.attr}>
+      ${ic(action.icon, 12)}<span>${escapeHtml(action.label)}</span>
+      ${action.kbd ? `<kbd>${escapeHtml(action.kbd)}</kbd>` : ''}
+    </button>` : ''}
+  </div>`;
+}
+
 // 事件委托：首页的行是动态渲染的，挂在容器上一次就够
 document.addEventListener('click', (e) => {
+  if (e.target.closest && e.target.closest('[data-open-quickopen]')) {
+    openQuickOpen();
+    return;
+  }
   const row = e.target.closest && e.target.closest('.home-row');
   if (row && row.dataset.path) openFile(row.dataset.path);
 });
 
 // ---------- 工具 ----------
+// 「新鲜的未读」= 24h 内被改动过。侧栏文件行的红点与粗体、分组红点、
+// 首页 KPI 的「今天改过」和待看队列里的点，全部共用这一个窗口——
+// 只有稀缺的红色才是警报，几百个常亮红点等于没有信号。
+function isFreshUnread(file) {
+  const FRESH_WINDOW_MS = 86_400_000;
+  return !!(file && file.unread && (Date.now() - (file.mtime || 0)) < FRESH_WINDOW_MS);
+}
 function fmtMtime(ts) {
   if (!ts) return '';
   const diff = Date.now() - ts;
@@ -652,6 +695,9 @@ function fmtMtime(ts) {
   const y = date.getFullYear();
   const mo = String(date.getMonth() + 1).padStart(2, '0');
   const da = String(date.getDate()).padStart(2, '0');
+  // 同年省掉年份：侧栏每一行都顶着一个 "2026-" 是纯噪音，而且那 28px
+  // 正是文件名被截断成 `01-user-segment-and...` 缺的宽度。
+  if (y === new Date().getFullYear()) return `${mo}-${da}`;
   return `${y}-${mo}-${da}`;
 }
 function escapeHtml(s) {
@@ -705,7 +751,15 @@ async function fetchState() {
     const data = await res.json();
     stateRetryDelay = 1000;
     stateFailed = false;
-    state.tree = data.tree;
+    // 两种情况下不能拿服务端的树覆盖内存，其余字段照常更新：
+    //   ① 有还没落盘的树改动——服务端还没收到，它返回的树上是旧的分组名 /
+    //      旧的顺序，覆盖下去用户刚做的操作就没了（紧接着那次 PUT 还会把旧值
+    //      正式写回磁盘）。
+    //   ② 正在行内重命名——此刻替换整棵树会让重命名回调持有的那个 folder
+    //      变成游离对象，提交的新名字进不了将要保存的树。
+    if (!hasPendingTreeWrite() && !isInlineEditing()) {
+      state.tree = data.tree;
+    }
     state.files = data.files;
     state.recent = Array.isArray(data.recent) ? data.recent : [];
     state.favorites = Array.isArray(data.favorites) ? data.favorites : [];
@@ -762,21 +816,42 @@ async function fetchState() {
 }
 
 let saveTimer = null;
+let pendingTree = null;      // 已排程、还没发出去的树快照
+let treeSaveInFlight = 0;    // 正在飞的 PUT /api/tree 数量
+
+// 是否有还没安全落盘的树改动。fetchState 用它决定要不要接受服务端的树
+// （见 fetchState 里的说明）
+function hasPendingTreeWrite() {
+  return !!saveTimer || pendingTree !== null || treeSaveInFlight > 0;
+}
+
 function scheduleSaveTree() {
+  // 关键：排程的同时就把树快照下来。
+  // 原来是等 250ms 后在定时器里现取 state.tree —— 而这 250ms 里任何一次
+  // fetchState 返回都会把 state.tree 整体换成服务端的版本（那上面还是旧名字，
+  // 因为改动还没发出去），于是自己的保存请求把自己的改动覆盖掉了，
+  // 界面上却显示"已保存"。这就是分组改名偶发丢失的前端那一半原因。
+  pendingTree = JSON.parse(JSON.stringify(state.tree));
   if (saveTimer) clearTimeout(saveTimer);
   setSaveStatus('saving');
   saveTimer = setTimeout(async () => {
+    saveTimer = null;
+    const body = pendingTree;
+    pendingTree = null;
+    treeSaveInFlight++;
     try {
       const res = await fetch('/api/tree', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ tree: state.tree }),
+        body: JSON.stringify({ tree: body }),
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       setSaveStatus('idle');
     } catch (e) {
       console.error(e);
       setSaveStatus('error');
+    } finally {
+      treeSaveInFlight--;
     }
   }, 250);
 }
@@ -840,18 +915,37 @@ function nodeMatches(node) {
   return false;
 }
 function countDescendants(node) {
-  if (node.type === 'file') return { files: 1, unread: state.files[node.path] && state.files[node.path].unread ? 1 : 0 };
-  let files = 0, unread = 0;
+  if (node.type === 'file') {
+    const f = state.files[node.path];
+    const unread = f && f.unread ? 1 : 0;
+    // 分组红点靠 fresh 决定用饱和红还是灰（见 .folder-unread-dot.stale）：
+    // 一个分组里全是几个月前的旧未读时，它不该和"AI 刚刚动过这里"长得一样。
+    return { files: 1, unread, fresh: isFreshUnread(f) ? 1 : 0 };
+  }
+  let files = 0, unread = 0, fresh = 0;
   for (const c of node.children) {
     const r = countDescendants(c);
     files += r.files;
     unread += r.unread;
+    fresh += r.fresh;
   }
-  return { files, unread };
+  return { files, unread, fresh };
 }
 
 // ---------- 渲染 ----------
+// 树里是否有正在进行的行内重命名（分组名 / 备注名）
+function isInlineEditing() {
+  return !!els.tree.querySelector('[contenteditable="true"]');
+}
+let renderSkippedDuringEdit = false;
+
 function render() {
+  // 正在重命名时不要重建树。render() 第一件事就是 innerHTML=''，会把用户
+  // 正在输入的那个 contenteditable 节点直接摘掉；而浏览器移除聚焦元素并不会
+  // 触发 blur，于是提交回调根本不执行，刚敲进去的名字静默消失。
+  // 跳过的这次渲染在编辑结束时补上（见 startInlineEdit 的 finish）。
+  if (isInlineEditing()) { renderSkippedDuringEdit = true; return; }
+  renderSkippedDuringEdit = false;
   els.tree.innerHTML = '';
   const filtering = hasActiveFilter();
   for (const node of state.tree) {
@@ -1232,9 +1326,10 @@ function renderFolder(folder) {
     <span class="folder-toggle">${ic('chevron-down', 12)}</span>
     <span class="folder-icon">${ic('folder', 13)}</span>
     <span class="folder-name" data-folder-id="${folder.id}">${escapeHtml(folder.name)}</span>
-    ${counts.unread > 0 ? `<span class="folder-unread-dot" title="${counts.unread} 个未读"></span>` : ''}
+    ${counts.unread > 0 ? `<span class="folder-unread-dot${counts.fresh ? '' : ' stale'}" title="${counts.unread} 个未读${counts.fresh ? `，其中 ${counts.fresh} 个今天改过` : '（都超过 24 小时）'}"></span>` : ''}
     <span class="folder-count">${counts.files}</span>
     <span class="folder-actions">
+      ${folder.autoFor ? `<button data-act="reveal-folder" title="在访达中显示这个目录" aria-label="在访达中显示「${escapeHtml(folder.name)}」">${ic('folder-open', 12)}</button>` : ''}
       <button data-act="new-sub" title="在此分组内新建子分组" aria-label="在「${escapeHtml(folder.name)}」内新建子分组">${ic('plus', 12)}</button>
       <button data-act="rename" title="重命名" aria-label="重命名分组「${escapeHtml(folder.name)}」">${ic('pencil', 11)}</button>
       <button data-act="delete" title="删除分组（文件下次扫描会回到所属项目）" aria-label="删除分组「${escapeHtml(folder.name)}」">${ic('x', 12)}</button>
@@ -1301,6 +1396,26 @@ function renderFolder(folder) {
     e.stopPropagation();
     deleteFolder(folder);
   });
+  // 只有自动生成的分组（带 autoFor）在磁盘上有对应目录，按钮也只给它们渲染
+  const revealBtn = header.querySelector('[data-act="reveal-folder"]');
+  if (revealBtn) {
+    revealBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        const r = await fetch('/api/reveal-folder', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ autoFor: folder.autoFor }),
+        });
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          showToast({ kind: 'error', text: '打开失败', secondary: data.error || ('HTTP ' + r.status) });
+        }
+      } catch (err) {
+        showToast({ kind: 'error', text: '打开失败', secondary: err.message });
+      }
+    });
+  }
   header.querySelector('.folder-name').addEventListener('dblclick', (e) => {
     e.stopPropagation();
     startRenameFolder(folder, e.currentTarget);
@@ -1328,9 +1443,14 @@ function renderFile(file, node) {
   })();
   const contentOnly = !!snippet && !isNameMatch;
   const dtype = isMdFile(file) ? 'md' : 'html';
+  // 未读点的新鲜度：超过 24h 的变更降级成灰点（.stale）。
+  // 红点的意思是"AI 刚动过这个文件"，可 588 个饱和红点铺满整个侧栏时，
+  // 这个信号就等于不存在了。只有今天动过的才配得上红色。
+  const isFresh = isFreshUnread(file);
   fileEl.className = 'file'
     + ' doctype-' + dtype
     + (file.unread ? ' unread' : '')
+    + (file.unread && !isFresh ? ' stale' : '')
     + (file.alias ? ' has-alias' : '')
     + (file.path === state.activeFilePath ? ' active' : '')
     + (file.favorite ? ' favorite' : '')
@@ -1356,7 +1476,8 @@ function renderFile(file, node) {
   //   ① 加进 initSortables 的 filter，否则按下星标会启动拖拽
   //   ② 加进本行 pointerdown/pointerup 的守卫，否则点它会顺带打开文档
   const favLabel = file.favorite ? `取消收藏「${escapeHtml(displayName)}」` : `收藏「${escapeHtml(displayName)}」`;
-  // 行上最多两个标签，超出显示 +N（侧边栏宽度有限，标签不该把文件名挤没）
+  // 行上最多两个标签，超出显示 +N（侧边栏宽度有限，标签不该把文件名挤没）。
+  // 宽度是靠收窄单个 chip（.file-tag max-width 72→56px）省出来的，不减数量。
   const shownTags = (file.tags || []).slice(0, 2);
   const restTags = (file.tags || []).length - shownTags.length;
   const tagsHtml = (file.tags || []).length
@@ -1389,6 +1510,7 @@ function renderFile(file, node) {
       <button data-act="alias" title="备注名（不改源文件名）" aria-label="给「${escapeHtml(displayName)}」起备注名">${ic('pencil', 11)}</button>
       <button data-act="reveal" title="在访达中显示" aria-label="在访达中显示「${escapeHtml(displayName)}」">${ic('folder-open', 12)}</button>
     </span>
+    ${snippet ? `<span class="file-snippet">${qoMarkSnippet(snippet, state.search)}</span>` : ''}
   `;
   // 用 pointerdown + pointerup 替代 click：
   // SortableJS forceFallback 模式会在鼠标按下后任何 mousemove 启动拖拽并 preventDefault click，
@@ -1565,9 +1687,15 @@ function startInlineEdit(nameEl, originalText, onCommit) {
     const next = normalizeText(nameEl.textContent);
     if (cancelled) {
       nameEl.textContent = originalText;
-      return;
+    } else {
+      onCommit(next);
     }
-    onCommit(next);
+    // 编辑期间被 render() 跳过的那次渲染补回来（见 render 里的说明）。
+    // 放在 onCommit 之后、并且延到下一个 tick：onCommit 可能是异步的
+    // （备注名要发请求），此刻先让它把内存状态改完。
+    if (renderSkippedDuringEdit) {
+      setTimeout(() => { if (!isInlineEditing()) render(); }, 0);
+    }
   };
   const onBlur = () => finish();
   const onKey = (e) => {
@@ -1607,12 +1735,17 @@ function restoreCaret(el, offset) {
 }
 
 function startRenameFolder(folder, nameEl) {
+  const folderId = folder.id;
   startInlineEdit(nameEl, folder.name, (next) => {
-    if (!next || next === folder.name) {
-      nameEl.textContent = folder.name;
+    // 按 id 重新定位，不用渲染时闭包捕获的那个对象引用：万一编辑期间
+    // state.tree 被整体替换过（fetchState 的 `state.tree = data.tree`），
+    // 闭包里的 folder 就是个游离对象，改它不会进入接下来要保存的那棵树。
+    const target = findFolderById(state.tree, folderId) || folder;
+    if (!next || next === target.name) {
+      nameEl.textContent = target.name;
       return;
     }
-    folder.name = next;
+    target.name = next;
     nameEl.textContent = next;
     scheduleSaveTree();
   });
@@ -1873,13 +2006,18 @@ function readContainer(containerEl) {
       const id = child.dataset.folderId;
       const original = findFolderById(state.tree, id);
       const childrenEl = child.querySelector('.folder-children');
-      out.push({
+      const node = {
         id,
         type: 'folder',
         name: original ? original.name : child.querySelector('.folder-name').textContent.trim(),
         collapsed: state.collapsed.has(id),
         children: childrenEl ? readContainer(childrenEl) : [],
-      });
+      };
+      // autoFor 必须原样带回去：它是服务端做自动归类时的身份键
+      // （见 server.js 的 autoFolderKey）。这里漏掉的话，一次拖拽就会把它从
+      // 整棵树上抹掉，改过名的分组随即又变得认不出来、下次扫描被自动名顶替。
+      if (original && typeof original.autoFor === 'string') node.autoFor = original.autoFor;
+      out.push(node);
     } else if (child.dataset.nodeType === 'file') {
       out.push({ type: 'file', path: child.dataset.path });
     }
@@ -1993,15 +2131,19 @@ function updateUnreadDecorations() {
     const counts = countDescendants(folder);
     const dot = folderEl.querySelector(':scope > .folder-header > .folder-unread-dot');
     if (counts.unread > 0) {
+      // 标题与 stale 判定要和 renderFolder 里那一份保持一致
+      const dotTitle = counts.unread + ' 个未读'
+        + (counts.fresh ? `，其中 ${counts.fresh} 个今天改过` : '（都超过 24 小时）');
       if (!dot) {
         const newDot = document.createElement('span');
-        newDot.className = 'folder-unread-dot';
-        newDot.title = counts.unread + ' 个未读';
+        newDot.className = 'folder-unread-dot' + (counts.fresh ? '' : ' stale');
+        newDot.title = dotTitle;
         const header = folderEl.querySelector(':scope > .folder-header');
         const countEl = header.querySelector('.folder-count');
         header.insertBefore(newDot, countEl);
       } else {
-        dot.title = counts.unread + ' 个未读';
+        dot.title = dotTitle;
+        dot.classList.toggle('stale', !counts.fresh);
       }
     } else if (dot) {
       dot.remove();
@@ -3630,7 +3772,8 @@ window.addEventListener('beforeunload', (e) => {
 // ==================== Diff：和上次已读版本对比 ====================
 // 未读红点只回答了"AI 动过这个文件"，但用户真正想知道的是"动了什么"。
 // 底本在用户每次打开文件时由 /api/seen 落一份快照，这里做的是把差异呈现出来。
-const diffState = { open: false, path: null, loading: false };
+// version = 用户在面板里选中的那一份历史底本（null 表示交给服务端自动挑）
+const diffState = { open: false, path: null, loading: false, version: null, versions: [] };
 
 function diffContextValue() {
   const v = els.diffContext ? parseInt(els.diffContext.value, 10) : 3;
@@ -3641,8 +3784,33 @@ function renderDiffEmpty(html) {
   els.diffBody.innerHTML = html;
 }
 
+// 历史版本选择器 + 回退按钮。
+// 底本从"只留一份"改成"留最近几份"之后，这里让用户挑要和哪一版比。
+// 只有一份可选时整组控件不出现——一个只有单个选项的下拉只是噪音。
+function renderDiffVersions(data) {
+  if (!els.diffVersionWrap || !els.diffVersion || !els.diffRevert) return;
+  const list = Array.isArray(data.versions) ? data.versions : [];
+  diffState.versions = list;
+  diffState.version = data.version || null;
+  const show = list.length > 1;
+  els.diffVersionWrap.classList.toggle('hidden', !show);
+  els.diffRevert.classList.toggle('hidden', !show);
+  if (!show) return;
+  els.diffVersion.innerHTML = list.map((v, i) => {
+    const label = (i === 0 ? '最近一版' : `往前第 ${i} 版`)
+      + ' · ' + fmtMtime(v.at)
+      + (v.isCurrent ? '（与当前相同）' : '');
+    return `<option value="${escapeHtml(v.file)}"${v.file === data.version ? ' selected' : ''}>`
+      + `${escapeHtml(label)}</option>`;
+  }).join('');
+  // 选中的这一版就是磁盘上的当前内容时，回退没有意义
+  const picked = list.find(v => v.file === data.version);
+  els.diffRevert.disabled = !!(picked && picked.isCurrent);
+}
+
 function renderDiffResult(data) {
   els.diffBody.innerHTML = '';
+  renderDiffVersions(data);
   if (!data.hasBaseline) {
     els.diffStats.textContent = '';
     renderDiffEmpty(`
@@ -3716,7 +3884,9 @@ async function loadDiff() {
   els.diffStats.textContent = '正在对比…';
   try {
     const url = '/api/diff?path=' + encodeURIComponent(diffState.path)
-      + '&context=' + diffContextValue();
+      + '&context=' + diffContextValue()
+      // 不带 version 时由服务端自动挑「第一个内容不同于当前的版本」
+      + (diffState.version ? '&version=' + encodeURIComponent(diffState.version) : '');
     const r = await fetch(url);
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
@@ -3745,6 +3915,8 @@ function openDiff() {
   }
   diffState.open = true;
   diffState.path = filePath;
+  diffState.version = null;    // 换文档要重新自动挑版本，不能沿用上一篇的选择
+  diffState.versions = [];
   els.diffPanel.classList.remove('hidden');
   els.emptyState.classList.add('hidden');
   loadDiff();
@@ -3753,8 +3925,12 @@ function openDiff() {
 function closeDiff() {
   diffState.open = false;
   diffState.path = null;
+  diffState.version = null;
+  diffState.versions = [];
   els.diffPanel.classList.add('hidden');
   els.diffBody.innerHTML = '';
+  if (els.diffVersionWrap) els.diffVersionWrap.classList.add('hidden');
+  if (els.diffRevert) els.diffRevert.classList.add('hidden');
 }
 
 if (els.btnDiff) {
@@ -3766,6 +3942,52 @@ if (els.btnDiff) {
 }
 if (els.diffClose) els.diffClose.addEventListener('click', closeDiff);
 if (els.diffContext) els.diffContext.addEventListener('change', loadDiff);
+if (els.diffVersion) {
+  els.diffVersion.addEventListener('change', () => {
+    diffState.version = els.diffVersion.value || null;
+    loadDiff();
+  });
+}
+// 回退：这是会写用户文件的操作，先确认，服务端写前还会自动备份
+if (els.diffRevert) {
+  els.diffRevert.addEventListener('click', async () => {
+    if (!diffState.path || !diffState.version) return;
+    const p = diffState.path;
+    const picked = diffState.versions.find(v => v.file === diffState.version);
+    const when = picked && picked.at ? fmtMtime(picked.at) : '选中的这一版';
+    const ok = await showConfirm({
+      title: '回退到这一版？',
+      body: `磁盘上的文件内容会被改回「${when}」那一版。\n`
+        + '写入前会自动备份到 ~/.atlas/backups/，但这一步本身不能撤销。',
+      confirmText: '回退',
+      danger: true,
+    });
+    if (!ok) return;
+    els.diffRevert.disabled = true;
+    try {
+      const r = await fetch('/api/revert', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: p, version: diffState.version }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        showToast({ kind: 'error', text: '回退失败', secondary: data.error || ('HTTP ' + r.status) });
+        els.diffRevert.disabled = false;
+        return;
+      }
+      showToast({ kind: 'success', text: '已回退到选中的版本', secondary: '原内容已备份到 backups/' });
+      await fetchState();
+      // 内容变了：预览要重载，差异要按新的当前内容重新自动选版
+      if (state.activeFilePath === p) setActiveFile(p, true);
+      diffState.version = null;
+      loadDiff();
+    } catch (e) {
+      showToast({ kind: 'error', text: '回退失败', secondary: e.message });
+      els.diffRevert.disabled = false;
+    }
+  });
+}
 if (els.diffAccept) {
   els.diffAccept.addEventListener('click', async () => {
     if (!diffState.path) return;
@@ -3782,10 +4004,15 @@ if (els.diffAccept) {
         state.files[p].unread = false;
         state.files[p].hasBaseline = true;
         state.files[p].baselineAt = Date.now();
+        // 底本就是当前内容了，顶栏那个"有改动"提示要跟着灭掉
+        state.files[p].baselineSame = true;
       }
       updateUnreadDecorations();
       updateDiffButton();
       showToast({ kind: 'success', text: '已更新对比底本' });
+      // 清掉手动选的版本：刚确认过的那一份才是新基准，交给服务端重新自动选，
+      // 否则还带着 accept 之前挑的旧版本去比，面板上依旧显示一堆差异
+      diffState.version = null;
       loadDiff();
     } catch (e) {
       showToast({ kind: 'error', text: '操作失败', secondary: e.message });
@@ -3806,11 +4033,16 @@ function updateDiffButton() {
     return;
   }
   els.btnDiff.disabled = editState.active;
-  const changed = file.hasBaseline && file.baselineAt && file.mtime > file.baselineAt;
+  // 判据不能只看 mtime：AI 用相同内容重新生成一遍文档（或 touch / 网盘同步）
+  // 会让 mtime 前进但内容没变，那样点开对比是空的，提示就成了假警报。
+  // baselineSame 是服务端做过内容核对的结果（见 server.js buildVersionMeta）。
+  const changed = file.hasBaseline && file.baselineAt
+    && file.mtime > file.baselineAt && !file.baselineSame;
   els.btnDiff.classList.toggle('has-changes', !!changed);
   els.btnDiff.title = !file.hasBaseline
     ? '还没有对比底本（打开一次后即可对比）'
-    : (changed ? '这个文档自上次查看后有改动，点击查看差异' : '和上次已读版本对比');
+    : (changed ? '这个文档自上次查看后有改动，点击查看差异'
+      : (file.versionCount > 1 ? '查看历史版本 / 和上次已读版本对比' : '和上次已读版本对比'));
 }
 
 // ---------- iframe 内高亮搜索命中 ----------
@@ -4693,6 +4925,9 @@ function qoContentResults(nameResults, query) {
   return out;
 }
 
+// 结果行的内部结构。末尾那个 .qo-action 只在选中行上显示（由 CSS 控制）：
+// Raycast 的招牌做法——"现在按回车会发生什么"写在你正看着的那一行上，
+// 而不是只写在底部图例里，眼睛不需要在列表和 footer 之间来回跑。
 function qoRowHtml(r, query) {
   const f = r.file;
   const dtype = isMdFile(f) ? 'md' : 'html';
@@ -4711,7 +4946,8 @@ function qoRowHtml(r, query) {
     </span>
     ${hitCount}
     <span class="qo-badge">${dtype === 'md' ? 'MD' : 'HTML'}</span>
-    ${f.unread ? '<span class="qo-unread" title="未读"></span>' : ''}
+    ${f.unread ? `<span class="qo-unread${isFreshUnread(f) ? '' : ' stale'}" title="未读"></span>` : ''}
+    <span class="qo-action" aria-hidden="true"><kbd>↵</kbd><span>打开</span></span>
   `;
 }
 

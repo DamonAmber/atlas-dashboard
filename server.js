@@ -391,13 +391,81 @@ function migrateLegacyRootFolders(tree) {
   visit(tree);
 }
 
-// 自底向上递归丢弃 0 个 file 后代的虚拟文件夹——空壳没有展示价值
+// 顶层分组的稳定身份。
+//
+// 自动生成的顶层分组对应扫描根下的一个一级目录（file.projectName）。过去它和
+// projectName 之间唯一的联系就是"名字恰好相同"——于是用户一旦把分组重命名，
+// reconcile 就再也认不出它：新文件进来时按名字找不到 → 又 push 一个自动名的
+// 新分组；分组一旦临时变空还会被 pruneEmptyFolders 删掉，下一轮用自动名重建。
+// 这就是"一级文件夹改名后刷新就没了、但有时又能存住"的根源（取决于扫描/SSE
+// 什么时候回来）。autoFor 把这个联系固定下来，改过名也依然认得。
+function autoFolderKey(folder) {
+  return folder && typeof folder.autoFor === 'string' ? folder.autoFor : null;
+}
+
+// 老数据迁移：给还没有 autoFor 的顶层分组补上。
+// 判据是"名字正好等于某个 projectName"——那就是当初自动生成的那一批。
+// 用户手工新建的顶层分组匹配不上，保持没有 autoFor（也就不参与自动归类）。
+function backfillAutoFor(tree, projectNames) {
+  let changed = false;
+  for (const n of tree) {
+    if (n.type !== 'folder') continue;
+    if (typeof n.autoFor === 'string') continue;
+    if (projectNames.has(n.name)) {
+      n.autoFor = n.name;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+// 把"用户给自动分组起的名字"单独记一份到 store.folderAliases。
+//
+// 为什么不能只存在 store.tree 里：那个名字一旦只活在树结构上，任何让分组从树上
+// 消失的操作都会把它一起带走——归档（/api/archive 直接 filter 掉整个分组）、
+// 被当成空壳回收、前端整树覆盖。存成一条独立的偏好之后，reconcile 重建分组时
+// 能把名字取回来，改名就不再依赖树结构的存续。
+function syncFolderAliases(store, tree) {
+  if (!store.folderAliases || typeof store.folderAliases !== 'object') {
+    store.folderAliases = {};
+  }
+  for (const n of tree) {
+    if (!n || n.type !== 'folder') continue;
+    const key = autoFolderKey(n);
+    if (key === null) continue;
+    if (n.name === key) delete store.folderAliases[key];  // 改回原名 = 清除这条偏好
+    else store.folderAliases[key] = n.name;
+  }
+}
+
+// 自动分组该显示什么名字：用户起过名就用它，否则用项目目录名
+function autoFolderDisplayName(store, projectName) {
+  const alias = store.folderAliases && store.folderAliases[projectName];
+  return (typeof alias === 'string' && alias) ? alias : projectName;
+}
+
+// 空分组要不要留下来。
+//
+// 只有"自动生成、且用户没动过名字"的空壳才该被回收——那是扫描的副产物，
+// 没有展示价值。另外两类都代表用户的投入，删掉就是丢数据：
+//   · 改过名的自动分组：一时变空是常态（AI 覆盖写文件会先 unlink 再 add、
+//     扫描根短暂不可达、切换 docTypes 都会让分组瞬时清空），一旦删掉那个名字
+//     就永久丢了，下一轮只会按 projectName 重建一个自动名的新分组。
+//   · 手工新建的分组（没有 autoFor）：POST /api/folders/new 建出来时本来就是
+//     空的，原先会在下一次 /api/state 被清掉，用户看到的是"新建分组立刻消失"。
+function shouldKeepEmptyFolder(folder) {
+  const key = autoFolderKey(folder);
+  if (key === null) return true;      // 手工建的，留
+  return folder.name !== key;         // 自动建的：只有改过名才留
+}
+
+// 自底向上递归丢弃空的虚拟文件夹（判据见 shouldKeepEmptyFolder）
 function pruneEmptyFolders(nodes) {
   const out = [];
   for (const n of nodes) {
     if (n.type === 'folder') {
       n.children = pruneEmptyFolders(n.children || []);
-      if (n.children.length === 0) continue;
+      if (n.children.length === 0 && !shouldKeepEmptyFolder(n)) continue;
     }
     out.push(n);
   }
@@ -426,6 +494,10 @@ function reconcile(store, scanned) {
   const scannedSet = new Set(visibleScanned.map(f => f.path));
   store.tree = pruneMissing(store.tree, scannedSet);
 
+  // 先给历史数据补上 autoFor（见 backfillAutoFor 的注释），后面的匹配才认得
+  // 那些在这个字段出现之前就已经存在的顶层分组
+  backfillAutoFor(store.tree, new Set(visibleScanned.map(f => f.projectName)));
+
   const existing = new Set();
   collectFilePaths(store.tree, existing);
 
@@ -434,9 +506,17 @@ function reconcile(store, scanned) {
 
   for (const file of newFiles) {
     const folderName = file.projectName;
-    let folder = store.tree.find(n => n.type === 'folder' && n.name === folderName);
+    // 先按 autoFor 认领（改过名的分组也能认出来，这是关键），
+    // 再退回按名字认领没有 autoFor 的分组（用户手工建的同名分组，沿用旧行为）
+    let folder = store.tree.find(n => n.type === 'folder' && autoFolderKey(n) === folderName)
+      || store.tree.find(n => n.type === 'folder' && autoFolderKey(n) === null && n.name === folderName);
     if (!folder) {
-      folder = { id: genId(), type: 'folder', name: folderName, collapsed: false, children: [] };
+      // 名字优先取用户起过的那个（见 syncFolderAliases）：分组可能是被归档、
+      // 被误回收之后重建的，这时不该退回自动名
+      folder = {
+        id: genId(), type: 'folder', name: autoFolderDisplayName(store, folderName),
+        autoFor: folderName, collapsed: false, children: [],
+      };
       store.tree.push(folder);
     }
     folder.children.unshift({ type: 'file', path: file.path });
@@ -494,6 +574,9 @@ function validateTree(rootNodes) {
         seenFilePaths.add(n.path);
       } else if (n.type === 'folder') {
         if (typeof n.id !== 'string' || typeof n.name !== 'string') return false;
+        // autoFor 可选，但给了就必须是字符串：它是自动归类的身份键
+        // （见 autoFolderKey），类型错了会让 reconcile 认错分组
+        if (n.autoFor !== undefined && typeof n.autoFor !== 'string') return false;
         if (seenFolderIds.has(n.id)) return false;   // 不允许同一 folder 出现两次（含循环）
         seenFolderIds.add(n.id);
         if (!Array.isArray(n.children)) return false;
@@ -870,6 +953,8 @@ app.get('/api/state', async (_req, res) => {
     //                allTags / recent）都只认它，和侧边栏树保持同一口径。
     const diskPaths = new Set(scanned.map(f => f.path));
     const visible = visibleFiles(scanned, store);
+    // 底本 / 版本历史相关的字段（含必要的内容核对），见 buildVersionMeta
+    const versionMeta = buildVersionMeta(store, visible);
 
     const fileMap = {};
     for (const f of visible) {
@@ -887,9 +972,12 @@ app.get('/api/state', async (_req, res) => {
         alias: store.aliases[f.path] || null,
         // 只看 store 里有没有登记（内存判断，免费）。不在这里 stat 底本文件——
         // 那是每个文件一次 syscall，几百篇文档就把 /api/state 拖回去了
-        hasBaseline: !!(store.seenVersions && store.seenVersions[f.path]),
-        baselineAt: (store.seenVersions && store.seenVersions[f.path]
-          && store.seenVersions[f.path].at) || 0,
+        hasBaseline: versionMeta[f.path].hasBaseline,
+        baselineAt: versionMeta[f.path].baselineAt,
+        // 当前内容是否和最新底本逐字节相同。顶栏那个"有改动"提示要靠它，
+        // 不能只看 mtime —— 详见下面 buildVersionMeta 的注释
+        baselineSame: versionMeta[f.path].baselineSame,
+        versionCount: versionMeta[f.path].versionCount,
         favorite: !!(store.favorites && store.favorites[f.path]),
         favoritedAt: (store.favorites && store.favorites[f.path]) || 0,
         tags: (store.tags && Array.isArray(store.tags[f.path])) ? store.tags[f.path] : [],
@@ -971,6 +1059,8 @@ app.put('/api/tree', (req, res) => {
   }
   const store = loadStore();
   store.tree = body.tree;
+  // 用户对自动分组的重命名要单独留一份，别只依赖树结构（见 syncFolderAliases）
+  syncFolderAliases(store, store.tree);
   saveStore(store);
   res.json({ ok: true });
 });
@@ -1206,8 +1296,13 @@ app.post('/api/archive', (req, res) => {
   }
   const store = loadStore();
   store.archivedProjects = Array.from(new Set([...(store.archivedProjects || []), name]));
-  // 同步把 store.tree 里的同名顶层 folder 立即拿掉，UI 不用等下次扫描
-  store.tree = (store.tree || []).filter(n => !(n.type === 'folder' && n.name === name));
+  // 同步把对应的顶层 folder 立即拿掉，UI 不用等下次扫描。
+  // 按 autoFor 认领而不是按名字：用户改过名的分组照样要能归档
+  // （原来只比 n.name === name，改过名的分组归档后仍留在树里）
+  store.tree = (store.tree || []).filter(n => !(
+    n.type === 'folder'
+    && (autoFolderKey(n) === name || (autoFolderKey(n) === null && n.name === name))
+  ));
   saveStore(store);
   res.json({ ok: true, archivedProjects: store.archivedProjects });
 });
@@ -1251,15 +1346,108 @@ function insertIntoFolder(nodes, folderId, child) {
   return false;
 }
 
+// store.seenVersions[path] 的历史形态是单个 { file, hash, at }，现在是一个数组
+// （最近的排在最前）。读的时候统一成数组，老数据不需要额外迁移步骤。
+function versionsOf(store, filePath) {
+  const v = store.seenVersions && store.seenVersions[filePath];
+  if (!v) return [];
+  if (Array.isArray(v)) return v.filter(x => x && typeof x.file === 'string');
+  if (typeof v === 'object' && typeof v.file === 'string') return [v];   // 老格式
+  return [];
+}
+
+// 每个文件在 store 里保留几份版本记录。和 versionStore.KEEP_PER_FILE 对齐——
+// 磁盘上只留那么多份快照，store 里记更多也读不到。
+const KEEP_VERSIONS = versionStore.KEEP_PER_FILE;
+
 // 记录"用户看过某个版本"，同时留一份底本供之后 diff。
 // 这是 diff 视图的地基：只有在用户看过的那一刻存下内容，之后 AI 改了文件
 // 才有东西可比——事后再想补是补不回来的。
-function recordSeenVersion(store, filePath) {
+//
+// 为什么要留一条历史而不是只留最新一份：打开文档时就会刷新底本，可"打开文档"
+// 恰恰是用户想去看变更的那个动作——只留一份的话，对比基准会被这个动作自己刷掉，
+// 于是点开对比永远显示"没有变更"，想看的那次差异被吃掉了。有了历史，即使最新
+// 一份等于当前内容，也还能和上一个内容不同的版本对比（见 /api/diff 的选版逻辑）。
+//
+// 内容没变就不追加，只保留原来那份：这样列表是"内容变化的历史"，
+// 而不是"打开了多少次"的历史，也才对得上用户说的"最近几次修改记录"。
+// ack（acknowledged）区分这份底本是怎么来的，它决定 /api/diff 默认拿哪一版比：
+//   · false —— 打开文档时自动记的。用户还没看过差异，所以不能拿它当基准
+//     （那只会得到空 diff，想看的变更就被"打开"这个动作吃掉了）。
+//   · true  —— 用户明确表过态：点了「标记为已看过」、执行了回退、或在 Atlas 里
+//     保存了编辑。这时"没有变更"正是他期望看到的结果。
+function recordSeenVersion(store, filePath, opts = {}) {
+  const ack = !!opts.ack;
   const snap = versionStore.snapshot(filePath);
-  if (snap.ok) {
-    store.seenVersions[filePath] = { file: snap.file, hash: snap.hash, at: snap.at };
+  if (!snap.ok) return snap;
+  if (!store.seenVersions || typeof store.seenVersions !== 'object') store.seenVersions = {};
+  const list = versionsOf(store, filePath);
+  if (list.length && list[0].hash === snap.hash) {
+    // 内容与最新一份相同：保留原来的 at，那才是"第一次看到这个内容"的时间。
+    // 但这次若是用户明确确认，要把标记升上去——否则「标记为已看过」会失效
+    // （打开文档时已经记过同样内容的一份，accept 会走进这个分支）。
+    if (ack && !list[0].ack) list[0] = { ...list[0], ack: true };
+    store.seenVersions[filePath] = list;
+    return snap;
   }
+  list.unshift({ file: snap.file, hash: snap.hash, at: snap.at, ack });
+  store.seenVersions[filePath] = list.slice(0, KEEP_VERSIONS);
   return snap;
+}
+
+// 给每个可见文件算出底本 / 版本相关的字段。
+//
+// 重点是 baselineSame。顶栏「这个文档自上次查看后有改动」原来只比 mtime
+// （file.mtime > baselineAt），可 mtime 前进并不等于内容变了 —— AI 用相同内容
+// 重新生成一遍文档、touch、网盘同步都会让 mtime 往前跳。于是就有了那个矛盾：
+// 提示说有更新，点开对比却说"和你上次看到的内容完全一致"。一边看时间、一边看
+// 内容，两者从来没对过账。
+//
+// 这里把账对上，但只对候选文件做：有底本、且 mtime 比底本新。这个集合是"用户
+// 打开过、之后又被写过"的文件，通常只有个位数到几十个，远小于全量；结果还按
+// mtime 缓存，同一个版本只算一次 sha1。所以 fileMap 那圈"不许 stat"的约束
+// 并没有被破坏。
+function buildVersionMeta(store, files) {
+  const out = {};
+  for (const f of files) {
+    const list = versionsOf(store, f.path);
+    const latest = list[0] || null;
+    // baselineSame 的含义是"当前内容与最新底本一致"。
+    // mtime 不比底本新时直接判定一致，不读盘：那本来就是底本记下的那份内容。
+    // 只有 mtime 前进了才真的核对一次 —— 那正是"时间变了但内容可能没变"的
+    // 可疑区间，也就是假警报的来源。
+    let baselineSame = !!latest;
+    if (latest && f.mtime > (latest.at || 0)) {
+      const h = currentContentHash(f.path, f.mtime);
+      baselineSame = !!(h && h === latest.hash);
+    }
+    out[f.path] = {
+      hasBaseline: list.length > 0,
+      baselineAt: latest ? (latest.at || 0) : 0,
+      baselineSame,
+      versionCount: list.length,
+    };
+  }
+  return out;
+}
+
+// 当前磁盘内容的 sha1，按 mtime 缓存。
+//
+// 用途是给"有更新"提示做内容核对（见 /api/state 里 baselineSame 的注释）。
+// 缓存是必须的：同一个 mtime 下内容不会变，没有它就会在每次 /api/state 反复
+// 读同一批文件。只在候选文件上调用，不是全量。
+const contentHashCache = new Map();
+function currentContentHash(filePath, mtime) {
+  const c = contentHashCache.get(filePath);
+  if (c && c.mtime === mtime) return c.hash;
+  let hash = null;
+  try { hash = versionStore.sha1(fs.readFileSync(filePath)); } catch {}
+  if (hash) {
+    // 上限兜底：长期运行 + 大量文件时别让它无限长
+    if (contentHashCache.size > 500) contentHashCache.clear();
+    contentHashCache.set(filePath, { mtime, hash });
+  }
+  return hash;
 }
 
 app.post('/api/seen', (req, res) => {
@@ -1287,30 +1475,109 @@ app.get('/api/diff', async (req, res) => {
     return res.status(404).json({ error: '文件不存在' });
   }
   const store = loadStore();
-  const meta = store.seenVersions && store.seenVersions[filePath];
-  if (!meta || !versionStore.hasSnapshot(meta.file)) {
+  // 磁盘上被淘汰的快照要剔掉：versions/ 每个源文件只留最近几份
+  const list = versionsOf(store, filePath).filter(v => versionStore.hasSnapshot(v.file));
+  if (!list.length) {
     return res.json({
       hasBaseline: false,
       reason: 'no-baseline',
       message: '还没有可对比的底本。打开过一次之后，Atlas 会记下你看到的版本，下次它被改动就能对比了。',
     });
   }
-  const baseline = versionStore.readSnapshot(meta.file);
-  if (baseline == null) {
-    return res.json({ hasBaseline: false, reason: 'baseline-unreadable', message: '底本读取失败。' });
-  }
   try {
-    const current = await fsp.readFile(filePath, 'utf8');
+    // 读 Buffer 再解码：hash 必须和 versionStore.snapshot 那边算的一致
+    // （它是对原始字节做 sha1），先转成字符串再编码回去遇到 BOM / 非法字节会对不上
+    const curBuf = await fsp.readFile(filePath);
+    const current = curBuf.toString('utf8');
+    const curHash = versionStore.sha1(curBuf);
+
+    // 选底本：
+    //   · 指定了 version 就用那一份（用户在面板里挑了某个历史版本）
+    //   · 否则自动挑「第一个内容不同于当前磁盘内容的版本」。这一条是关键：
+    //     打开文档时会记一份等于当前内容的底本，直接拿最新那份比只会得到空 diff
+    //     —— 那正是"提示有更新、点开却说没变更"的另一半原因。
+    const wanted = typeof req.query.version === 'string' && req.query.version ? req.query.version : null;
+    let picked;
+    if (wanted) {
+      picked = list.find(v => v.file === wanted);
+      if (!picked) return res.status(404).json({ error: '这个版本已经不在留存范围内' });
+    } else if (list[0].ack) {
+      // 最新一份是用户明确确认过的（标记为已看过 / 回退 / 站内保存）：
+      // 就以它为基准，此时"没有变更"正是用户期望的结果
+      picked = list[0];
+    } else {
+      picked = list.find(v => v.hash !== curHash) || list[0];
+    }
+
+    const baseline = versionStore.readSnapshot(picked.file);
+    if (baseline == null) {
+      return res.json({ hasBaseline: false, reason: 'baseline-unreadable', message: '底本读取失败。' });
+    }
     // 注意不能写 `parseInt(...) || 3`：context=0 是合法值，会被 || 吃掉变成 3
     const rawCtx = parseInt(req.query.context, 10);
     const context = Number.isFinite(rawCtx) ? Math.min(10, Math.max(0, rawCtx)) : 3;
     const result = diffLib.diffText(baseline, current, { context });
     res.json({
       hasBaseline: true,
-      baselineAt: meta.at || null,
+      baselineAt: picked.at || null,
+      version: picked.file,
+      versions: list.map(v => ({
+        file: v.file,
+        at: v.at || 0,
+        isCurrent: v.hash === curHash,
+      })),
       ...result,
     });
   } catch (e) {
+    res.status(500).json({ error: e && e.message || String(e) });
+  }
+});
+
+// POST /api/revert：把文件回退到某个历史版本。
+//
+// 这是 Atlas 少数会写用户文件的操作，所以严格走编辑保存那条路：先备份到
+// backups/，再临时文件 + rename 原子写回，并登记 selfWrite —— 不登记的话
+// watcher 会把 Atlas 自己的写入当成外部变更，回退完立刻又亮起未读红点。
+app.post('/api/revert', async (req, res) => {
+  const { path: filePath, version } = req.body || {};
+  if (!filePath || typeof filePath !== 'string' || !isPathInScanRoots(filePath)) {
+    return res.status(400).json({ error: '路径非法' });
+  }
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: '文件不存在' });
+  }
+  if (!version || typeof version !== 'string') {
+    return res.status(400).json({ error: '缺少 version' });
+  }
+  const store = loadStore();
+  const picked = versionsOf(store, filePath).find(v => v.file === version);
+  if (!picked || !versionStore.hasSnapshot(picked.file)) {
+    return res.status(404).json({ error: '这个版本已经不在留存范围内' });
+  }
+  const content = versionStore.readSnapshot(picked.file);
+  if (content == null) {
+    return res.status(500).json({ error: '底本读取失败' });
+  }
+  try {
+    let backupPath = null;
+    try { backupPath = editBackup.backup(filePath); } catch {}
+    const tmp = filePath + '.atlas-tmp';
+    await fsp.writeFile(tmp, content, 'utf8');
+    await fsp.rename(tmp, filePath);
+    const stat = await fsp.stat(filePath);
+    markSelfWrite(filePath, stat.mtimeMs);
+    contentHashCache.delete(filePath);
+
+    // 回退后的内容就是用户此刻看到的：标为已读，并把它记成最新底本。
+    // ack: true —— 这是用户主动做的改动，不该在下次对比时被当成"别人的变更"
+    const st = loadStore();
+    st.seen[filePath] = markSeenAt(stat.mtimeMs);
+    recordSeenVersion(st, filePath, { ack: true });
+    saveStore(st);
+
+    res.json({ ok: true, mtime: stat.mtimeMs, backup: backupPath, revertedTo: picked.at || 0 });
+  } catch (e) {
+    console.error('revert 失败:', e);
     res.status(500).json({ error: e && e.message || String(e) });
   }
 });
@@ -1325,7 +1592,8 @@ app.post('/api/diff/accept', (req, res) => {
     return res.status(404).json({ error: '文件不存在' });
   }
   const store = loadStore();
-  const snap = recordSeenVersion(store, filePath);
+  // ack: true —— 用户明确说"这些改动我看过了"，之后再点对比就该是干净的
+  const snap = recordSeenVersion(store, filePath, { ack: true });
   let mtime = 0;
   try { mtime = fs.statSync(filePath).mtimeMs; } catch {}
   store.seen[filePath] = markSeenAt(mtime);
@@ -1542,6 +1810,43 @@ app.post('/api/reveal', (req, res) => {
   });
 });
 
+// 自动分组在磁盘上对应的目录。
+//
+// projectName 的来历见 makeRecord：文件躺在扫描根的子目录里时取那个子目录名，
+// 直接躺在扫描根下时取 basename(scanRoot)。反解必须覆盖这两种情况。
+// 只在扫描根范围内查找，所以不会解析出看板之外的路径。
+function resolveProjectDir(projectName) {
+  for (const root of getScanRoots()) {
+    const sub = path.join(root, projectName);
+    try { if (fs.statSync(sub).isDirectory()) return sub; } catch {}
+    if (path.basename(root) === projectName) {
+      try { if (fs.statSync(root).isDirectory()) return root; } catch {}
+    }
+  }
+  return null;
+}
+
+// 「在访达中显示」的分组版。只有自动生成的分组（带 autoFor）才有磁盘目录可去；
+// 用户手工建的虚拟分组没有对应目录，前端也不会给它这个按钮。
+app.post('/api/reveal-folder', (req, res) => {
+  const projectName = req.body && req.body.autoFor;
+  if (!projectName || typeof projectName !== 'string') {
+    return res.status(400).json({ error: '缺少 autoFor' });
+  }
+  // autoFor 来自 store，但它最终会拼进 path.join——按不可信输入处理
+  if (/[\\/]/.test(projectName) || projectName.includes('..')) {
+    return res.status(400).json({ error: '分组标识非法' });
+  }
+  const dir = resolveProjectDir(projectName);
+  if (!dir) {
+    return res.status(404).json({ error: '这个分组在磁盘上没有对应的目录' });
+  }
+  revealInFileManager(dir, (err) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ ok: true, path: dir });
+  });
+});
+
 // 把 HTML 文件导出为 PDF——用本机 Chromium 系浏览器（Chrome / Edge / Brave / Arc / Chromium）
 // headless 模式渲染，保存到 ~/Downloads/。找不到 chromium 时返回 reason='no-chromium'，前端降级走 window.print()
 // SSE 流式：launching → rendering → writing → done | error
@@ -1706,10 +2011,15 @@ app.post('/api/save-edits', async (req, res) => {
     const stat = await fsp.stat(filePath);
     markSelfWrite(filePath, stat.mtimeMs);
 
-    // 标记已读，避免自我写入被标未读
+    // 标记已读，避免自我写入被标未读。
+    // 同时把保存后的内容记成新底本：不记的话底本会停留在编辑之前，用户下次点
+    // 「对比」看到的是自己刚做的那些改动被当成"变更"——他当然知道自己改了什么，
+    // 对比要回答的是"别人（AI）动了什么"。
     const store = loadStore();
-    store.seen[filePath] = Date.now();
+    store.seen[filePath] = markSeenAt(stat.mtimeMs);
+    recordSeenVersion(store, filePath, { ack: true });
     saveStore(store);
+    contentHashCache.delete(filePath);
 
     res.json({ ok: true, mtime: stat.mtimeMs });
   } catch (e) {
@@ -1830,10 +2140,13 @@ app.post('/api/save-md', async (req, res) => {
     const stat = await fsp.stat(filePath);
     markSelfWrite(filePath, stat.mtimeMs);
 
-    // 标记已读，避免自我写入被标未读
+    // 同 save-edits：标记已读，并把保存后的内容记成新底本，
+    // 否则对比面板会把用户自己刚写的内容当成"变更"
     const store = loadStore();
-    store.seen[filePath] = Date.now();
+    store.seen[filePath] = markSeenAt(stat.mtimeMs);
+    recordSeenVersion(store, filePath, { ack: true });
     saveStore(store);
+    contentHashCache.delete(filePath);
 
     res.json({ ok: true, mtime: stat.mtimeMs, hash: editable.sha1(next) });
   } catch (e) {

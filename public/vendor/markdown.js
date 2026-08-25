@@ -384,13 +384,20 @@
     return head ? head + '\n' + body : body;
   }
 
+  // 预览页的页面底色。深色值与下方 tocVarsDark 的 --toc-bg 保持一致——
+  // 同一张页面里 TOC 侧栏和正文共用一个底，靠 border-right 分隔而不是靠色差。
+  // 抽成常量是因为它要在两处用到（pageCss 的 @media 和 forcedThemeCss），
+  // 之前是两份硬编码的 #12141a，改一处忘另一处就会出现半深半浅。
+  var PAGE_BG_LIGHT = '#ffffff';
+  var PAGE_BG_DARK = '#0f1013';
+
   // 页面级样式：只给 /api/render-md 产出的独立预览页用。
   // 之前 html/body 背景是硬编码的 #fff——dashboard 跟随系统进深色模式时，
   // 阅读区就是深色壳子里嵌一块刺眼的白板。
   var pageCss = [
     ':root{color-scheme:light dark;}',
-    'html,body{margin:0;background:#ffffff;}',
-    '@media (prefers-color-scheme: dark){html,body{background:#12141a;}}',
+    'html,body{margin:0;background:' + PAGE_BG_LIGHT + ';}',
+    '@media (prefers-color-scheme: dark){html,body{background:' + PAGE_BG_DARK + ';}}',
   ].join('');
 
   // 预览基础样式：以 .md-body 作用域，iframe 与主文档编辑预览面板共用。
@@ -398,33 +405,44 @@
   // 的编辑预览面板因此能自动保持一致。
   // 两套配色变量各自命名，好让「强制主题」复用同一份值——
   // 用户在 Atlas 设置里把主题钉成深色 / 浅色时，iframe 预览页要跟着钉。
+  // 取值对齐 styles.css 里的底座 token：灰阶去蓝味、border 淡化、链接跟主 accent
+  // 走同一个紫蓝。正文的前景色比 UI 的 #101113 略柔（#1c1d21）——大段阅读时
+  // 纯黑偏刺，UI 里的小字才需要那一档最高对比度。
   var mdVarsLight = [
-    '--md-fg:#24292f;--md-fg-muted:#6a737d;--md-fg-faint:#8a8f98;',
-    '--md-border:#eaecef;--md-border-strong:#d0d7de;',
-    '--md-code-bg:rgba(175,184,193,.28);--md-pre-bg:#f6f8fa;--md-pre-head:#eceff3;',
-    '--md-link:#0969da;--md-table-alt:#f6f8fa;--md-quote-fg:#57606a;',
-    '--md-fm-bg:#f6f8fa;--md-fm-border:#e3e6ec;'
+    '--md-fg:#1c1d21;--md-fg-muted:#57606a;--md-fg-faint:#818b98;',
+    '--md-border:#e6e8eb;--md-border-strong:#c9cdd4;',
+    '--md-code-bg:rgba(140,148,163,.20);--md-pre-bg:#f7f8f9;--md-pre-head:#eff0f2;',
+    '--md-link:#5b5bd6;--md-table-alt:#f7f8f9;--md-quote-fg:#57606a;',
+    '--md-fm-bg:#f7f8f9;--md-fm-border:#e6e8eb;'
   ].join('');
   var mdVarsDark = [
-    '--md-fg:#e3e6ec;--md-fg-muted:#9aa4b2;--md-fg-faint:#7c8494;',
-    '--md-border:#272c36;--md-border-strong:#333a46;',
-    '--md-code-bg:rgba(120,132,150,.22);--md-pre-bg:#171b22;--md-pre-head:#1f242d;',
-    '--md-link:#6cb0ff;--md-table-alt:#171b22;--md-quote-fg:#a4adbb;',
-    '--md-fm-bg:#171b22;--md-fm-border:#272c36;'
+    '--md-fg:#e7e9ec;--md-fg-muted:#9ea2a8;--md-fg-faint:#6f747c;',
+    '--md-border:#1f2023;--md-border-strong:#303136;',
+    '--md-code-bg:rgba(130,140,160,.20);--md-pre-bg:#16171a;--md-pre-head:#1e1f23;',
+    '--md-link:#8d8df0;--md-table-alt:#16171a;--md-quote-fg:#9ea2a8;',
+    '--md-fm-bg:#16171a;--md-fm-border:#1f2023;'
   ].join('');
   var markdownCss = [
     '.md-body{',
     mdVarsLight,
     'color:var(--md-fg);font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;word-wrap:break-word;}',
     '@media (prefers-color-scheme: dark){.md-body{', mdVarsDark, '}}',
-    '.md-body h1,.md-body h2,.md-body h3,.md-body h4,.md-body h5,.md-body h6{margin:1.4em 0 .6em;font-weight:600;line-height:1.3;position:relative;}',
-    '.md-body h1{font-size:1.9em;padding-bottom:.3em;border-bottom:1px solid var(--md-border);}',
-    '.md-body h2{font-size:1.5em;padding-bottom:.3em;border-bottom:1px solid var(--md-border);}',
-    '.md-body h3{font-size:1.25em;}.md-body h4{font-size:1.05em;}.md-body h5{font-size:.95em;}.md-body h6{font-size:.9em;color:var(--md-fg-muted);}',
+    // 标题节奏：上间距远大于下间距（1.7em vs .5em）。标题要"跟着它下面的内容"，
+    // 而不是均匀地漂在两段之间——这是长文档能不能扫出结构的关键。
+    '.md-body h1,.md-body h2,.md-body h3,.md-body h4,.md-body h5,.md-body h6{margin:1.7em 0 .5em;font-weight:600;line-height:1.3;position:relative;}',
+    // 去掉 h1/h2 的 border-bottom：那是 GitHub README 的长相，一条贯穿全宽的
+    // 横线会把文章切成一段段"卡片"。层级交给字号和间距表达就够了。
+    '.md-body h1{font-size:1.85em;letter-spacing:-.014em;}',
+    '.md-body h2{font-size:1.4em;letter-spacing:-.008em;}',
+    // 正文第一个元素不要顶间距（h1 常在最前，但 front matter 之后也可能是别的块）
+    '.md-body > :first-child{margin-top:0;}',
+    '.md-body h3{font-size:1.16em;}.md-body h4{font-size:1.02em;}.md-body h5{font-size:.95em;}.md-body h6{font-size:.9em;color:var(--md-fg-muted);}',
     '.md-body p{margin:0 0 1em;}',
     '.md-body a{color:var(--md-link);text-decoration:none;}.md-body a:hover{text-decoration:underline;}',
-    '.md-body code{background:var(--md-code-bg);border-radius:6px;padding:.2em .4em;font-size:.88em;font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;}',
-    '.md-body pre{position:relative;background:var(--md-pre-bg);border-radius:8px;padding:14px 16px;overflow:auto;margin:0 0 1em;}',
+    // 圆角跟着底座收紧一档（行内代码 4px、代码块 6px）：6px 的行内 code
+    // 在 .88em 字号下几乎成了胶囊，和正文的方正感不搭
+    '.md-body code{background:var(--md-code-bg);border-radius:4px;padding:.2em .4em;font-size:.88em;font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;}',
+    '.md-body pre{position:relative;background:var(--md-pre-bg);border:1px solid var(--md-border);border-radius:6px;padding:14px 16px;overflow:auto;margin:0 0 1em;}',
     '.md-body pre code{background:none;padding:0;font-size:.85em;line-height:1.5;}',
     '.md-body blockquote{margin:0 0 1em;padding:.2em 1em;color:var(--md-quote-fg);border-left:.28em solid var(--md-border-strong);}',
     '.md-body ul,.md-body ol{margin:0 0 1em;padding-left:1.8em;}',
@@ -435,9 +453,13 @@
     // 表格：外层容器负责横向滚动，table 本身保持 table 布局
     // （原来 table 自己 display:block 会脱离正常流，宽表格的滚动条很难发现）
     '.md-body table{border-collapse:collapse;margin:0 0 1em;max-width:100%;}',
-    '.md-body table th,.md-body table td{border:1px solid var(--md-border-strong);padding:6px 13px;}',
-    '.md-body table th{background:var(--md-table-alt);font-weight:600;}',
-    '.md-body table tr:nth-child(2n){background:var(--md-table-alt);}',
+    // 只留横线、去掉竖线和斑马纹（Stripe Docs 的表格就是这样）。
+    // 原来每个单元格四面都有 border + 隔行底色，等于用三种手段重复表达
+    // "这是一格"，密集表格会变成一张网格纸。横线足够分行，留白负责分列。
+    '.md-body table th,.md-body table td{border:0;border-bottom:1px solid var(--md-border);padding:8px 14px 8px 0;}',
+    '.md-body table th{background:transparent;font-weight:600;border-bottom:1px solid var(--md-border-strong);',
+    'color:var(--md-fg-muted);font-size:.92em;}',
+    '.md-body table tr:last-child td{border-bottom:0;}',
     '.md-body del{color:var(--md-fg-faint);}',
     // front matter 元信息块
     '.md-frontmatter{margin:0 0 1.4em;padding:10px 14px;border:1px solid var(--md-fm-border);',
@@ -461,7 +483,7 @@
     // 代码块头部（语言标签 + 复制按钮），由 enhanceScript 注入
     '.md-body .md-code-head{position:absolute;top:0;right:0;left:0;display:flex;align-items:center;',
     'justify-content:space-between;gap:8px;padding:5px 10px 5px 14px;background:var(--md-pre-head);',
-    'border-radius:8px 8px 0 0;font:500 11px/1.4 -apple-system,system-ui,sans-serif;}',
+    'border-radius:5px 5px 0 0;font:500 11px/1.4 -apple-system,system-ui,sans-serif;}',
     '.md-body pre:has(.md-code-head){padding-top:38px;}',
     '.md-body .md-code-lang{color:var(--md-fg-muted);letter-spacing:.04em;text-transform:uppercase;}',
     '.md-body .md-code-copy{border:1px solid var(--md-border-strong);border-radius:5px;background:transparent;',
@@ -706,25 +728,51 @@
   }
 
   // 只读预览页里 TOC 侧栏的样式（不影响编辑器分栏预览面板）——克制、极简
-  var tocVarsLight = '--toc-bg:#fff;--toc-border:#f0f1f3;--toc-title:#a0a6b0;--toc-fg:#697280;'
-    + '--toc-fg-strong:#1f2328;--toc-hover:#f6f7f9;--toc-active:#0969da;--toc-caret:#c2c7d0;';
-  var tocVarsDark = '--toc-bg:#12141a;--toc-border:#22262f;--toc-title:#6f7784;'
-    + '--toc-fg:#9aa4b2;--toc-fg-strong:#e3e6ec;--toc-hover:#1b1f27;--toc-active:#6cb0ff;--toc-caret:#4a515e;';
+  // 取值对齐底座 token；--toc-active 跟主 accent 走同一个紫蓝，
+  // --toc-rail 是层级轨道线（比 border 再淡一档，只需"隐约看得出有一列"）
+  var tocVarsLight = '--toc-bg:#fff;--toc-border:#e6e8eb;--toc-title:#818b98;--toc-fg:#57606a;'
+    + '--toc-fg-strong:#101113;--toc-hover:#f0f1f3;--toc-active:#5b5bd6;--toc-caret:#c9cdd4;'
+    + '--toc-rail:rgba(16,24,40,.09);--toc-active-soft:rgba(91,91,214,.09);';
+  var tocVarsDark = '--toc-bg:#0f1013;--toc-border:#1f2023;--toc-title:#6f747c;'
+    + '--toc-fg:#9ea2a8;--toc-fg-strong:#f7f8f8;--toc-hover:#1f2024;--toc-active:#8d8df0;--toc-caret:#3a3b40;'
+    + '--toc-rail:rgba(255,255,255,.10);--toc-active-soft:rgba(141,141,240,.14);';
   var tocCss = [
     'body{', tocVarsLight, '}',
     '@media (prefers-color-scheme: dark){body{', tocVarsDark, '}}',
     '*{scroll-behavior:smooth;}',
-    '.md-toc{position:fixed;top:0;left:0;width:250px;height:100vh;box-sizing:border-box;overflow-y:auto;',
+    // 目录栏宽度走 CSS 变量，由拖拽条改写并持久化（见 tocScript）。
+    // 长文档的标题经常比 250px 长，固定宽度只能靠 ellipsis 截断，
+    // "步骤 1: 更新 PUBLISHI…" 这种截断恰好把有用的部分切掉了。
+    'body{--toc-w:250px;}',
+    '.md-toc{position:fixed;top:0;left:0;width:var(--toc-w);height:100vh;box-sizing:border-box;overflow-y:auto;',
     'padding:46px 10px 32px 14px;border-right:1px solid var(--toc-border);background:var(--toc-bg);z-index:5;transition:transform .2s ease;',
     'font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}',
+    // 拖拽条：贴在目录栏右缘，平时透明，hover / 拖动时才显出一条线
+    '.md-toc-resizer{position:fixed;top:0;bottom:0;left:var(--toc-w);width:5px;margin-left:-2px;',
+    'z-index:6;cursor:col-resize;background:transparent;border:0;padding:0;}',
+    '.md-toc-resizer::before{content:"";position:absolute;top:0;bottom:0;left:2px;width:1px;',
+    'background:var(--toc-active);opacity:0;transition:opacity .12s;}',
+    '.md-toc-resizer:hover::before,.md-toc-resizer.dragging::before{opacity:1;}',
+    '.md-toc-resizer:focus-visible{outline:none;}',
+    '.md-toc-resizer:focus-visible::before{opacity:1;width:2px;}',
+    'body.toc-resizing{cursor:col-resize;user-select:none;}',
+    // 拖动时关掉过渡，否则宽度会追着指针"滑"过去
+    'body.toc-resizing .md-toc,body.toc-resizing .md-content{transition:none;}',
+    'body.toc-collapsed .md-toc-resizer{display:none;}',
     '.md-toc-title{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--toc-title);font-weight:600;padding:0 8px 10px;}',
     '.toc-ul{list-style:none;margin:0;padding:0;}',
-    '.toc-ul .toc-ul{padding-left:13px;}',
+    // 子层级带一条轨道竖线 + 更大的缩进：原来只有 13px 缩进，三四层标题挤在
+    // 一起时层级完全靠猜。轨道线让"这几条属于同一节"变成可见的事实。
+    '.toc-ul .toc-ul{padding-left:14px;margin-left:8px;border-left:1px solid var(--toc-rail);}',
     '.toc-row{display:flex;align-items:center;}',
-    '.toc-row a{flex:1;min-width:0;display:block;padding:4px 6px;color:var(--toc-fg);text-decoration:none;',
+    '.toc-row a{position:relative;flex:1;min-width:0;display:block;padding:4px 8px;color:var(--toc-fg);text-decoration:none;',
     'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:5px;transition:color .12s,background .12s;}',
     '.toc-row a:hover{color:var(--toc-fg-strong);background:var(--toc-hover);}',
-    '.toc-row a.active{color:var(--toc-active);font-weight:500;}',
+    '.toc-row a.active{color:var(--toc-active);font-weight:500;background:var(--toc-active-soft);}',
+    // 当前章节左侧的 2px 竖条（Stripe Docs 的招牌）。在一屏几十条的长目录里，
+    // "我读到第几节"靠一个位置信号比靠文字颜色变化更容易被扫到。
+    '.toc-row a.active::before{content:"";position:absolute;left:0;top:4px;bottom:4px;',
+    'width:2px;border-radius:0 2px 2px 0;background:var(--toc-active);}',
     // caret：极简三角，仅有子项时可点
     '.toc-caret{flex:0 0 16px;width:16px;height:20px;padding:0;border:0;background:none;cursor:pointer;',
     'display:inline-flex;align-items:center;justify-content:center;color:var(--toc-caret);}',
@@ -740,8 +788,10 @@
     'color:var(--toc-title);cursor:pointer;transition:background .12s,color .12s;}',
     '.md-toc-toggle:hover{background:var(--toc-hover);color:var(--toc-fg-strong);}',
     '.md-toc-toggle svg{width:17px;height:17px;}',
-    '.md-content{margin-left:250px;transition:margin-left .2s ease;}',
-    '.md-content .md-inner{max-width:860px;margin:0 auto;padding:32px 44px;box-sizing:border-box;}',
+    '.md-content{margin-left:var(--toc-w);transition:margin-left .2s ease;}',
+    // 820px @15px ≈ 每行 54 个汉字，落在长文阅读的舒适区间；上下 padding 加大，
+    // 首屏标题不要一上来就贴着顶栏
+    '.md-content .md-inner{max-width:820px;margin:0 auto;padding:44px 48px 32px;box-sizing:border-box;}',
     // 底部留白：保证最后几个标题也能滚到视口顶部（锚点跳转不失效）
     '.md-tail-space{height:70vh;}',
     '.md-body h1,.md-body h2,.md-body h3,.md-body h4,.md-body h5,.md-body h6{scroll-margin-top:20px;}',
@@ -750,7 +800,7 @@
     '@media (max-width:900px){.md-content{margin-left:0;}.md-toc{box-shadow:2px 0 14px rgba(0,0,0,.1);}}',
     // 打印时目录侧栏是 fixed 定位，会盖在每一页正文上——直接隐藏，正文铺满纸张
     '@media print{',
-    '.md-toc,.md-toc-toggle,.md-tail-space{display:none !important;}',
+    '.md-toc,.md-toc-toggle,.md-toc-resizer,.md-tail-space{display:none !important;}',
     '.md-content{margin-left:0 !important;}',
     '.md-content .md-inner{max-width:none;padding:0;}',
     '@page{margin:16mm 14mm;}',
@@ -762,6 +812,31 @@
     + 'var KEY="atlas:mdTocCollapsed";var toc=document.getElementById("mdToc");var tg=document.getElementById("mdTocToggle");'
     + 'try{if(localStorage.getItem(KEY)==="1")document.body.classList.add("toc-collapsed");}catch(e){}'
     + 'if(tg)tg.addEventListener("click",function(){var c=document.body.classList.toggle("toc-collapsed");try{localStorage.setItem(KEY,c?"1":"0");}catch(e){}});'
+    // ---- 目录栏宽度：拖拽 / 键盘微调 / 双击复位，宽度记在 localStorage ----
+    // 目录栏从 left:0 开始，所以指针的 clientX 就是目标宽度，不需要换算偏移量。
+    + 'var WKEY="atlas:mdTocWidth",MINW=180,MAXW=520,DEFW=250;'
+    + 'var rz=document.getElementById("mdTocResizer");'
+    + 'function setW(w,persist){w=Math.max(MINW,Math.min(MAXW,Math.round(w)));'
+    + 'document.body.style.setProperty("--toc-w",w+"px");'
+    + 'if(persist){try{localStorage.setItem(WKEY,String(w));}catch(e){}}return w;}'
+    + 'function curW(){var v=parseInt(getComputedStyle(document.body).getPropertyValue("--toc-w"),10);'
+    + 'return isFinite(v)?v:DEFW;}'
+    + 'try{var sw=parseInt(localStorage.getItem(WKEY),10);if(isFinite(sw))setW(sw,false);}catch(e){}'
+    + 'if(rz){var dragging=false,lastW=DEFW;'
+    // setPointerCapture 让指针移出这条 5px 的窄条后事件仍然回到它身上，
+    // 不然快速拖动时指针一旦跑进 iframe 正文区就断了
+    + 'rz.addEventListener("pointerdown",function(e){dragging=true;lastW=curW();'
+    + 'rz.classList.add("dragging");document.body.classList.add("toc-resizing");'
+    + 'if(rz.setPointerCapture)rz.setPointerCapture(e.pointerId);e.preventDefault();});'
+    + 'rz.addEventListener("pointermove",function(e){if(!dragging)return;lastW=setW(e.clientX,false);});'
+    + 'function endDrag(){if(!dragging)return;dragging=false;rz.classList.remove("dragging");'
+    + 'document.body.classList.remove("toc-resizing");setW(lastW,true);}'
+    + 'rz.addEventListener("pointerup",endDrag);rz.addEventListener("pointercancel",endDrag);'
+    + 'rz.addEventListener("dblclick",function(){setW(DEFW,true);});'
+    + 'rz.addEventListener("keydown",function(e){var step=e.shiftKey?24:8;'
+    + 'if(e.key==="ArrowLeft"){setW(curW()-step,true);e.preventDefault();}'
+    + 'else if(e.key==="ArrowRight"){setW(curW()+step,true);e.preventDefault();}'
+    + 'else if(e.key==="Home"){setW(DEFW,true);e.preventDefault();}});}'
     + 'if(toc)toc.addEventListener("click",function(e){'
     + 'var caret=e.target.closest?e.target.closest(".toc-caret"):null;'
     + 'if(caret&&caret.tagName==="BUTTON"){var li=caret.closest(".toc-li");if(li)li.classList.toggle("collapsed");return;}'
@@ -870,7 +945,7 @@
     if (theme !== 'light' && theme !== 'dark') return '';
     var dark = theme === 'dark';
     return ':root{color-scheme:' + theme + ';}'
-      + 'html,body{background:' + (dark ? '#12141a' : '#ffffff') + ';}'
+      + 'html,body{background:' + (dark ? PAGE_BG_DARK : PAGE_BG_LIGHT) + ';}'
       + '.md-body{' + (dark ? mdVarsDark : mdVarsLight) + '}'
       + 'body{' + (dark ? tocVarsDark : tocVarsLight) + '}';
   }
@@ -906,7 +981,9 @@
 
     if (!hasToc) {
       return head
-        + '<style>html,body{margin:0;}body{padding:32px 40px;max-width:900px;margin:0 auto;}'
+        // 阅读宽度与有 TOC 的分支（.md-inner）保持一致：同一篇文档因为标题
+        // 多了两个就换一种行宽，读起来会明显不适
+        + '<style>html,body{margin:0;}body{padding:44px 48px 32px;max-width:820px;margin:0 auto;}'
         + pageCss + markdownCss + forced + '</style></head>'
         + '<body class="md-body">' + body
         + '<script>' + enhanceScript + '</script>'
@@ -921,6 +998,9 @@
       + '<body>'
       + '<button class="md-toc-toggle" id="mdTocToggle" type="button" title="展开 / 收起目录" aria-label="展开或收起目录">' + toggleSvg + '</button>'
       + '<nav class="md-toc" id="mdToc" aria-label="文档目录"><div class="md-toc-title">目录</div>' + tocListHtml(items) + '</nav>'
+      + '<div class="md-toc-resizer" id="mdTocResizer" role="separator" aria-orientation="vertical"'
+      + ' tabindex="0" aria-label="拖拽调整目录宽度（方向键可微调，双击复位）"'
+      + ' title="拖拽调整目录宽度，双击复位"></div>'
       + '<div class="md-content"><div class="md-inner md-body">' + body + '<div class="md-tail-space" aria-hidden="true"></div></div></div>'
       + '<script>' + tocScript + '</script>'
       + '<script>' + enhanceScript + '</script>'
