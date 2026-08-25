@@ -2070,6 +2070,12 @@ app.post('/api/export-pdf', async (req, res) => {
       (phaseEvent) => send(phaseEvent),  // 把每个阶段事件转发为 SSE
     );
     if (result.ok) {
+      // complete:false 说明 PDF 是在渲染卡死、被硬超时掐断的情况下落盘的，
+      // 尾部没有 %%EOF——文件能存下来但很可能打不开。留一条日志好排查，
+      // 但仍按成功返回（判定口径见 pdf-export.js 里的说明）
+      if (result.complete === false) {
+        console.warn('  ! 导出的 PDF 可能不完整（渲染未在超时内结束）:', renderPath);
+      }
       send({ phase: 'done', ...result });
     } else {
       send({ phase: 'error', ...result });

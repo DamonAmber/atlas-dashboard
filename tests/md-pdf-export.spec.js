@@ -137,6 +137,7 @@ function check(name, actual, expected) {
   } else {
     const before = new Set(fs.existsSync(pdfExport.downloadsDir())
       ? fs.readdirSync(pdfExport.downloadsDir()) : []);
+    const startedAt = Date.now();
     const result = await page.evaluate(async () => {
       const p = document.querySelector('.file[data-doctype="md"]').dataset.path;
       const resp = await fetch('/api/export-pdf', {
@@ -150,17 +151,30 @@ function check(name, actual, expected) {
         .filter(Boolean);
       return events;
     });
+    const elapsedMs = Date.now() - startedAt;
     const last = result[result.length - 1];
     check('SSE 最后一个事件是 done', last && last.phase, 'done');
     if (last && last.phase === 'done') {
       check('产出的 PDF 存在', fs.existsSync(last.savedPath), true);
       check('PDF 非空', last.size > 1000, true);
       check('文件名用了传入的 stem', path.basename(last.savedPath).startsWith('atlas-md-pdf-spec'), true);
+      // PDF 尾部必须有 %%EOF —— 这既是"文件真的能打开"的证据，也是主动收尾
+      // 那条判据的正确性验证（收尾条件就是它）
+      check('PDF 结构完整（尾部有 %%EOF）', last.complete, true);
+      const head = fs.readFileSync(last.savedPath).subarray(0, 5).toString();
+      check('PDF 文件头正确', head, '%PDF-');
       // 清理：只删本次新产生的文件
       try { fs.unlinkSync(last.savedPath); } catch {}
     } else {
       console.log('    导出事件流：' + JSON.stringify(result));
     }
+    // 这条是 0.18.1 修的那个问题的回归闸门：Chrome `--print-to-pdf` 写完文件后
+    // **不会自己退出**，此前每次导出都要白等到 30s 硬超时才返回（实测 PDF 其实
+    // 2~7s 就落地了）。现在文件一写完就主动收掉 chromium。
+    // 门槛设在 20s：真实耗时在这台机器上是 2~4s，而回归（退回等硬超时）必然 ≥30s，
+    // 中间留足余量给慢机器和 CI 的共享 runner，不会因为环境慢而假红。
+    console.log(`    端到端耗时 ${elapsedMs}ms（硬超时是 30000ms）`);
+    check('导出不再白等到硬超时', elapsedMs < 20000, true);
     const after = new Set(fs.existsSync(pdfExport.downloadsDir())
       ? fs.readdirSync(pdfExport.downloadsDir()) : []);
     const leftover = [...after].filter(f => !before.has(f));
