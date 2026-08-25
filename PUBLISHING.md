@@ -132,7 +132,7 @@ for spec in tests/*.spec.js; do
 done
 ```
 
-> 验证过：把本机 Atlas 完全停掉，全套 35 个 spec 依然全绿，且 `~/.atlas/config.json`
+> 验证过：把本机 Atlas 完全停掉，全套 38 个 spec 依然全绿，且 `~/.atlas/config.json`
 > 与 `store.json` 校验和逐字节未变。若将来某个 spec 在服务停止时失败，说明它偷偷依赖了
 > 你的真实实例，按下面的约定改掉。
 
@@ -154,13 +154,16 @@ done
 >   期望末行 `总计 10 项，失败 0 项`。**记得删掉 tgz**，否则会被 `git add -A` 带进 commit。
 > - `scroll-after-toggle.spec.js` 在 iframe 还没加载出内容时打印 `!! HTML 不够长，没法测试` 并跳过（也是 exit 0）。这是它长期的既有行为，不是本次改动引入的；判断是否回归的办法是 `git stash` 后对比同一行输出。
 
-当前 spec 清单（35 个）。除 `landing-demo`（`file://`）与 `diff-algorithm`（纯函数单测）
+当前 spec 清单（38 个）。除 `landing-demo`（`file://`）与 `diff-algorithm`（纯函数单测）
 外，其余都通过
 `tests/helpers/isolated-atlas.js` 的 `startAtlas()` 起独立实例：临时 `ATLAS_HOME`
 （自带 config/store）+ 临时扫描根 + 临时 fixture + 随机端口，结束即删。
 需要"有规模的文档树"的用例（帧率 / 滚动 / 拖拽）用 `makeTreeFixtures()` 现造，
 不再依赖你本机那几百篇真实文档。
 
+> - `folder-rename-persistence.spec.js` — 一级分组重命名的持久性（0.16.0 新增）：服务端按 `autoFor` 身份键认领而非按名字（改名后 reconcile 仍认得、新文件归进改名后的分组、分组临时变空不丢名字、未改名的自动空壳照旧回收、手工建的空分组不被当空壳清掉、改过名的分组能归档且取消归档后名字回来）；前端两条 race（改名后紧接一次 `fetchState` 不把改动冲掉——直接读 `store.json` 验证落盘的真实内容；编辑进行中不被 `render()` 的 `innerHTML=''` 打断）（24 项）
+> - `diff-versions-and-revert.spec.js` — 底本版本历史与回退（0.16.0 新增）：同内容重写不报"有改动"（内容核对，不只看 mtime）/ 内容真变了才报 / 打开文档不再吃掉想看的那次差异 / 只有内容变化才追加版本、反复打开不追加 / 指定版本对比与不存在版本的 404 / 回退（参数校验、磁盘内容、备份里是回退前的内容、不把自我写入标成未读）/ 站内编辑保存后不把自己的改动算成变更 / **`ack` 分界的两个方向**（打开时自动记的底本不当基准，用户点过「标记为已看过」之后就干净了，之后的新改动又能看到）（37 项）
+> - `folder-reveal-and-toc-resize.spec.js` — 分组「在访达中显示」+ Markdown 目录栏调宽（0.16.0 新增）：按钮只渲染给带 `autoFor` 的自动分组、`/api/reveal-folder` 的 4 条校验分支（缺参数 / 路径穿越 / 含分隔符 / 目录不存在——**成功路径会真的 spawn `open -R` 弹出文件管理器窗口，故意不进自动化**）；目录栏拖拽与 180~520px 钳制、双击复位、方向键 ±8 与 Shift ±24、`localStorage` 持久化与跨文档保持、收起目录时拖拽条隐藏且正文占满（26 项）
 > - `archive-and-collapse-all.spec.js` — 归档口径一致性：归档后 `files` / `tree` / `scannedCount` 同口径、「全部标为已读」一篇不剩（含 mtime 落在未来的文档）、正文搜索不捞归档文档、取消归档后原样回来且仍是未读、底栏统计与首页待看空态；以及「全部折叠 / 全部展开」按钮的两个状态与图标翻转、localStorage 持久化、刷新后保持、筛选态禁用（34 项）
 > - `preview-live-edit.spec.js` — 预览区轻量编辑：edit-doc 标注 / 进入编辑 / 文案改+保存 / 列表重排 / 取消恢复 / 冲突 / 安全（32 项）
 > - `favorites-and-tags.spec.js` — 收藏与标签：星标点击不误触"打开文档"、不被 SortableJS 当拖拽把手；收藏夹跨文件夹聚合、按收藏时间倒序、可取消、折叠态持久化；顶栏收藏按钮联动；标签去重与大小写合并、超量截断、行上最多 2 个 +N、"取消"不会清标签、清空即删 key；标签筛选条按用量倒序、多选为 AND、与搜索/仅未读正确叠加；重命名后收藏与标签跟随新路径（72 项）
