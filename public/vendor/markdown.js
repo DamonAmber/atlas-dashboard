@@ -616,7 +616,11 @@
     tablePrintTightCss,
     '}',
     // 表格横向滚动包裹层，由 enhanceScript 注入（两层：外层定位遮罩，内层滚动）
-    '.md-body .md-table-block{position:relative;margin:0 0 1em;}',
+    // width:fit-content 是必须的：遮罩用 ::after 贴在这一层的右缘，而这一层默认是
+    // block、会铺满整个正文宽度。表格比正文窄时（窄表，或者切到更宽的档位之后），
+    // 遮罩就画到表格右边那片空白上去了——"明明那儿没有表格却有一道阴影"。
+    // 收缩到内容宽度后，右缘永远等于可见内容的右缘。
+    '.md-body .md-table-block{position:relative;width:fit-content;max-width:100%;margin:0 0 1em;}',
     // 圆角跟着 table 走，滚动裁切的边缘才不是直角
     '.md-body .md-table-scroll{overflow-x:auto;overscroll-behavior-x:contain;border-radius:8px;}',
     '.md-body .md-table-scroll table{margin:0;}',
@@ -1129,7 +1133,14 @@
     + 'block.classList.toggle("md-can-scroll-right",more);}'
     + 'function syncAll(){blocks.forEach(function(b){syncOne(b.block,b.wrap);});}'
     + 'window.__atlasSyncTableOverflow=syncAll;syncAll();'
-    + 'window.addEventListener("resize",syncAll);'
+    // 用 ResizeObserver 而不是只听 window resize：正文宽度会变的路子有四条——
+    // 换阅读宽度档位、拖 TOC 宽度、收起 / 展开 TOC、窗口缩放，只有最后一条会发
+    // resize 事件。而且换档位时 .md-inner 的 max-width 是 .18s 的 transition，
+    // 切档那一刻同步测量拿到的还是旧布局（遮罩因此一直落后一档）；RO 在动画的
+    // 每一帧都触发，遮罩跟着淡入淡出，不需要去猜动画什么时候结束。
+    + 'if(window.ResizeObserver&&blocks.length){'
+    + 'var ro=new ResizeObserver(syncAll);blocks.forEach(function(b){ro.observe(b.wrap);});'
+    + '}else{window.addEventListener("resize",syncAll);}'
     + '})();';
 
   // 打印 / PDF 专用样式。

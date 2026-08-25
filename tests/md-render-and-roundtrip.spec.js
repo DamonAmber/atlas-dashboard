@@ -45,6 +45,13 @@ const MD = [
   '|------|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|------|',
   '| 启动次数 | 128,304 | 133,900 | 141,220 | 139,880 | 152,301 | 160,442 | 158,900 | 171,220 | 180,110 | 191,400 | 新机型首发带量 |',
   '',
+  // 8 列短内容：列宽由 th/td 的 min-width:5em 决定所以宽度可预测（约 790px），
+  // 正好在推荐宽度档（724px 可用）溢出、在全屏档（约 874px）放得下。
+  // 这个「切档后从溢出变成不溢出」的转变是遮罩状态出错时唯一会露馅的场景。
+  '| C1 | C2 | C3 | C4 | C5 | C6 | C7 | C8 |',
+  '|----|----|----|----|----|----|----|----|',
+  '| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |',
+  '',
   '> [!WARNING]',
   '> 这一步不可逆。',
   '',
@@ -130,7 +137,7 @@ function check(name, actual, expected) {
   check('代码块有复制按钮', inIframe.copyButtons, 1);
   check('代码块显示语言标签', inIframe.codeLang, 'js');
   check('标题有 hover 锚点', inIframe.headingAnchors, 1);
-  check('每张表格都套了横向滚动层', inIframe.tableScrollWrap, 3);
+  check('每张表格都套了横向滚动层', inIframe.tableScrollWrap, 4);
   check('表格居中对齐已渲染', inIframe.tableAlignPreserved, true);
 
   // ---- 表格结构 ----
@@ -207,14 +214,40 @@ function check(name, actual, expected) {
     d.querySelector(`.md-width-switch button[data-w="${mode}"]`).click();
   }, w);
 
+  // 遮罩的不变式：亮 ⟺ 真的还能往右滚；亮着时右缘必须贴住表格右缘。
+  // 这一条同时钉住两个曾经的缺陷：① 切档时 .md-inner 的 max-width 有 .18s
+  // transition，同步测量拿到的是旧布局，遮罩因此一直落后一档（表格已经放得下了
+  // 却还亮着）；② .md-table-block 默认是 block、铺满正文宽度，而遮罩用 ::after
+  // 贴它的右缘 —— 表格比正文窄时遮罩就画到表格右边那片空白上去了。
+  const fadeRows = () => page.evaluate(() => {
+    const d = document.getElementById('preview').contentDocument;
+    return [...d.querySelectorAll('.md-table-block')].map((b) => {
+      const wrap = b.querySelector('.md-table-scroll');
+      const tbl = b.querySelector('table');
+      return {
+        hint: b.classList.contains('md-can-scroll-right'),
+        canScrollRight: wrap.scrollWidth - wrap.clientWidth - wrap.scrollLeft > 2,
+        // 正数 = 遮罩画在了表格外面
+        gap: Math.round(b.getBoundingClientRect().right - tbl.getBoundingClientRect().right),
+      };
+    });
+  });
+  const fadeConsistent = async (label) => {
+    const rows = await fadeRows();
+    const bad = rows.filter(r => r.hint !== r.canScrollRight || (r.hint && r.gap > 2));
+    check(label, bad, []);
+  };
+
   const w0 = await widthOf();
   check('默认是推荐宽度（820 - 左右 padding）', w0.innerW, 820);
   check('默认档按钮处于按下态', w0.pressed, ['comfortable']);
+  await fadeConsistent('推荐宽度档：遮罩与实际可滚状态一致、且贴住表格右缘');
   await pickWidth('wide');
   await page.waitForTimeout(260);
   const w1 = await widthOf();
   check('切到「加宽」后正文变宽', w1.innerW > w0.innerW, true);
   check('加宽档写进 localStorage', w1.stored, 'wide');
+  await fadeConsistent('加宽档：遮罩与实际可滚状态一致、且贴住表格右缘');
   await pickWidth('full');
   await page.waitForTimeout(260);
   const w2 = await widthOf();
@@ -222,6 +255,8 @@ function check(name, actual, expected) {
   // 1120px 宽，比大小会随视口飘，占满与否才是这一档真正的语义
   check('切到「占满全屏」后正文铺满可用宽度', w2.innerW, w2.contentW);
   check('全屏档只有它一个是按下态', w2.pressed, ['full']);
+  await fadeConsistent('全屏档：遮罩与实际可滚状态一致、且贴住表格右缘');
+  const fadeAtFull = await fadeRows();
   // 换一篇文档（这里就是重载同一篇）后档位要还在——这才叫"记住了"
   await page.evaluate(() => { document.getElementById('preview').contentWindow.location.reload(); });
   await page.waitForTimeout(900);
@@ -229,8 +264,17 @@ function check(name, actual, expected) {
   check('重载后档位保持', w3.mode, 'full');
   check('重载后按钮态也跟着恢复', w3.pressed, ['full']);
   await pickWidth('comfortable');
-  await page.waitForTimeout(260);
+  await page.waitForTimeout(300);
   check('能切回推荐宽度', (await widthOf()).innerW, 820);
+  // 上面那三条不变式要真的有效，前提是这批 fixture 里确实有一张表跨过了
+  // 「推荐宽度装不下 → 全屏装得下」这条线；前提不成立时它们会空转，
+  // 所以把前提本身也断言出来。
+  // 这里比的是 canScrollRight（真实布局事实）而不是 hint（可能正是错的那个状态），
+  // 否则遮罩全错时这条前提断言反而会跟着"通过"。
+  const fadeAtComfy = await fadeRows();
+  check('fixture 里确实有表跨过「窄档溢出 → 全屏放得下」这条线（否则上面三条在空转）',
+    fadeAtComfy.some((r, i) => r.canScrollRight === true && fadeAtFull[i].canScrollRight === false),
+    true);
 
   // [ / ] 逐档切换（焦点在预览文档里按）
   const pressInPreview = (key) => page.evaluate((k) => {
