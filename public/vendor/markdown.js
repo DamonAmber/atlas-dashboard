@@ -621,30 +621,44 @@
     // 外框圈出边界、表头一层浅底、极淡的斑马纹、行 hover——四个信号各管一件事，
     // 不是重复表达。
     //
-    // width:max-content 是这里最关键的一行。原来写的是 max-width:100%，
-    // 结果宽表格永远不会溢出容器 → 外层 .md-table-scroll 的横向滚动条永远不出现，
-    // 浏览器只能拼命压缩列宽，把「归因说明」压成一列一个字的竖排。
-    // 现在让表格取内容自然宽度、大方地溢出，由滚动容器接管。
-    // display:block + width:max-content + max-width:100% 是 GitHub 用了很多年的
-    // 组合：窄表取自然宽度、宽表自己成为横向滚动容器，不需要任何包裹层。
-    // 编辑器右侧的预览面板正是这种场景（它不能被注入包裹层，否则反解析会被污染）。
+    // 列宽策略只有两条规则，其它都是它们的推论：
+    //   ① width:max-content —— 内容放得下就按内容的自然宽度，窄表不被拉伸成
+    //      「两列各占半页」的空表格；
+    //   ② max-width:100% —— 自然宽度超过容器时，上限是容器而不是别的什么数字，
+    //      浏览器在容器宽度内按各列的内容量重新分配，长文本这才开始换行。
+    // 合起来就是「有多少地方用多少，用完才换行」。这里绝不能再出现第三个
+    // 与容器无关的固定上限（曾经的 td{max-width:34ch} 就是）：那种写法会让
+    // 表格在 800px 的正文里只用掉 360px，右边空一半、文字却在挤着换行。
     '.md-body table{display:block;border-collapse:separate;border-spacing:0;',
     'width:max-content;max-width:100%;overflow-x:auto;',
     'margin:0 0 1em;border:1px solid var(--md-border);border-radius:8px;font-size:.94em;',
     // 数字列按位对齐：价格 / 百分比一列扫下来才能比大小
     'font-variant-numeric:tabular-nums;}',
-    // 只读预览页里 enhanceScript 会套上滚动容器 + 右侧渐变提示，那时滚动交给
-    // 外层，table 回到正常的 table 布局（否则遮罩会盖在滚动内容上一起滚走）
-    '.md-body .md-table-scroll table{display:table;max-width:none;overflow:visible;}',
+    // 只读预览页里 enhanceScript 会套上滚动容器 + 两侧渐变提示，那时滚动交给
+    // 外层，table 回到正常的 table 布局（否则遮罩会盖在滚动内容上一起滚走）。
+    // 只改 display / overflow，width 与 max-width 照旧继承上面那两条——
+    // 此处的 100% 解析到 .md-table-scroll 的宽度，语义没变：先尽量用满可见区域。
+    // 真正塞不下的宽表由单元格的 min-width 顶开，溢出后交给滚动容器，
+    // 不需要（也不能）把上限放开成 none。
+    '.md-body .md-table-scroll table{display:table;overflow:visible;}',
     // text-align:left 是修 bug：<th> 的浏览器默认值是 center，而 <td> 是 left，
     // 于是每一张没写对齐语法的表，表头都和数据列错开——「结构不清晰」的头号元凶。
     // Markdown 里写的 |:--:| 会输出成单元格自己的 style，优先级更高，照样生效。
     '.md-body table th,.md-body table td{padding:9px 14px;text-align:left;vertical-align:top;',
-    // min-width 是给窄容器兜底的：编辑器右侧的预览面板只有 500 多像素宽，
-    // 没有它，浏览器会把「长文推理最强，成本高」压成一列一个字的竖排
-    'min-width:5em;border-bottom:1px solid var(--md-border);}',
-    // 单元格宽度上限：没有它，一句长备注会把整张表拉到几千像素宽
-    '.md-body table td{max-width:34ch;}',
+    // min-width 现在承担两件事：
+    //   ① 窄容器兜底 —— 编辑器右侧的预览面板只有 500 多像素宽，没有它，浏览器会
+    //      把「长文推理最强，成本高」压成一列一个字的竖排；
+    //   ② 定义「窄到什么程度就不该再压，改去横向滚动」的阈值 —— 表格总宽的上限
+    //      是容器，但容器压不到各列 min-width 之和以下，宽表因此仍会溢出并触发
+    //      滚动容器。5em ≈ 5 个汉字，是单元格还能读的下限。
+    'min-width:5em;',
+    // 长 URL / 长英文标识符里没有断点，不给断词许可就会顶着列宽往外撑，把同一行
+    // 其它列挤成竖排、整张表凭空多出一条横向滚动条。
+    // 必须是 anywhere 而不是 break-word：两者的实际断行行为一样（都优先在空格等
+    // 正常断点处断），区别在 anywhere 会算进 min-content 尺寸，而表格的列宽正是
+    // 按 min-content / max-content 分配的——break-word 在这里等于没写。
+    'overflow-wrap:anywhere;',
+    'border-bottom:1px solid var(--md-border);}',
     '.md-body table thead th{background:var(--md-table-head);color:var(--md-fg-muted);',
     'font-weight:600;font-size:.92em;white-space:nowrap;border-bottom:1px solid var(--md-border-strong);}',
     // 表头底色要贴合外框圆角，否则四角会露出方角的色块
@@ -653,8 +667,12 @@
     '.md-body table tbody tr:nth-child(even)>td{background:var(--md-table-alt);}',
     '.md-body table tbody tr:hover>td{background:var(--md-table-hover);}',
     '.md-body table tbody tr:last-child>td{border-bottom:0;}',
-    // 首列通常是行的名字。加重它，横向扫读时每一行有个锚点
-    '.md-body table tbody td:first-child{color:var(--md-fg);font-weight:500;}',
+    // 首列通常是行的名字。加重它，横向扫读时每一行有个锚点。
+    // min-width 比别的列高一档：表格用满容器宽度之后，浏览器按各列的内容量分配
+    // 空间，内容列（一句话）的需求远大于行名列（几个字），首列会被一路削到下限。
+    // 于是「字段口径依据」这种六字行名断成两行——而它恰恰是最不该断的那一列。
+    // 7em ≈ 7 个汉字，覆盖绝大多数行名；更长的仍然会换行，那是它该换。
+    '.md-body table tbody td:first-child{color:var(--md-fg);font-weight:500;min-width:7em;}',
     '.md-body del{color:var(--md-fg-faint);}',
     // ---------- GFM alert ----------
     // 左侧色条 + 图标 + 类型名，底色是同色系的 6%。用 color-mix 而不是写死
@@ -708,29 +726,38 @@
     '.md-body .md-table-scroll{overflow:visible;}',
     // 纸上没有横向滚动。表格改回按纸宽排版、单元格自由换行，
     // 遮罩也一起藏掉（否则每张表右边都印着一条灰渐变）
-    '.md-body .md-table-block::after{display:none;}',
+    '.md-body .md-table-block::before,.md-body .md-table-block::after{display:none;}',
     '.md-body table{display:table;width:auto;max-width:100%;overflow:visible;font-size:.84em;}',
-    // min-width 归零：纸张没有横向滚动，宽表宁可挤一点也不能被裁掉右边几列
-    '.md-body table th,.md-body table td{min-width:0;padding:5px 7px;}',
-    '.md-body table td{max-width:none;}',
+    // min-width 归零：纸张没有横向滚动，宽表宁可挤一点也不能被裁掉右边几列。
+    // 归零之后 overflow-wrap 必须从 anywhere 退回 break-word：anywhere 会把列的
+    // min-content 算成一个字符宽，两者合起来意味着「128,304 可以拆成两行」——
+    // 表格于是总能压进纸宽，代价是数字和短词被拦腰断开。纸上正确的做法是让宽表
+    // 顶出去，然后由 printFitScript 逐档收紧字号（见 tablePrintTightCss）。
+    '.md-body table th,.md-body table td{min-width:0;padding:5px 7px;overflow-wrap:break-word;}',
     tablePrintTightCss,
     '}',
     // 表格横向滚动包裹层，由 enhanceScript 注入（两层：外层定位遮罩，内层滚动）
-    // width:fit-content 是必须的：遮罩用 ::after 贴在这一层的右缘，而这一层默认是
-    // block、会铺满整个正文宽度。表格比正文窄时（窄表，或者切到更宽的档位之后），
-    // 遮罩就画到表格右边那片空白上去了——"明明那儿没有表格却有一道阴影"。
-    // 收缩到内容宽度后，右缘永远等于可见内容的右缘。
+    // width:fit-content 是必须的：遮罩用 ::before / ::after 贴在这一层的左右缘，
+    // 而这一层默认是 block、会铺满整个正文宽度。表格比正文窄时（窄表，或者切到
+    // 更宽的档位之后），遮罩就画到表格右边那片空白上去了——"明明那儿没有表格
+    // 却有一道阴影"。收缩到内容宽度后，两侧边缘永远等于可见内容的边缘。
     '.md-body .md-table-block{position:relative;width:fit-content;max-width:100%;margin:0 0 1em;}',
     // 圆角跟着 table 走，滚动裁切的边缘才不是直角
     '.md-body .md-table-scroll{overflow-x:auto;overscroll-behavior-x:contain;border-radius:8px;}',
     '.md-body .md-table-scroll table{margin:0;}',
-    // 右侧还有内容被藏起来时，压一层投影渐变当提示。macOS 的滚动条平时是隐藏的，
+    // 某一侧还有内容被藏起来时，压一层投影渐变当提示。macOS 的滚动条平时是隐藏的，
     // 没有这个信号，读者根本不会知道这张表还有 5 列在视野之外。
+    // 两侧都要给：只给右边的话，滚到中间之后左边那几列（往往是行名列）无声无息地
+    // 消失了，读者会以为表格就是从这一列开始的。
     // 用半透明黑而不是背景色渐变：表格自己也是浅底，同色渐变等于看不见。
-    '.md-body .md-table-block::after{content:"";position:absolute;top:1px;bottom:1px;right:0;width:40px;',
-    'border-radius:0 8px 8px 0;pointer-events:none;opacity:0;transition:opacity .15s ease;',
+    '.md-body .md-table-block::before,.md-body .md-table-block::after{content:"";position:absolute;',
+    'top:1px;bottom:1px;width:40px;pointer-events:none;opacity:0;transition:opacity .15s ease;}',
+    '.md-body .md-table-block::after{right:0;border-radius:0 8px 8px 0;',
     'background:linear-gradient(to right,transparent,var(--md-fade));}',
+    '.md-body .md-table-block::before{left:0;border-radius:8px 0 0 8px;',
+    'background:linear-gradient(to left,transparent,var(--md-fade));}',
     '.md-body .md-table-block.md-can-scroll-right::after{opacity:1;}',
+    '.md-body .md-table-block.md-can-scroll-left::before{opacity:1;}',
     // ---------- Mermaid 图表 ----------
     // 未渲染时它就是一个普通代码块（继承上面 pre 的样式），所以这里只写
     // 「渲染成功之后」的长相。图是内容而不是代码，去掉代码块的底色和边框，
@@ -1553,7 +1580,7 @@
     + '});'
     + '})();';
 
-  // 宽表格：套两层——外层 .md-table-block 负责定位右侧的"还有内容"渐变遮罩，
+  // 宽表格：套两层——外层 .md-table-block 负责定位左右两侧的"还有内容"渐变遮罩，
   // 内层 .md-table-scroll 负责横向滚动。分两层是因为 overflow 容器内的
   // absolute 定位元素会跟着内容一起滚走，遮罩必须挂在不滚动的那一层上。
   // 只在只读预览页里注入：编辑器右侧的预览面板要靠 htmlToMarkdown() 反解析
@@ -1573,8 +1600,9 @@
     + '});'
     // 容差 2px：子像素与滚动条舍入会让 scrollLeft 差个零点几，
     // 没有容差的话滚到最右后遮罩仍然亮着
-    + 'function syncOne(block,wrap){var more=wrap.scrollWidth-wrap.clientWidth-wrap.scrollLeft>2;'
-    + 'block.classList.toggle("md-can-scroll-right",more);}'
+    + 'function syncOne(block,wrap){var left=wrap.scrollLeft;'
+    + 'block.classList.toggle("md-can-scroll-right",wrap.scrollWidth-wrap.clientWidth-left>2);'
+    + 'block.classList.toggle("md-can-scroll-left",left>2);}'
     + 'function syncAll(){blocks.forEach(function(b){syncOne(b.block,b.wrap);});}'
     + 'window.__atlasSyncTableOverflow=syncAll;syncAll();'
     // 用 ResizeObserver 而不是只听 window resize：正文宽度会变的路子有四条——
@@ -1611,12 +1639,15 @@
     '.md-body pre,.md-body table,.md-body blockquote,.md-body img,.md-body .md-frontmatter{',
     'break-inside:avoid;page-break-inside:avoid;}',
     '.md-body pre{white-space:pre-wrap;word-break:break-word;overflow:visible;}',
-    // 纸张没有横向滚动：表格按纸宽排版，单元格自由换行（覆盖屏幕上的
-    // width:max-content / td max-width:34ch）
+    // 纸张没有横向滚动：表格按纸宽排版、单元格自由换行（覆盖屏幕上的
+    // width:max-content —— 纸上没有「溢出后滚动」这条退路）
     '.md-body table{display:table;width:auto;max-width:100%;overflow:visible;font-size:.84em;}',
-    // min-width 归零：纸张没有横向滚动，宽表宁可挤一点也不能被裁掉右边几列
-    '.md-body table th,.md-body table td{min-width:0;padding:5px 7px;}',
-    '.md-body table td{max-width:none;}',
+    // min-width 归零：屏幕上它是「压到这么窄就改去滚动」的阈值，纸上没有滚动，
+    // 留着它只会把宽表顶出纸宽、右边几列被裁掉。宁可挤一点也不能少信息。
+    // overflow-wrap 同时退回 break-word：它和 min-width:0 是一对——anywhere 把列的
+    // min-content 算成一个字符宽，配上归零的下限，表格总能压进纸宽，但 128,304
+    // 会被拆成两行。纸上宁可让宽表顶出去、由 printFitScript 收紧字号
+    '.md-body table th,.md-body table td{min-width:0;padding:5px 7px;overflow-wrap:break-word;}',
     tablePrintTightCss,
     // 链接在纸上点不动，把地址打出来才有意义（锚点链接除外）
     '.md-body a[href^="http"]::after{content:" (" attr(href) ")";font-size:.82em;color:var(--md-fg-faint);',
