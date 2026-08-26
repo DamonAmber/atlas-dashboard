@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { exec, spawn } = require('child_process');
-const chokidar = require('chokidar');
+const fsWatcher = require('./lib/fs-watcher');
 const { EventEmitter } = require('events');
 const userPaths = require('./lib/paths');
 const updateCheck = require('./lib/update-check');
@@ -229,12 +229,12 @@ function saveStore(store) {
   fs.renameSync(tmp, STORE_PATH);
 }
 
-// ---------- 文件索引（内存常驻，由 chokidar 增量维护）----------
+// ---------- 文件索引（内存常驻，由文件监听增量维护）----------
 //
 // 为什么要有它：/api/state 与 /api/search 原来每次请求都做一遍全盘递归 walk。
 // 而 /api/state 被调用得非常频繁——每 60s 定时、每次标签页切回前台、每个文件
 // 系统事件（400ms 防抖）、打开设置面板时还会再拉一次。扫 ~/Documents 这种量级
-// 的目录时，这就是持续的磁盘与事件循环压力，而 chokidar 本来就已经在监听所有
+// 的目录时，这就是持续的磁盘与事件循环压力，而监听器本来就已经在盯着所有
 // 扫描根了，重复遍历没有任何新信息。
 //
 // 现在：首次访问时构建一次，之后由 watcher 的 add/change/unlink 事件增量更新。
@@ -612,7 +612,7 @@ function validateTree(rootNodes) {
 const events = new EventEmitter();
 events.setMaxListeners(50);
 
-// 自我写入抑制：/api/save-edits 写盘后登记 path→mtime，chokidar change 命中则
+// 自我写入抑制：/api/save-edits 写盘后登记 path→mtime，change 事件命中则
 // 不把文件标未读（避免用户刚保存就看到自己的红点）。10s 后自动过期。
 const selfWrites = new Map();
 function markSelfWrite(filePath, mtimeMs) {
@@ -631,14 +631,14 @@ function isSelfWrite(filePath, mtimeMs) {
   return false;
 }
 
-let watchers = new Map();   // root → chokidar watcher（增量增删，见 startWatchers）
+let watchers = new Map();   // root → watcher（增量增删，见 startWatchers）
 function buildIgnoredFn() {
   const ignore = getIgnoreSet();
   return (p) => {
     const base = path.basename(p);
     if (base.startsWith('.')) return true;
     if (ignore.has(base)) return true;
-    // 跳过明显不是 HTML 也不可能含 HTML 的特殊文件，避免 chokidar 试图监视它们时频繁 EUNKNOWN
+    // 跳过明显不是文档、也不可能含文档的特殊文件，免得为它们白跑一趟 stat
     if (base.endsWith('.sock') || base.endsWith('.lock') || base.endsWith('.pid')) return true;
     return false;
   };
@@ -646,12 +646,16 @@ function buildIgnoredFn() {
 
 // 为单个扫描根创建 watcher。抽出来是为了支持增量增删（见 startWatchers）
 function createWatcher(root, ignoredFn) {
-    const watcher = chokidar.watch(root, {
+    // 走 lib/fs-watcher.js：macOS / Windows 上用系统的递归通知，整棵树 0 个额外 fd。
+    // 为什么不再直接用 chokidar：它逐目录挂 fs.watch，监听 3598 个目录会吃掉
+    // 10553 个 fd，越过 Node 的 10240 上限之后**进程里所有 spawn 都报 EBADF**
+    // ——导出 PDF 直接失败，「在访达中显示」和自升级时好时坏。详见该文件头注释。
+    const watcher = fsWatcher.createWatcher(root, {
       ignored: ignoredFn,
-      ignoreInitial: true,
       depth: getMaxDepth(),
-      awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
-      persistent: true,
+      isDocPath: isAnyDocPath,
+      stabilityThreshold: 300,
+      pollInterval: 100,
     });
 
     const onEvent = (kind) => async (filePath) => {
@@ -707,19 +711,19 @@ function createWatcher(root, ignoredFn) {
     watcher.on('add', onEvent('add'));
     watcher.on('change', onEvent('change'));
     watcher.on('unlink', onEvent('unlink'));
-    // 必须监听 error 事件——否则 chokidar 遇到不可监视的文件（socket、deleted symlink 等）
+    // 必须监听 error 事件——否则遇到不可监视的文件（socket、失效的 symlink 等）
     // 会 emit 未处理的 error，Node 默认 crash 整个 server 进程
     watcher.on('error', (err) => {
-      console.warn('  ! chokidar 忽略错误:', err && (err.code || err.message), err && err.path ? '@ ' + err.path : '');
+      console.warn('  ! 文件监听忽略错误:', err && (err.code || err.message), err && err.path ? '@ ' + err.path : '');
     });
     return watcher;
 }
 
 // 同步 watcher 到当前 scanRoots。
 //   full=false（默认，仅 scanRoots 变动）：只给新增的根建 watcher、只关掉被移除的，
-//     保留不变的根不动。这很关键——chokidar 为大目录（含 node_modules 等）建立监听
-//     要同步遍历数十秒并卡住事件循环，期间浏览器所有请求都被拖慢，加一个扫描根
-//     就会让整个 dashboard 假死。
+//     保留不变的根不动。原生后端挂监听是常数时间的（递归交给系统），初始盘点也是
+//     异步的，所以这里已经不像 chokidar 那样会卡住事件循环数十秒了；
+//     但增量仍然值得保留——重建会丢掉盘点结果，之后头几个事件只能保守地报 change。
 //   full=true（ignore / maxDepth 变动）：这些选项作用于每个 watcher 自身，只能全部重建。
 function startWatchers({ full = true } = {}) {
   const ignoredFn = buildIgnoredFn();
@@ -1077,7 +1081,7 @@ app.get('/api/state', async (_req, res) => {
         storeDirty = true;
       }
     }
-    // 收藏 / 标签的惰性清理：文件被删掉时 chokidar 的 unlink 回调不动这两个字段
+    // 收藏 / 标签的惰性清理：文件被删掉时 unlink 回调不动这两个字段
     // （那样每个 unlink 都要 loadStore+saveStore，批量删除会连着打很多次盘），
     // 统一在这里剪。
     //
@@ -2597,7 +2601,7 @@ app.put('/api/config', (req, res) => {
   // 仅在真正影响到的时候才做重活，避免切换文档类型时无谓地重挂路由 / 重启 watcher（卡顿源头）
   // mountRawRoutes 很快（只改 router stack），且前端拿到响应后立刻会请求 /raw/*，必须同步做完
   if (rootsChanged) mountRawRoutes();
-  // 先把响应发出去：startWatchers 要为每个扫描根重建 chokidar watcher，
+  // 先把响应发出去：startWatchers 要为每个扫描根重建 watcher，
   // 大目录（含 node_modules 等）遍历建监听可达数十秒。压在响应前面会让前端
   // 迟迟等不到结果——UI 既不弹 toast 也不刷新列表，看起来就是"点了没反应"。
   res.json({ ok: true, config: next });

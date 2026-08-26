@@ -132,7 +132,7 @@ for spec in tests/*.spec.js; do
 done
 ```
 
-> 验证过：把本机 Atlas 完全停掉，全套 41 个 spec 依然全绿，且 `~/.atlas/config.json`
+> 验证过：把本机 Atlas 完全停掉，全套 44 个 spec 依然全绿，且 `~/.atlas/config.json`
 > 与 `store.json` 校验和逐字节未变。若将来某个 spec 在服务停止时失败，说明它偷偷依赖了
 > 你的真实实例，按下面的约定改掉。
 
@@ -154,13 +154,14 @@ done
 >   期望末行 `总计 10 项，失败 0 项`。**记得删掉 tgz**，否则会被 `git add -A` 带进 commit。
 > - `scroll-after-toggle.spec.js` 在 iframe 还没加载出内容时打印 `!! HTML 不够长，没法测试` 并跳过（也是 exit 0）。这是它长期的既有行为，不是本次改动引入的；判断是否回归的办法是 `git stash` 后对比同一行输出。
 
-当前 spec 清单（41 个）。除 `landing-demo`（`file://`）与 `diff-algorithm`（纯函数单测）
-外，其余都通过
+当前 spec 清单（44 个）。除 `landing-demo`（`file://`）、`diff-algorithm`（纯函数单测）
+与 `fs-watcher`（直接对着临时目录测监听器，不起服务、不用浏览器）外，其余都通过
 `tests/helpers/isolated-atlas.js` 的 `startAtlas()` 起独立实例：临时 `ATLAS_HOME`
 （自带 config/store）+ 临时扫描根 + 临时 fixture + 随机端口，结束即删。
 需要"有规模的文档树"的用例（帧率 / 滚动 / 拖拽）用 `makeTreeFixtures()` 现造，
 不再依赖你本机那几百篇真实文档。
 
+> - `fs-watcher.spec.js` — 目录树监听器（0.19.0 新增，纯 Node、不需要浏览器）：**造 600+ 个目录后 fd 净增 ≤ 2 且此时仍能 spawn**（这是整个模块存在的理由——旧版逐目录挂 watch 会吃掉上万个 fd，越过 Node 的 10240 上限后进程里所有 spawn 都报 EBADF）/ add·change·unlink 三种事件（macOS 上 eventType 永远是 rename，判定全靠 stat）/ **改动盘点期就存在的文件必须报 change 而不是 add**（报错了未读红点就不亮）/ 新建只报一次（父目录事件与文件事件必须合并，否则推两条桌面通知）/ 分段写入只报一次且报出来时内容完整 / depth 与 ignored 过滤（口径与 `walk()` 对齐）/ 整目录 mv 进来要补偿出里面的文档、整目录删除要逐个报 unlink / close 后无事件且 fd 归位（20 项）
 > - `rich-render.spec.js` — Mermaid 图表与数学公式（0.18.0 新增）：解析边界（价格 `$5` / `$100 到 $200` 不被当公式、句中 `$$…$$` 不留孤立的 `$`、代码里的 `$` 不算、`\(…\)` 也认）/ 图表渲染成 SVG 且语法错误显示 mermaid 原始报错并保留源码 / 行内与块级公式渲染成 KaTeX / 图表块不再被套代码块头部 / **按需加载**（没有图表公式的文档不下载那 3.5MB）/ 编辑器实时预览同样出图 / **往返保真**（改标题后图表与公式源码逐字节不变）/ 打印版挂上渲染器且主题钉浅色 / 局域网分享页能渲染且 `/vendor/` 对访客放行（39 项）
 > - `sandbox-trust.spec.js` — HTML 预览沙箱与信任分级（0.18.0 新增）：默认带 sandbox 且不含 `allow-same-origin`、保留 `allow-scripts`（文档自己的脚本要能跑）/ **沙箱里的文档确实读不到父页面、读不到也写不了 Atlas 接口** / Atlas 自渲染的预览页（md / csv）不被沙箱化 / 点信任后切同源、编辑按钮可用、落盘、刷新后仍有效、可收回 / **写类接口的 Origin 校验**（`null` 与别的站点、本机其它端口一律 403，不带 Origin 的 CLI 放行）（33 项）
 > - `plain-formats.spec.js` — CSV / JSON / 纯文本 / SVG（0.18.0 新增）：默认只扫 html+md、勾选后才出现 / **CSV 解析**（引号内的分隔符与换行、`""` 转义、空字段、分号 / Tab 嗅探）/ 数字列右对齐而文本列不、宽表横向滚动层 / JSON 缩进与语法高亮、非法 JSON 报出行列并按原文显示 / SVG 用 `<img>` 引入且里面的脚本不执行 / 只读（编辑禁用）与 SVG 不支持导出 PDF / 全文搜索命中四种格式（svg 只索引标签文字）/ 分享 CSV 返回渲染好的网页而不是让浏览器下载（44 项）
@@ -263,7 +264,7 @@ npm publish --dry-run
 检查输出：
 - `name: atlas-dashboard`
 - `version: <新版本>`
-- `total files:` 应在 45~50 之间（当前为 47；bin/lib/public/server/README/LICENSE，包含 vendored 前端依赖）。
+- `total files:` 应在 45~50 之间（当前为 48；bin/lib/public/server/README/LICENSE，包含 vendored 前端依赖）。
   0.18.0 起这个数从 23 跳到 47、unpacked 从约 300KB 跳到 5.0MB —— mermaid 与 KaTeX
   （含 20 个 woff2 字体）进了 `public/vendor/`。**这是预期的**，看到 47 不要以为打包出了错。
 - 不应含 `tests/`、`data/`、`*.tgz`、`config.json`（这些在 `package.json` 的 `files` 白名单外）
@@ -358,7 +359,7 @@ atlas restart      # 让本机服务也用新版
 
 | 触发 | Workflow | 做什么 |
 |---|---|---|
-| `git push` 到 main | `.github/workflows/test.yml` | CLI smoke + landing demo + e2e install + 20 个隔离 spec（各自起实例，无需预置 fixture 与共享服务）+ 帧率非阻塞观测 |
+| `git push` 到 main | `.github/workflows/test.yml` | CLI smoke + landing demo + e2e install + 21 个隔离 spec（各自起实例，无需预置 fixture 与共享服务）+ 帧率非阻塞观测 |
 | `git push origin v*` (tag) | `.github/workflows/release.yml` | 抽取 PUBLISHING.md 该版本段落 → 创建 GitHub Release |
 | 任何 push 到 main | GitHub Pages（仓库设置） | 自动重新部署 `docs/` 到 https://damonamber.github.io/atlas-dashboard/ |
 | `npm publish` | npm registry | 包上架 + CDN 同步（约 1-2 分钟） |
@@ -531,6 +532,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.19.0** (2026-08-25) — 换掉文件监听后端，修掉一个让**导出 PDF / 在访达中显示 / 自动升级全都失效**的既有 bug（新增 `lib/fs-watcher.js`，`server.js` 的 `createWatcher` 改为调它）。① **症状与根因**：0.18.1 发完在真实实例上验证导出，拿到的不是"变快"而是 `spawn EBADF`；装回 0.18.0 复现，确认是既有问题、与那次修复无关。用探针把线量清楚了——**进程持有 10200 个 fd 时 spawn 正常，10240 起必定 EBADF**（这是 Node 给进程设的 `RLIMIT_NOFILE`；提高 shell 的 `ulimit -n` 没用，试过 1048575 同样在 10240 断）。而本机 Atlas 进程开着 **10356 个 fd，其中 10334 个是普通文件**，全部来自文件监听：**chokidar 4 起移除了 fsevents 依赖、改成逐目录挂 `fs.watch`**，macOS 上每个 watch 都要占一个 kqueue fd，于是 fd 用量正比于目录数——实测监听 `~/Documents/AIProjects`（3598 个目录）净增 **10553 个 fd**，之后进程连 `lsof` 都 spawn 不出来。影响范围不止导出 PDF：「在访达中显示」和自升级也走 spawn，但它们**时好时坏**——fd 数越界而号段有空洞时，能不能拿到低号 fd 是碰运气，所以症状是概率性的、比稳定坏更难查。② **修法**：`fs.watch(root, { recursive: true })` 把递归交给操作系统，**整棵树 0 个额外 fd**。实测本机两个扫描根：**fd 10356 → 27**，导出 PDF 从必然 `EBADF` 变成 2~4 秒出片。③ **平台差异写在代码注释里，别误以为哪里都省**：macOS / Windows 的递归通知由内核提供（FSEvents / ReadDirectoryChangesW），fd ≈ 0；**Linux 上 libuv 的 inotify 不支持递归，Node 是在 JS 层自己逐目录建 watch 的（v20.13+），fd 占用和 chokidar 没区别**——好在那边这个问题本来就不尖锐（`ulimit -n` 真的能调大，spawn 也没有 macOS 那条 10240 硬线）；Linux + Node 18/19 与其它平台探测不到 recursive，回退 chokidar，行为与 0.18.x 完全一致。模块导出 `SYSTEM_RECURSIVE` 显式区分"内核给的递归"和"JS 层模拟的递归"，测试里的 fd 断言看的是它。④ **`fs.watch` 缺的四件事都得自己补**，这是本次的主要工作量：**(a) add / change / unlink 的区分**——macOS 上几乎所有事件的 `eventType` 都是 `rename`（连改内容也是，实测确认），所以 eventType 完全不可信，一律靠 stat 判定；判不准时**刻意偏向 change**，因为上层只在 change 时清 `store.seen`（点亮未读红点），把 change 误报成 add 会让"AI 改过这篇"的红点不亮（功能失效），反过来只是桌面通知文案从"新文档"变成"文档已更新"，而清一个本来不存在的 seen 记录是无害的空操作。**(b) 写入稳定期**（chokidar 的 awaitWriteFinish）——AI 流式写文件会连着触发事件，按路径去抖 + 两次 stat 采样一致才认为写完，否则上层会读到半截文档。**(c) ignored / depth 过滤**——原生递归监听没这两个概念，而且它会把 node_modules 里的事件也送过来，所以过滤必须排在 stat 之前、只用字符串判断（一次 npm install 是几万个事件）；depth 的语义与 `walk()` 对齐（root 下直属文件算第 0 层）。**(d) 整目录搬入的补偿**——`mv` 一个已有目录进扫描根**只产生一个目录事件，里面的文件没有独立事件**（实测确认），所以收到目录事件时要扫一遍把没见过的文档补出来；反过来删除整个目录时 FSEvents 会逐个报文件，不需要特殊处理。⑤ **一个踩过的坑**：补偿扫描第一版直接 emit add，结果新建一个文件会先报 add（来自父目录事件的补偿扫描）再报 change（来自文件自己的事件），**用户会收到两条桌面通知**。改成让补偿扫描只把路径塞进同一个 per-path 去抖队列、判定统一由一处做，两条路径就自然合并成一次了。⑥ **测试**：新增 `fs-watcher.spec.js`（20 项，纯 Node、不需要浏览器）。第一组就是这个模块存在的理由——造 600+ 个目录后断言 **fd 净增 ≤ 2 且此时仍能 spawn**（撤掉修复必红）；其余覆盖三种事件、"改动盘点期就存在的文件必须报 change 而不是 add"、分段写入只报一次且报出来时内容完整、depth 与 ignored 过滤、整目录搬入与整目录删除、close 后无事件且 fd 归位。端到端另验了未读红点的完整链路（新建→未读、标已读→改内容→**红点重新亮起**、全文搜索命中新内容、删除→索引移除）与 `/api/reveal`。全套 44 个 spec 全绿。⑦ 测试里踩到的时序坑记一下：为了造 fd 压力先同步创建 600 个文件、紧接着挂监听，**FSEvents 会把挂监听前那一小段时间的事件补送过来**（机器越忙延迟越大），于是它们会在后面某次断言里冒出来。产品行为是对的（stat 发现是已知文件 → 报 change），落到真实使用上就是"启动后可能对启动前刚改过的文件补报一次 change"，无害；spec 里滤掉这批噪音并在挂监听前先让事件流干。⑧ 另记一次**未能复现**的偶发：满负荷串联跑时 `preview-live-edit.spec.js` 报过 6 项失败（`/api/edit-doc` 请求失败 + `waitForFunction` 30s 超时），随后单独跑两次、与 `toast` 串联跑一次、以及再跑一整轮 `npm test` 全部全绿。失败项是 HTTP 请求层的，与本版改动（只碰文件监听）无关，判断是机器满载时的时序偶发——和 0.18.1 那次 `quickopen-a11y-rename` 同类。
 
 - **0.18.1** (2026-08-25) — 修 0.18.0 的 ⑦ 段记下的那个既有问题：**导出 PDF 每次都要整整 30 秒**，而 PDF 其实早就写好了（`lib/pdf-export.js`）。① **根因不是渲染慢，是 Chrome 不肯退出**。先做了一次带时间戳的诊断（三种文档各跑一遍，同时观测"文件首次出现 / 尾部出现 `%%EOF` / 大小稳定 / 进程退出"四个时刻），结论很干净：PDF 分别在 **2.5s / 3.1s / 7.3s** 就完整落盘了，而 `chrome --headless=old --print-to-pdf` 之后**一直挂着不退**，直到被 `_doExportPdf` 里那个 30s 硬超时 `SIGKILL`——也就是说每次导出用户白等二十多秒，等的是一个已经无事可做的进程。既有代码的 `writePoll` 只用「文件出现」来 emit 一次 `writing` 阶段事件，看到了这个信号却没有用它做任何决策。② **修法：文件一写完就主动收掉 chromium**。判据用 `%%EOF`（PDF 规范要求的文件结束标记，只出现在文件末尾）而不是只看大小——实测 Chrome 是一次性写入的（文件首次出现那一刻尾部就已经有 `%%EOF`），但万一某个版本或平台改成分段写，中间态不会带 EOF，这个判据不会把半成品当成写完的；再叠一次「大小与上一拍相同」作保险，轮询间隔从 250ms 收到 150ms 让响应更快。命中后先 `SIGTERM` 给它 1.2s 收尾机会、没走再 `SIGKILL`（走 SIGTERM 是为了让它自己释放 `user-data-dir` 的锁——那虽是每次新建、随后整个删掉的临时目录，但强杀留下的半个 profile 偶尔会拖慢下一次启动）。**30s 硬超时保留**，角色从「正常路径的收尾方式」变成「渲染真的卡死时的兜底」。③ **效果**：四种文档实测 **2.3s / 2.6s / 2.5s / 4.3s**（4.3s 那次是队列里第一个、承担了 Chrome 冷启动），比原来快 7~13 倍；导出是串行队列，连着导几篇的累积收益更大。④ 顺带把成功判定的信息补全：`exportPdf` 现在额外返回 `complete`（尾部是否有 `%%EOF`）。**它刻意不参与成功判定**——正常路径的收尾条件本身就是 EOF、必然为 true，只有走到硬超时才可能拿到一份截断的 PDF；不拿它否决成功是为了不引入回归（万一哪个平台的 Chrome 在末尾追加了什么导致判据失效，也不该让本来能用的导出变成报错）。服务端在 `complete === false` 时打一条 warn，留个排查线索。⑤ **测试**：`md-pdf-export.spec.js` 加 3 项（PDF 尾部有 `%%EOF`、文件头是 `%PDF-`、端到端耗时 < 20s）。耗时门槛设 20s 而不是贴着实测的 3s：真实耗时 2~4s，而回归（退回等硬超时）必然 ≥30s，中间留足余量给慢机器和 CI 的共享 runner，不会因为环境慢而假红。**反向验证做过**：`git stash` 撤掉修复后跑同一个 spec，耗时 30192ms、两条新断言都红，不是陪跑。全套 41 个 spec 全绿。⑥ 记一次**未能复现**的偶发：全量跑的那一轮里 `quickopen-a11y-rename.spec.js` 报 1 项失败，随后单独连跑 3 次全绿，失败项内容已被后续 spec 的输出覆盖、没抓到。本版只碰了 PDF 导出管线与一行日志，与 ⌘K / 重命名无关，判断是偶发；留在这里备查——下次再遇到要先把单个 spec 的完整输出留下来。
 

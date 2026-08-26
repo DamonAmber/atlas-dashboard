@@ -50,6 +50,7 @@ jobs:
         run: |
           set -e
           for spec in \
+            fs-watcher \
             rich-render \
             sandbox-trust \
             plain-formats \
