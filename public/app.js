@@ -5971,6 +5971,13 @@ function notify(title, body) {
 }
 
 // ---------- SSE ----------
+// 每个浏览器 tab 都会开一条到 /api/events 的长连接。浏览器对同源 HTTP/1.1 只给 6 条
+// 并发连接，后台 tab 若一直占着这条 SSE，开到第 6 个 tab 时连接池就满了：新 tab 想拉
+// /api/state 或加载预览 iframe 都排不进队 —— 表现为"tab 一开多，新 tab 打不开文档"。
+//
+// 解法：只有当前可见的 tab 才持有 SSE，切到后台立刻 disconnectSSE 释放这个连接槽，
+// 回到前台再重连（见页面底部的 visibilitychange）。单窗口下任一时刻只有一个 tab 可见，
+// 于是同时占用的 SSE 永远≈1 条，tab 数量再多也打不满连接池，等于没有上限。
 let evtSrc = null;
 let pendingRefresh = null;
 let sseRetryTimer = null;
@@ -6010,8 +6017,17 @@ function connectSSE() {
     try { es.close(); } catch {}
     evtSrc = null;
     if (sseRetryTimer) return;   // 已有重连在排队，不重复排
+    // 后台 tab 不排重连：连接槽要留给可见 tab，回前台时再由 visibilitychange 统一重连
+    if (document.hidden) return;
     sseRetryTimer = setTimeout(() => { sseRetryTimer = null; connectSSE(); }, 3000);
   };
+}
+
+// 切到后台时调用：关掉 SSE 并作废待重连的 timer，把这条连接槽还给浏览器连接池。
+// 关闭的是"我们主动 close"，不会触发 onerror，也就不会排重连。
+function disconnectSSE() {
+  if (sseRetryTimer) { clearTimeout(sseRetryTimer); sseRetryTimer = null; }
+  if (evtSrc) { try { evtSrc.close(); } catch {} evtSrc = null; }
 }
 
 // ---------- 新版本提示：banner + 顶栏小标签 + 桌面通知 ----------
@@ -6260,7 +6276,16 @@ async function checkForUpdate() {
 }
 
 setInterval(() => { if (!document.hidden) fetchState(); }, 60_000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) fetchState(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    // 切到后台：释放 SSE 连接槽，避免后台 tab 一多就把 6 条连接池占满
+    disconnectSSE();
+    return;
+  }
+  // 回到前台：没连接就重连，并补拉一次最新状态（补上后台断连期间漏掉的文件系统事件）
+  if (!evtSrc) connectSSE();
+  fetchState();
+});
 
 fetchState();
 connectSSE();
