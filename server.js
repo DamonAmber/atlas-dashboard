@@ -2095,6 +2095,67 @@ app.post('/api/export-pdf', async (req, res) => {
   }
 });
 
+// 桌面 App（Electron）专用：只把文档渲染成"打印版 HTML"落到临时文件、返回其路径，
+// 不 spawn 系统 Chromium。Electron 主进程会用内置 Chromium 的 webContents.printToPDF
+// 打这份 HTML（见 electron/pdf.js），从而不依赖用户本机装没装浏览器。
+//
+// ⚠️ 这里的渲染逻辑与上面 /api/export-pdf 的"渲染阶段"刻意保持一致 —— 改打印渲染时两处都要改。
+// （没有抽成公共函数是为了不动那条久经测试的 SSE 路由，零回归风险。）
+app.post('/api/export-pdf-html', async (req, res) => {
+  const filePath = req.body && req.body.path;
+  if (!filePath || !isPathInScanRoots(filePath)) {
+    return res.status(400).json({ ok: false, reason: 'invalid-path', message: '路径非法' });
+  }
+  const lowerPath = filePath.toLowerCase();
+  const isHtml = lowerPath.endsWith('.html') || lowerPath.endsWith('.htm');
+  const isMd = isMarkdownPath(filePath);
+  const plainKind = docTypeOfPath(filePath);
+  const isPlain = READONLY_DOC_TYPES.has(plainKind) && plainKind !== 'svg';
+  if (!isHtml && !isMd && !isPlain) {
+    return res.status(400).json({ ok: false, reason: 'unsupported', message: '只支持 HTML / Markdown / CSV / JSON / 文本' });
+  }
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ ok: false, reason: 'source-missing', message: '文件不存在' });
+  }
+  let renderPath = filePath;   // HTML 文档直接用原文件（file:// 加载，相对资源按原目录解析）
+  let tempDir = null;
+  try {
+    if (isMd) {
+      const raw = await fsp.readFile(filePath, 'utf8');
+      const html = markdown.renderPage(raw, {
+        title: path.basename(filePath),
+        baseHref: pdfExport.dirFileUrl(path.dirname(filePath)),
+        assetBase: pdfExport.dirFileUrl(path.join(PUBLIC_DIR, 'vendor')),
+        forPrint: true,
+      });
+      tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'atlas-mdpdf-'));
+      renderPath = path.join(tempDir, 'doc.html');
+      await fsp.writeFile(renderPath, html, 'utf8');
+    } else if (isPlain) {
+      const stat = await fsp.stat(filePath);
+      if (stat.size > plainRender.MAX_BYTES) {
+        return res.status(400).json({ ok: false, reason: 'too-large', message: `文件超过 ${fmtBytes(plainRender.MAX_BYTES)}，不支持导出` });
+      }
+      const raw = await fsp.readFile(filePath, 'utf8');
+      const html = plainRender.renderPage({
+        kind: plainKind,
+        text: raw,
+        title: path.basename(filePath),
+        ext: path.extname(filePath).toLowerCase(),
+        forPrint: true,
+      });
+      tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'atlas-docpdf-'));
+      renderPath = path.join(tempDir, 'doc.html');
+      await fsp.writeFile(renderPath, html, 'utf8');
+    }
+    // htmlPath 交给 Electron 主进程加载；tempDir 由主进程用完删除
+    res.json({ ok: true, htmlPath: renderPath, tempDir });
+  } catch (err) {
+    if (tempDir) { try { await fsp.rm(tempDir, { recursive: true, force: true }); } catch {} }
+    res.status(500).json({ ok: false, reason: 'unexpected', message: err.message });
+  }
+});
+
 // ---------- 预览区轻量编辑：编辑文档注入 + 保存 ----------
 // GET /api/edit-doc?path=<abs>：返回带锚点标注（data-atlas-eid/role + 包裹 span）的
 // 编辑专用文档。该文档只用于 iframe 编辑显示，绝不写盘。

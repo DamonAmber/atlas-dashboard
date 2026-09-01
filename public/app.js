@@ -4682,6 +4682,47 @@ els.btnExportPdf.addEventListener('click', async () => {
   // 去扩展名要覆盖 .md/.markdown，不能只处理 .html
   const stem = (file.alias || stripDocExt(file.name)).trim() || 'export';
 
+  // 桌面 App（Electron）：交给主进程用内置 Chromium 的 printToPDF 导出，
+  // 不依赖本机是否装了 Chrome / Edge。浏览器与 npm 用户仍走下面的 SSE + 系统 Chromium 路径。
+  if (window.atlasDesktop && window.atlasDesktop.isDesktop) {
+    const prog = showToast({ kind: 'info', progress: true, text: '导出 PDF', secondary: '正在用内置渲染器生成…' });
+    let result;
+    try {
+      result = await window.atlasDesktop.exportPdf({ path: filePath, fileName: stem });
+    } catch (err) {
+      result = { ok: false, error: err && err.message ? err.message : String(err) };
+    }
+    els.btnExportPdf.classList.remove('spinning');
+    els.btnExportPdf.disabled = false;
+    prog.close();
+    if (result && result.ok) {
+      const t = showToast({
+        kind: 'success',
+        text: '✓ 已保存到 Downloads',
+        secondary: result.savedPath.replace(/^.*\/Downloads\//, 'Downloads/'),
+        duration: 6000,
+      });
+      const msgEl = t.el && t.el.querySelector('.toast-msg');
+      if (msgEl) {
+        const link = document.createElement('button');
+        link.className = 'toast-action';
+        link.textContent = '在访达中显示';
+        link.addEventListener('click', (e) => {
+          e.stopPropagation();
+          fetch('/api/reveal', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ path: result.savedPath }),
+          }).catch(() => {});
+        });
+        msgEl.appendChild(link);
+      }
+    } else {
+      showToast({ kind: 'error', text: '导出 PDF 失败', secondary: (result && result.error) || '未知错误', duration: 5000 });
+    }
+    return;
+  }
+
   // 进度 toast——不自动消失，阶段切换时更新文字
   const prog = showToast({
     kind: 'info',

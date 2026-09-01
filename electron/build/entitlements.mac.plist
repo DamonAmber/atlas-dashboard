@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Electron 在硬化运行时（notarization 必需）下需要的基础授权 -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <!-- 加载 Electron 框架内的库需要放开库校验 -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <!-- 关键：我们通过 ELECTRON_RUN_AS_NODE 派生子进程跑 server.js，
+       硬化运行时默认会拦截带环境变量注入的子进程，必须放开这一项 -->
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+</dict>
+</plist>

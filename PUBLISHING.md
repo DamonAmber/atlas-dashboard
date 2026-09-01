@@ -409,6 +409,39 @@ curl -s "https://api.github.com/repos/DamonAmber/atlas-dashboard/actions/runs?pe
 
 ---
 
+## 桌面 App（macOS DMG）发版
+
+从 0.20.0 起，除 npm 外还分发一个签名 + 公证的 macOS App。npm 流程照旧；DMG 作为 GitHub Release 的资产附上。
+
+**本地出包（推荐，凭据在本机最省事）：**
+
+```bash
+# 首次：把签名/公证凭据写进本机 gitignored 文件（模板见 electron/build/notarize.env.example）
+#   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
+source electron/build/notarize.env && npm run app:build
+# 产物：dist-app/Atlas-mac-arm64.dmg（已签名 + 公证 + staple）
+```
+
+- 需要钥匙串里有 **Developer ID Application** 证书（`security find-identity -v -p codesigning` 能看到）。
+- `build.artifactName` 固定为 `Atlas-mac-${arch}.dmg`（不带版本号），所以官网可以用稳定链接
+  `https://github.com/DamonAmber/atlas-dashboard/releases/latest/download/Atlas-mac-arm64.dmg`。
+- `asar: false` 是刻意的：App 用 `ELECTRON_RUN_AS_NODE` 派生 `server.js`，纯 Node 读不了 asar。
+- 验证：`spctl --assess --type exec dist-app/mac-arm64/Atlas.app`（应 `accepted / Notarized Developer ID`）、
+  `xcrun stapler validate` App 与 DMG。
+
+**挂到 Release：** 在 npm publish + 打 tag（release workflow 会先建好 Release）之后：
+
+```bash
+gh release upload "v$NEW_VERSION" dist-app/Atlas-mac-arm64.dmg --clobber
+```
+
+**CI（可选）：** `.github/workflows/release-app.yml` 手动触发即可在 GitHub 上出包，
+需先配好 mac 签名/公证 secrets（`MAC_CSC_LINK` = base64 的 .p12、`MAC_CSC_KEY_PASSWORD`、
+`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`）。导出 .p12：钥匙串里选中
+Developer ID Application 证书 → 导出为 .p12 → `base64 -i cert.p12 | pbcopy`。
+
+> 目前只出 arm64（Apple Silicon）。Intel / 通用二进制、Windows、以及 App 自动更新（electron-updater）待后续。
+
 ## 故障排查
 
 | 现象 | 原因 / 修复 |
@@ -532,6 +565,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.20.0** (2026-09-01) — 新增**桌面 App（macOS）**这条面向非技术用户的分发渠道，并同步官网。npm 渠道（`atlas` CLI）完全不变，只是多了一种"下载 DMG 双击装"的选择。① **为什么**：`npm i -g` 对不熟悉终端的用户门槛太高（要先装 Node、全程命令行、首次配置也是问答式）。桌面 App 自带运行时、图形化启动，且以独立窗口取代浏览器 tab——顺带绕开了"tab 开多了打不开文档"那个同源连接上限问题。② **架构（`electron/`，不动 `server.js` 与现有测试）**：Electron 外壳复用现有 Node 服务——用 `ELECTRON_RUN_AS_NODE` 以纯 Node 模式派生 `server.js`（不额外打包 Node 运行时），窗口加载 `http://127.0.0.1:<随机端口>`；与 CLI 共用 `~/.atlas` 配置与 store，若已有 `atlas start` 守护进程在跑则直接复用、不起第二个 server（避免两个进程抢写 store.json）。因为派生走纯 Node、读不了 asar，构建刻意设 `asar: false` 让 `server.js`/`lib`/`public`/`node_modules` 以普通文件躺在包里。③ **菜单栏托盘**：单色模板图标（自动适配浅/深色菜单栏）+「打开 / 退出」菜单；mac 习惯——关窗留 dock+托盘、Cmd+Q 才真正退出并收掉自起的 server。④ **PDF 导出改用内置 Chromium 的 `printToPDF`**：不再依赖用户本机装没装 Chrome/Edge。做法是**新增** `POST /api/export-pdf-html`（只复用现有渲染逻辑产出打印版 HTML、不 spawn 浏览器），主进程用隐藏窗口加载后 `printToPDF` 存到 Downloads；**刻意不动**老的 `/api/export-pdf` SSE + `lib/pdf-export.js` 路径——浏览器与 npm 用户照旧走系统 Chromium，`md-pdf-export.spec.js` 零回归。前端 `btnExportPdf` 仅在 `window.atlasDesktop`（preload 暴露的极小桥）存在时才走桌面路径。⑤ **签名 + 公证**：electron-builder 用 Developer ID Application 证书签名、硬化运行时（`entitlements.mac.plist` 放开 `allow-dyld-environment-variables`，否则硬化运行时会拦掉带 `ELECTRON_RUN_AS_NODE` 的子进程）、`notarytool` 公证并 staple，App 与 DMG 都过。产出 `Atlas-mac-arm64.dmg`（固定名，配合 GitHub Release 的 `/latest/download/` 稳定链接）。⑥ **官网 `docs/index.html`**：新增下载区，讲清两种安装方式（下载 DMG / `npm i -g`），DMG 按钮指向 Release 的 latest 下载链接。⑦ **验证**：全套 spec 全绿（未动已发布文件的行为）；桌面侧另验了 `--smoke` 启动、隔离 spawn、签名+硬化运行时下的 spawn、以及 PDF 全链路（合法 `%PDF-`、含 mermaid 图与表格）。⑧ **本版只有 arm64（Apple Silicon）DMG**；Intel/通用二进制与 Windows、以及桌面 App 的自动更新（electron-updater）留待后续。⑨ **发版流程新增**：签名公证凭据放在本机 gitignored 的 `electron/build/notarize.env`（`source` 后 `npm run app:build`），Team ID/证书从钥匙串读；CI 见 `.github/workflows/release-app.yml`（需在仓库配好 mac 签名/公证 secrets）。
 
 - **0.19.2** (2026-09-01) — 修一个反复出现的连接耗尽 bug：**Atlas 开的 tab 一多，新 tab 就打不开文档**（`public/app.js` 的 SSE 生命周期）。① **根因是浏览器的 6 连接上限撞上"每个 tab 一条常驻 SSE"**：每个 Atlas 页面都会向 `/api/events` 开一条长连接接收文件系统事件与升级推送，而浏览器对同源 HTTP/1.1 只给 6 条并发连接。后台开着的 tab 会一直占着各自那条 SSE 不放，于是开到第 6 个 tab 时连接池就满了——新 tab（乃至任何 tab）想拉 `/api/state` 或加载预览 iframe 都排不进队、永久 pending，表现就是"点文档没反应"。代码里其实早有一段注释记着这个 6 连接天花板，之前修的是"一个 tab 内 SSE 重连泄漏多条"（见 `sse-leak-and-retry.spec.js`），这次是不同的另一面：**多个 tab 各自合法地占着一条，加起来照样打满**。② **修法：只让当前可见的 tab 持有 SSE**。新增 `disconnectSSE()`，在 `visibilitychange` 切到后台（`document.hidden`）时主动 `close()` 掉这条连接并作废待重连的 timer，把连接槽还给浏览器；回到前台时若没有连接就重连，并补拉一次 `fetchState()`——补上后台断连期间漏掉的文件系统事件。`onerror` 的重连排程也加了后台守卫：`document.hidden` 时不排重连，统一等回前台由 `visibilitychange` 拉起。这样同一时刻占用连接的 tab 数≈当前可见 tab 数，单窗口下任一时刻只有一个 tab 可见，于是常驻 SSE 永远≈1 条，tab 开再多也打不满连接池，等于没有上限。③ **为什么不改成 SharedWorker 共享一条连接**：那需要把整套重连 / 超时 / 重试逻辑搬进 worker，且会让 `sse-leak-and-retry.spec.js` 里"页面直接 new EventSource、稳态恰好 1 条"这组回归断言全部失效——收益（覆盖"6+ 个窗口拖到不同显示器上同时可见"这种极端场景）远不抵改动面与回归风险。可见 tab 释放连接已经覆盖了正常的单窗口多 tab 使用，那才是用户真正踩到的场景。④ **验证**：全套 44 个 spec 全绿（唯一一次 `preview-live-edit` 的失败是 PUBLISHING.md 记过的满负荷串联偶发、单独连跑两次 32/32，与本版无关）。其中 `sse-leak-and-retry.spec.js` 13 项原封不动通过——前台稳态仍 1 条、error 风暴无泄漏、`/api/state` 挂起超时重试等行为都没变，证明"可见时的连接管理"和以前逐字节一致。另写临时脚本端到端验了新行为：前台 1 条 → 切后台释放为 0 条 → 回前台重连为 1 条 → 反复前后台切换 5 次仍只有 1 条无泄漏，验证后即删。⑤ 纯后台修复、无用户可见 UI 变化，`docs/index.html` 除按「步骤 1.5」惯例更新 `cur-version` 兜底版本号外无需改动。
 

@@ -5,3 +5,6 @@ data/
 *.tgz
 .runtime-config.json
 .atlas/
+dist-app/
+out/
+electron/build/notarize.env

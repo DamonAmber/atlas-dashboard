@@ -1,0 +1,61 @@
+name: release-app
+
+# 构建、签名、公证 macOS 桌面 App（DMG），并上传到对应 tag 的 GitHub Release。
+#
+# 手动触发：Actions → release-app → Run workflow，填要发布的 tag（如 v0.20.0）。
+# 之所以是手动而非跟随 tag 自动跑：它依赖下面这些签名 / 公证 secret，没配好会失败。
+# 本地也可以直接出包（见 PUBLISHING.md 的「桌面 App」章节），CI 用于日后自动化。
+#
+# 需在 仓库 Settings → Secrets and variables → Actions 配好：
+#   MAC_CSC_LINK                base64 编码的 Developer ID Application .p12 证书
+#                               导出：钥匙串导出证书为 .p12 → base64 -i cert.p12 | pbcopy
+#   MAC_CSC_KEY_PASSWORD        上面 .p12 的导出密码
+#   APPLE_ID                    Apple ID 邮箱
+#   APPLE_APP_SPECIFIC_PASSWORD appleid.apple.com 生成的 App 专用密码
+#   APPLE_TEAM_ID               10 位 Team ID
+#   （GITHUB_TOKEN 由 Actions 自动提供，用于上传 Release 资产）
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要构建并上传 DMG 的 tag（如 v0.20.0）'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build, sign & notarize DMG
+        run: npm run app:build
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Upload DMG as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Atlas-mac-arm64-dmg
+          path: dist-app/Atlas-mac-arm64.dmg
+
+      - name: Attach DMG to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ inputs.tag }}" dist-app/Atlas-mac-arm64.dmg --clobber

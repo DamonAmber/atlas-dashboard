@@ -248,6 +248,30 @@
     .btn:hover { background: var(--bg-elev); border-color: var(--hairline-strong); }
     .btn:active { transform: scale(0.985); }
     .btn svg { width: 14px; height: 14px; }
+    .btn-primary { background: linear-gradient(135deg, #5b9cff, #8b5bff); border-color: transparent; color: #fff; font-weight: 600; }
+    .btn-primary:hover { background: linear-gradient(135deg, #6ba6ff, #9a6bff); border-color: transparent; }
+    .btn-primary .dl-sub { opacity: 0.82; font-weight: 400; margin-left: 2px; }
+
+    /* 两种安装方式卡片 */
+    .install-methods { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 760px) { .install-methods { grid-template-columns: 1fr; } }
+    .method {
+      border: 1px solid var(--hairline); border-radius: 16px; background: var(--bg-soft);
+      padding: 26px; display: flex; flex-direction: column; gap: 14px;
+    }
+    .method-head { display: flex; flex-direction: column; gap: 10px; }
+    .method-tag {
+      align-self: flex-start; font-size: 12px; color: var(--text-mute);
+      background: var(--bg-elev); border: 1px solid var(--hairline);
+      border-radius: 999px; padding: 3px 11px;
+    }
+    .method h3 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
+    .method ol { margin: 0; padding-left: 20px; color: var(--text-mute); line-height: 1.85; }
+    .method ol strong, .method p strong { color: var(--text); font-weight: 600; }
+    .method p { color: var(--text-mute); margin: 0; }
+    .method pre { margin: 0; }
+    .method-note { font-size: 13px; color: var(--text-faint); line-height: 1.7; }
+    .method .btn { align-self: flex-start; margin-top: auto; }
 
     .hero .meta {
       margin-top: 36px;
@@ -1044,7 +1068,7 @@
   <div class="wrap">
     <div class="eyebrow">
       <span class="pulse"></span>
-      <span>v<span id="cur-version">0.19.2</span> · 已上架 npm</span>
+      <span>v<span id="cur-version">0.20.0</span> · npm + macOS App</span>
     </div>
     <h1>你让 AI 写了 30 份 HTML / Markdown 报告——<br/><span class="grad">它们现在在哪？</span></h1>
     <p class="lede">
@@ -1064,6 +1088,12 @@
           </svg>
         </span>
       </span>
+      <a class="btn btn-primary" href="https://github.com/DamonAmber/atlas-dashboard/releases/latest/download/Atlas-mac-arm64.dmg" aria-label="下载 macOS App（Apple Silicon）">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M8 2v7"/><path d="M4.8 6.2 8 9.4l3.2-3.2"/><path d="M3 12.5h10"/>
+        </svg>
+        下载 macOS App <span class="dl-sub">· Apple Silicon</span>
+      </a>
       <a class="btn" href="https://github.com/DamonAmber/atlas-dashboard" target="_blank" rel="noopener" aria-label="GitHub">
         <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
           <path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 005.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
@@ -1474,34 +1504,40 @@
 
 <section id="install" class="reveal">
   <div class="wrap">
-    <h2>三步上手</h2>
-    <p class="sec-lede">不需要开发环境。一条 npx 命令搞定。</p>
-    <div class="steps">
-      <div class="step">
-        <div class="num">1</div>
-        <h3>启动</h3>
-        <p>不需要安装，直接 <code>npx</code>：</p>
+    <h2>两种安装方式</h2>
+    <p class="sec-lede">不装 Node、不碰终端，就下载 App；已有 Node 环境、想用 <code>atlas</code> 命令，就走 npm。两者共用同一份配置与看板。</p>
+
+    <div class="install-methods">
+      <div class="method">
+        <div class="method-head">
+          <span class="method-tag">推荐给不熟悉终端的人</span>
+          <h3>下载 macOS App</h3>
+        </div>
+        <ol>
+          <li>下载 <a href="https://github.com/DamonAmber/atlas-dashboard/releases/latest/download/Atlas-mac-arm64.dmg"><strong>Atlas-mac-arm64.dmg</strong></a>（Apple Silicon / M 系列芯片）</li>
+          <li>双击打开，把 <strong>Atlas</strong> 拖到「应用程序」</li>
+          <li>启动即用——首次会用默认目录（<code>~/Documents</code>）开始扫描，之后可在设置里改</li>
+        </ol>
+        <p class="method-note">已签名并经 Apple 公证，不会被 Gatekeeper 拦。菜单栏常驻，关窗不退出；PDF 导出用内置渲染器，无需另装浏览器。</p>
+        <a class="btn btn-primary" href="https://github.com/DamonAmber/atlas-dashboard/releases/latest/download/Atlas-mac-arm64.dmg">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 2v7"/><path d="M4.8 6.2 8 9.4l3.2-3.2"/><path d="M3 12.5h10"/>
+          </svg>
+          下载 DMG
+        </a>
+      </div>
+
+      <div class="method">
+        <div class="method-head">
+          <span class="method-tag">推荐给开发者</span>
+          <h3>用 npm 安装</h3>
+        </div>
+        <p>不想安装，直接 <code>npx</code> 跑：</p>
         <pre><code>npx atlas-dashboard</code></pre>
-        <p>或全局安装后用 <code>atlas</code>：</p>
+        <p>或全局安装后用 <code>atlas</code> 命令常驻：</p>
         <pre><code>npm i -g atlas-dashboard
-atlas</code></pre>
-      </div>
-      <div class="step">
-        <div class="num">2</div>
-        <h3>首次配置</h3>
-        <p>第一次启动会问几个问题，全部都有合理默认值，回车跳过：</p>
-<pre><code>? 要扫描哪些目录的 HTML？(逗号分隔)
-  默认: ~/Documents
-? 监听端口？  默认: 4321
-? 要忽略的目录名？
-  默认: node_modules,.git,…</code></pre>
-      </div>
-      <div class="step">
-        <div class="num">3</div>
-        <h3>访问</h3>
-        <p>浏览器打开：</p>
-        <pre><code>http://localhost:4321</code></pre>
-        <p>建议加到书签栏。再让你的 AI 不要 <code>open</code> HTML，把规则写到全局配置即可。</p>
+atlas start</code></pre>
+        <p class="method-note">首次启动会问几个问题（扫描目录 / 端口 / 忽略项），都有合理默认值，回车跳过即可；随后浏览器打开 <code>http://localhost:4321</code>。需要 Node 18+，支持 macOS / Linux / Windows。</p>
       </div>
     </div>
   </div>
