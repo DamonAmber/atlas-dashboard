@@ -89,6 +89,12 @@ function cleanupAndExit(code) {
 }
 
 async function boot() {
+  // 原生「关于 Atlas」面板显示版本号（菜单栏 Atlas → 关于 Atlas）
+  app.setAboutPanelOptions({
+    applicationName: 'Atlas',
+    applicationVersion: app.getVersion(),
+    copyright: 'MIT · github.com/DamonAmber/atlas-dashboard',
+  });
   try {
     serverInfo = await serverManager.startServer({
       nodeBinary: process.execPath,

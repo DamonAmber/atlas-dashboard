@@ -2612,6 +2612,7 @@ app.get('/api/config', (_req, res) => {
     port: config.port,
     maxDepth: config.maxDepth,
     docTypes: getEnabledDocTypes(),
+    version: pkg.version,
   });
 });
 

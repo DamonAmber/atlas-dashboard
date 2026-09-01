@@ -5485,6 +5485,13 @@ els.tree.addEventListener('keydown', (e) => {
 async function openSettings() {
   const res = await fetch('/api/config');
   const cfg = await res.json();
+  // 版本号：桌面 App 额外标注"自动更新"，浏览器/npm 用户只显示版本
+  const verEl = document.getElementById('settings-version');
+  if (verEl) {
+    const v = cfg.version ? `Atlas v${cfg.version}` : '';
+    verEl.textContent = (v && window.atlasDesktop && window.atlasDesktop.isDesktop)
+      ? `${v} · 桌面版（自动更新）` : v;
+  }
   renderRootList(cfg.scanRoots);
   // 已归档 + 已分享：拉最新
   try {

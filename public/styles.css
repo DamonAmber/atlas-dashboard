@@ -2087,6 +2087,15 @@ kbd {
 }
 .settings-nav .settings-nav-item.is-on .ico { color: var(--accent); }
 .settings-content { overflow-y: auto; min-height: 0; }
+.settings-nav .settings-version {
+  margin-top: auto;
+  padding: 12px 10px 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+  word-break: break-word;
+}
 
 .modal-section {
   padding: 16px 18px;
