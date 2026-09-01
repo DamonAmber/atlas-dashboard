@@ -429,11 +429,18 @@ source electron/build/notarize.env && npm run app:build
 - 验证：`spctl --assess --type exec dist-app/mac-arm64/Atlas.app`（应 `accepted / Notarized Developer ID`）、
   `xcrun stapler validate` App 与 DMG。
 
-**挂到 Release：** 在 npm publish + 打 tag（release workflow 会先建好 Release）之后：
+**挂到 Release：** 在 npm publish + 打 tag（release workflow 会先建好 Release）之后，把 dmg（人工下载）
+以及自动更新要用的 **zip + latest-mac.yml** 一并传上去（0.21.0 起自动更新依赖后两个，缺了 App 就查不到更新）：
 
 ```bash
-gh release upload "v$NEW_VERSION" dist-app/Atlas-mac-arm64.dmg --clobber
+gh release upload "v$NEW_VERSION" \
+  dist-app/Atlas-mac-arm64.dmg \
+  dist-app/Atlas-mac-arm64.zip \
+  dist-app/latest-mac.yml --clobber
 ```
+
+> `latest-mac.yml` 是 electron-updater 的更新清单（列出 zip 名字、大小、sha512）。发版后可跑
+> 打包好的 App 验证更新源连通：应对最新 Release 报 `update-not-available`（版本相同即最新）。
 
 **CI（可选）：** `.github/workflows/release-app.yml` 手动触发即可在 GitHub 上出包，
 需先配好 mac 签名/公证 secrets（`MAC_CSC_LINK` = base64 的 .p12、`MAC_CSC_KEY_PASSWORD`、
@@ -565,6 +572,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.21.0** (2026-09-01) — 桌面 App 加**自动更新**（`electron-updater` + GitHub Releases）。① **为什么**：桌面用户装了就不该再回终端 `npm i -g`；自升级要在 App 内闭环。② **机制**：`electron-updater` 读本仓库 Release 里的 `latest-mac.yml`，比对版本后**后台下载** zip 更新包，`update-downloaded` 时弹框「立即重启更新 / 稍后」——选稍后则退出 App 时自动装（`autoInstallOnAppQuit`）。启动查一次、之后每 3 小时查一次。只在 `app.isPackaged` 时启用（dev / `npm run app` 没有 `app-update.yml`，直接跳过），任何错误只记日志、不影响使用。③ **产物变化**：mac 目标新增 **zip**（Squirrel.Mac 自动更新走 zip，不是 dmg）——electron-builder 因此会生成 `latest-mac.yml`；**发版时必须把 `Atlas-mac-arm64.zip` 和 `latest-mac.yml` 一并传到 Release**（连同给人手动下载的 dmg）。`electron-updater` 落在 `dependencies`（electron-builder 只打包生产依赖才装得进 App）——npm CLI 用户会多装它但从不加载，属可接受的小体积代价。`build.publish` 显式声明 github 源，`app:build` 改为 `electron-builder --mac --publish never`（本地出全部 mac 目标、不自动上传，上传由发版流程手动做）。④ **App 内屏蔽 npm 升级横幅**：`showUpdateUI` 在 `window.atlasDesktop` 下直接 no-op——那条"复制 npm 命令升级"的提示对 App 用户是错的，改由更新器接管；浏览器 / npm 用户不受影响。⑤ **自动更新的启用时机**：从**本版（0.21.0，第一个带更新器的版本）起**才开始生效——0.21.0 及以后的 App 才会自己检查并升到更新版本；已装 0.20.0 的用户需手动下载一次 0.21.0（或之后任意带更新器的版本），此后即可自动更新。⑥ **验证**：无签名构建确认产出 dmg + zip + `latest-mac.yml` + 内嵌 `app-update.yml`；打包 `--smoke` 启动正常（更新器在旧 Release 缺 yml 时出错但被吞掉、不影响窗口加载）；全套 spec 全绿；发布后跑打包 App 确认对最新 Release 报 `update-not-available`（更新源连通、解析正确）。⑦ 目前仍只 arm64；Intel / 通用二进制、Windows 待后续。
 
 - **0.20.0** (2026-09-01) — 新增**桌面 App（macOS）**这条面向非技术用户的分发渠道，并同步官网。npm 渠道（`atlas` CLI）完全不变，只是多了一种"下载 DMG 双击装"的选择。① **为什么**：`npm i -g` 对不熟悉终端的用户门槛太高（要先装 Node、全程命令行、首次配置也是问答式）。桌面 App 自带运行时、图形化启动，且以独立窗口取代浏览器 tab——顺带绕开了"tab 开多了打不开文档"那个同源连接上限问题。② **架构（`electron/`，不动 `server.js` 与现有测试）**：Electron 外壳复用现有 Node 服务——用 `ELECTRON_RUN_AS_NODE` 以纯 Node 模式派生 `server.js`（不额外打包 Node 运行时），窗口加载 `http://127.0.0.1:<随机端口>`；与 CLI 共用 `~/.atlas` 配置与 store，若已有 `atlas start` 守护进程在跑则直接复用、不起第二个 server（避免两个进程抢写 store.json）。因为派生走纯 Node、读不了 asar，构建刻意设 `asar: false` 让 `server.js`/`lib`/`public`/`node_modules` 以普通文件躺在包里。③ **菜单栏托盘**：单色模板图标（自动适配浅/深色菜单栏）+「打开 / 退出」菜单；mac 习惯——关窗留 dock+托盘、Cmd+Q 才真正退出并收掉自起的 server。④ **PDF 导出改用内置 Chromium 的 `printToPDF`**：不再依赖用户本机装没装 Chrome/Edge。做法是**新增** `POST /api/export-pdf-html`（只复用现有渲染逻辑产出打印版 HTML、不 spawn 浏览器），主进程用隐藏窗口加载后 `printToPDF` 存到 Downloads；**刻意不动**老的 `/api/export-pdf` SSE + `lib/pdf-export.js` 路径——浏览器与 npm 用户照旧走系统 Chromium，`md-pdf-export.spec.js` 零回归。前端 `btnExportPdf` 仅在 `window.atlasDesktop`（preload 暴露的极小桥）存在时才走桌面路径。⑤ **签名 + 公证**：electron-builder 用 Developer ID Application 证书签名、硬化运行时（`entitlements.mac.plist` 放开 `allow-dyld-environment-variables`，否则硬化运行时会拦掉带 `ELECTRON_RUN_AS_NODE` 的子进程）、`notarytool` 公证并 staple，App 与 DMG 都过。产出 `Atlas-mac-arm64.dmg`（固定名，配合 GitHub Release 的 `/latest/download/` 稳定链接）。⑥ **官网 `docs/index.html`**：新增下载区，讲清两种安装方式（下载 DMG / `npm i -g`），DMG 按钮指向 Release 的 latest 下载链接。⑦ **验证**：全套 spec 全绿（未动已发布文件的行为）；桌面侧另验了 `--smoke` 启动、隔离 spawn、签名+硬化运行时下的 spawn、以及 PDF 全链路（合法 `%PDF-`、含 mermaid 图与表格）。⑧ **本版只有 arm64（Apple Silicon）DMG**；Intel/通用二进制与 Windows、以及桌面 App 的自动更新（electron-updater）留待后续。⑨ **发版流程新增**：签名公证凭据放在本机 gitignored 的 `electron/build/notarize.env`（`source` 后 `npm run app:build`），Team ID/证书从钥匙串读；CI 见 `.github/workflows/release-app.yml`（需在仓库配好 mac 签名/公证 secrets）。
 

@@ -12,8 +12,9 @@
 //
 // --smoke：无界面自检模式，加载成功打印 ATLAS_SMOKE_OK 并退出，供自动化验证。
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
+const { autoUpdater } = require('electron-updater');
 const serverManager = require('./server-manager');
 const pdf = require('./pdf');
 
@@ -102,6 +103,43 @@ async function boot() {
   }
   createWindow();
   if (!isSmoke) createTray();
+  setupAutoUpdate();
+}
+
+// 自动更新（electron-updater + GitHub Releases）：检测新版本 → 后台下载 → 提示重启安装。
+// 只在打包后的 App 里跑（dev / npm run app 没有 app-update.yml，直接跳过）；
+// 任何错误只记日志、不影响 App 正常使用。更新源即本仓库的 GitHub Releases（读 latest-mac.yml）。
+function setupAutoUpdate() {
+  if (!app.isPackaged) return;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = {
+    info: (m) => console.log('[updater]', m),
+    warn: (m) => console.warn('[updater]', m),
+    error: (m) => console.error('[updater]', m),
+    debug: () => {},
+  };
+
+  autoUpdater.on('error', (err) => console.error('[updater] error:', err && err.message ? err.message : err));
+  autoUpdater.on('update-available', (info) => console.log('[updater] 有新版本:', info && info.version));
+  autoUpdater.on('update-not-available', () => console.log('[updater] 已是最新'));
+  autoUpdater.on('update-downloaded', async (info) => {
+    const win = mainWindow || BrowserWindow.getAllWindows()[0] || undefined;
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'info',
+      buttons: ['立即重启更新', '稍后'],
+      defaultId: 0,
+      cancelId: 1,
+      message: `Atlas ${info && info.version ? info.version : ''} 已下载`,
+      detail: '重启后即用上新版本；也可以稍后退出 App 时自动完成更新。',
+    });
+    if (response === 0) { quitting = true; autoUpdater.quitAndInstall(); }
+  });
+
+  const check = () => autoUpdater.checkForUpdates()
+    .catch((e) => console.error('[updater] 检查失败:', e && e.message ? e.message : e));
+  check();                                   // 启动即查一次
+  setInterval(check, 3 * 60 * 60 * 1000);    // 之后每 3 小时查一次
 }
 
 // PDF 导出：前端 window.atlasDesktop.exportPdf({ path, fileName }) → 主进程用内置 Chromium 打印

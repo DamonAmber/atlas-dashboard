@@ -6270,6 +6270,8 @@ function bindUpdateBannerOnce() {
 }
 
 function showUpdateUI(current, latest) {
+  // 桌面 App 有自己的自动更新（electron-updater），这条"npm i -g 升级"的提示对它是错的，直接不显示
+  if (window.atlasDesktop && window.atlasDesktop.isDesktop) return;
   if (!latest) return;
   // 顶栏小标签——常驻提示，关掉 banner 后仍可见
   els.updateBadge.classList.remove('hidden');
