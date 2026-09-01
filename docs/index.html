@@ -900,6 +900,15 @@
     }
     .feat h3 .feat-ico svg { width: 14px; height: 14px; }
     .feat p { margin: 0; color: var(--text-mute); font-size: 14px; line-height: 1.62; }
+    .feat-group { margin-top: 34px; }
+    .feat-group:first-of-type { margin-top: 0; }
+    .feat-group-title {
+      display: flex; align-items: center; gap: 12px;
+      margin: 0 0 14px;
+      font-size: 12px; font-weight: 650; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--text-faint);
+    }
+    .feat-group-title::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
 
     /* =========================================
        Steps (3 columns)
@@ -1215,288 +1224,119 @@
 <section id="features" class="reveal">
   <div class="wrap">
     <h2>它能做什么</h2>
-    <p class="sec-lede">围绕"看 HTML / Markdown 文档"做到底。每一个细节都为减少打扰服务。</p>
-    <div class="features">
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M2 3.5h12M2 8h12M2 12.5h12"/>
-              <path d="M6 3.5v9"/>
-            </svg>
-          </span>
-          Mermaid 图表与数学公式
-        </h3>
-        <p>AI 写的架构说明、时序、流程几乎默认用 <code>```mermaid</code>，推导和指标定义常带 <code>$…$</code>。这些以前在 Atlas 里只是一段灰色代码和一串美元符号——现在<strong>图表渲染成图，公式交给 KaTeX</strong>（<code>$…$</code> / <code>$$…$$</code> / <code>\(…\)</code> / <code>\[…\]</code> 都认）。<br><strong>渲染失败一定可读</strong>：图表语法写错时显示 mermaid 的原始报错（好让你知道该让 AI 改哪一行），源码仍在原处；公式渲染不出来就显示原文。不会出现空白框。渲染好的图右上角有<strong>「源码」开关</strong>，随时切回去核对节点关系。<br><strong>不会把价格当公式</strong>：<code>单价 $5，折后 $4</code> 这类句子原样显示。<strong>按需加载</strong>：没有图表 / 公式的文档一个字节都不下载（mermaid 有 3.5MB）；库全在本地，离线可用。只读预览、编辑器的实时预览、导出的 PDF 与局域网分享页，四条路径一致生效。</p>
+    <p class="sec-lede">只做一件事：让你轻松看完 AI 散落各处的 HTML / Markdown，并一眼认出哪些变了、还没看。按用途分成五组。</p>
+
+    <div class="feat-group">
+      <div class="feat-group-title">看文档</div>
+      <div class="features">
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h5.5L13 6v7.5a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5z"/><path d="M9 2.5V6h4"/><path d="M5.5 8.5h5M5.5 10.5h5"/></svg></span>HTML + Markdown 双模</h3>
+          <p>默认扫描 HTML 与 Markdown，另可选开 CSV / JSON / 文本 / SVG，各自渲染成干净可读的样子。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3.5h12M2 8h12M2 12.5h12"/><path d="M6 3.5v9"/></svg></span>Mermaid 图表与公式</h3>
+          <p><code>```mermaid</code> 渲染成图、<code>$…$</code> 交给 KaTeX；出错显示原始报错而非空白，按需加载、离线可用。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h10M3 8h7M3 12h9"/></svg></span>精排的 Markdown</h3>
+          <p>本地图片、任务列表、代码块复制、GFM 提示块、可折叠目录、三档阅读宽度、规整表格，一应俱全。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 3 3.8v4c0 3.07 2.07 5.6 5 6.67 2.93-1.07 5-3.6 5-6.67v-4z"/><path d="m5.9 7.9 1.6 1.6 2.7-2.9"/></svg></span>HTML 沙箱预览</h3>
+          <p>AI 写的 HTML 默认隔离在沙箱里预览，脚本能跑却碰不到你的数据；需要更多能力时点盾牌按篇信任。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1v8M5 6.5 8 9.5l3-3M2.5 12.5h11"/></svg></span>导出 PDF</h3>
+          <p>一键把 HTML / Markdown 导出为布局保真的 PDF，存到 Downloads；桌面版用内置渲染器，无需另装浏览器。</p>
+        </div>
       </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M8 1.8 3 3.8v4c0 3.07 2.07 5.6 5 6.67 2.93-1.07 5-3.6 5-6.67v-4z"/>
-              <path d="m5.9 7.9 1.6 1.6 2.7-2.9"/>
-            </svg>
-          </span>
-          HTML 沙箱预览与信任分级
-        </h3>
-        <p>预览用的是 Atlas 自己那个源上的 iframe，而里面那份 HTML 是 AI 写的。同源意味着它的脚本能调 Atlas 的接口——<strong>改写磁盘上别的文档、开局域网分享链接、读扫描根配置</strong>。所以现在 HTML <strong>默认在沙箱里预览</strong>：保留 <code>allow-scripts</code>，文档自己的图表、交互、动画照常运行；但不给 <code>allow-same-origin</code>，它的源变成 opaque，碰不到 Atlas 的任何数据。<br>代价是那几项需要注入的能力用不了（预览内编辑、正文命中高亮、快捷键转发、滚动位置恢复）。需要时点顶栏的<strong>盾牌</strong>信任这一篇，立刻切回同源、能力全部恢复——点编辑按钮时也会直接问你要不要信任。信任按文件记住。<br>Markdown / CSV / JSON / 文本 / SVG 的预览页是 Atlas 自己渲染的，内容全部转义过，<strong>不走沙箱</strong>。设置 → 安全 里另有全局开关与「清空单篇信任记录」。服务端还有第二道锁：<strong>写类接口校验 Origin</strong>，沙箱文档、别的站点、本机其它端口的页面都会被挡掉。</p>
+    </div>
+
+    <div class="feat-group">
+      <div class="feat-group-title">追踪 AI 的改动</div>
+      <div class="features">
+        <div class="feat">
+          <h3><span class="feat-ico" style="color:var(--unread)"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="3"/></svg></span>未读红点</h3>
+          <p>AI 改过的文档亮红点、看完即清，并按新鲜度分两档——几百篇里也一眼看出刚动过的那几个。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg></span>版本对比与回退</h3>
+          <p>和你上次看到的那一版逐行 diff（以内容为准，不只看时间）；保留最近 5 版，可对比、可一键回退。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7 8 2.5 13.5 7V13a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5z"/></svg></span>首页概览</h3>
+          <p>没打开文档时，首页直接回答"AI 又改了哪些"：今天改过、待看队列、最近与收藏一屏看全。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v1M8 4a4 4 0 014 4v3l1 2H3l1-2V8a4 4 0 014-4z"/><path d="M6.5 14a1.5 1.5 0 003 0"/></svg></span>桌面通知</h3>
+          <p>文档新增 / 修改时弹一条系统通知，设置里一键开关。</p>
+        </div>
       </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M4 2.5h5.5L13 6v7.5a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5z"/>
-              <path d="M9 2.5V6h4"/>
-              <path d="M5.5 8.5h5M5.5 10.5h5"/>
-            </svg>
-          </span>
-          HTML + Markdown 双模（另有四种可选）
-        </h3>
-        <p>不止 HTML——设置里勾选文档类型，<strong>HTML 与 Markdown 可同时扫描共存</strong>（默认就是这两种），目录树用紧凑的类型 icon 区分并把更多空间留给标题。<br>另有<strong>四种可选开启</strong>：<code>.csv</code>/<code>.tsv</code> 渲染成可读表格（数字列自动右对齐，解析按 RFC 4180 来——字段里的逗号、换行、<code>""</code> 转义都不会把行切错，分隔符还会自动嗅探）、<code>.json</code> 重新缩进并语法高亮（<strong>不合法的 JSON 不白屏</strong>，报出出错行列再按原文显示）、<code>.txt</code> 等宽排版、<code>.svg</code> 以 <code>&lt;img&gt;</code> 安全展示。它们<strong>默认关闭</strong>：AI 顺手导出的数据文件通常比正文多得多，全打开会把目录树冲淡、未读红点跟着失真，而红点的价值全在于稀缺。这四种在 Atlas 里只读，但未读红点、版本对比、收藏、标签、⌘K、全文搜索、局域网分享、导出 PDF 都照常可用。Markdown 内建渲染预览：<strong>本地相对路径的图片正常显示</strong>、YAML front matter 渲染成安静的元信息块、代码块带语言标签与一键复制、<code>- [ ]</code> 任务列表是真复选框、标题 hover 出锚点、<strong>跟随系统深浅色</strong>；长文档自动带可折叠侧边目录（层级折叠、平滑跳转、滚动高亮当前章节，<strong>宽度可拖拽</strong>并记住，标题长的文档不必再忍受截断）。<br><strong>右上角三档阅读宽度</strong>：推荐（约每行 54 字）/ 加宽 / 占满全屏，点一下就换（也可以按 <kbd>[</kbd> <kbd>]</kbd> 逐档调），记住后跨文档保持——十几列的数据表切到全屏一屏看全，长文回到推荐宽度读。<strong>表格按 data table 的规矩排</strong>：表头与数据列严格对齐、外框圈住边界、表头一层浅底、极淡斑马纹、行 hover、首列加重、数字按位对齐；<strong>列宽先把可用宽度用满，用完了才换行</strong>，不会出现「右边空着一半、文字却挤着换行」；实在放不下的宽表改走横向滚动，两侧边缘给出「还有内容」的提示，不会再把中文压成一列一个字。<strong>GFM 提示块</strong>（<code>&gt; [!NOTE]</code> / <code>TIP</code> / <code>IMPORTANT</code> / <code>WARNING</code> / <code>CAUTION</code>）渲染成带图标和配色的 callout，而不是一段带 <code>[!NOTE]</code> 字面量的普通引用。<br>还带一个<strong>源码 / 预览分栏编辑器</strong>：分栏宽度可拖拽、两侧滚动同步、可开侧边大纲；<strong>光标或选区落在一边，另一边会同步高亮对应的内容块</strong>（两个方向都生效，长文档里再也不用自己数对应到哪儿了）；回车自动续列表（有序列表序号自增）、<kbd>Tab</kbd> 多行缩进、<kbd>⌘B</kbd> <kbd>⌘I</kbd> <kbd>⌘K</kbd> 与一条格式工具栏、<kbd>⌘S</kbd> 保存。<strong>预览区还能直接所见即所得地改</strong>，而且只重写你真正碰过的那几个块——表格对齐、段落软换行都逐字节保留，不会给 git 留下满屏无意义 diff。编辑期间内容会自动存本地草稿，浏览器意外关闭也能恢复。</p>
+    </div>
+
+    <div class="feat-group">
+      <div class="feat-group-title">组织与查找</div>
+      <div class="features">
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4a1 1 0 011-1h3l1.5 1.5h5.5a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1V4z"/></svg></span>嵌套目录树</h3>
+          <p>按项目目录自动归类，可拖拽重排、一键全部折叠 / 展开；只在虚拟层重组，磁盘文件不动。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4"/><path d="M10 10l3 3"/></svg></span>全文搜索</h3>
+          <p>文件名 / 备注 / 路径 / 正文一起搜，多词取交集、引号锁短语；命中后正文自动高亮并逐处跳转。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M5 6h6M5 8h4M5 10h2"/></svg></span><kbd>⌘K</kbd> 快速打开</h3>
+          <p>敲几个字母模糊匹配文件名，也搜正文；键盘选中直达并滚到命中处，鼠标可以放一边。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico" style="color:var(--fav,#f0b429)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2l1.85 3.9 4.15.56-3.05 2.86.79 4.18L8 11.5l-3.74 2 .79-4.18L2 6.46l4.15-.56z"/></svg></span>收藏与标签</h3>
+          <p><strong>☆</strong> 收藏跨文件夹聚到一处；给文件打标签后可按标签筛选，多标签取交集。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6.5h6M5 9h4"/></svg></span>多扫描根 & 归档</h3>
+          <p>设置里可视化增删扫描目录、即时生效；暂时不看的项目分组可归档隐藏，磁盘文件不动、随时恢复。</p>
+        </div>
       </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M2 4a1 1 0 011-1h3l1.5 1.5h5.5a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1V4z"/>
-            </svg>
-          </span>
-          嵌套目录树
-        </h3>
-        <p>按一级项目目录自动归类。手动新建子分组、拖拽文件 / 分组重排。<strong>拖到折叠 folder 头上停留 600ms 自动展开</strong>，让你直接拖进去。物理文件位置不动，只在虚拟层重组。<br>分组多到要滚半天时，「全部文档」标题栏右侧有<strong>全部折叠 / 全部展开</strong>——一个按钮两个状态，先收成一屏再点开要看的那个，不用一个个关。<br>hover 自动归类的分组会出现<strong>在访达中显示</strong>，直接跳到它对应的磁盘目录（手工建的虚拟分组没有对应目录，不显示这个按钮）。<br><strong>重命名是稳的</strong>：自动分组内部带一个与项目目录绑定的身份标记，改过名之后即使分组临时变空（AI 覆盖写文件时会先删再建）、被归档再恢复，名字都不会被自动名顶替。<br>不想看的项目分组可以"归档"——下次扫描跳过它，但磁盘文件不动；设置面板里随时恢复。<strong>归档的分组也不再参与未读统计</strong>，树里看不见的文档不会挂在底栏那行数字上。</p>
+    </div>
+
+    <div class="feat-group">
+      <div class="feat-group-title">编辑与分享</div>
+      <div class="features">
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L6 12l-2.5.5L4 10z"/><path d="M10.5 3.5l2 2"/></svg></span>预览区轻量编辑</h3>
+          <p>点「编辑」直接在预览里改文案、拖动排序、改链接；保存只重写你碰过的块，写前自动备份。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.5"/><line x1="8" y1="3" x2="8" y2="13"/></svg></span>Markdown 分栏编辑器</h3>
+          <p>源码 / 预览分栏、滚动同步、双向块高亮，<kbd>⌘B</kbd> <kbd>⌘I</kbd> <kbd>⌘S</kbd> 与自动草稿恢复。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l4-2M6 9a2 2 0 1 1-4 0 2 2 0 0 1 4 0M10 7a2 2 0 1 1 0-4 2 2 0 0 1 0 4M10 13a2 2 0 1 1 0-4 2 2 0 0 1 0 4M6 9l4 2"/></svg></span>局域网分享 + 二维码</h3>
+          <p>hover 出 🔗 生成带 token 的链接、弹二维码手机扫码即看；默认 2 小时失效，只放行文档引用到的资源。</p>
+        </div>
       </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M11.5 2.5l2 2L6 12l-2.5.5L4 10z"/>
-              <path d="M10.5 3.5l2 2"/>
-            </svg>
-          </span>
-          预览区轻量编辑
-        </h3>
-        <p>点工具栏「编辑」即可在预览里<strong>直接改文案、拖动列表项 / 同类卡片排序</strong>，所见即所得。点入链接文字会浮出小编辑条，可<strong>顺便改超链接地址</strong>。鼠标移到可编辑文字上有优雅的高亮提示；脚本、图表、代码块等有风险的内容自动锁定不可编辑。<br>保存只改动你碰过的那几处源码、其余字节原样不动，<strong>绝不会把图表烤坏或打乱格式</strong>；写前自动备份，取消即还原。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico" style="color:var(--unread)">
-            <svg viewBox="0 0 16 16" fill="currentColor">
-              <circle cx="8" cy="8" r="3"/>
-            </svg>
-          </span>
-          未读红点
-        </h3>
-        <p>AI 改过哪个文档，文件名后立即出红点。点开预览即清除——精准锁定"还没看过"的内容。<br><strong>红点按新鲜度分两档</strong>：24 小时内改动过的是红点加粗，更早的降级成灰点常规字重。文档攒到几百篇时整列全红等于没有信号，分档之后"AI 刚动过哪几个"才扫得出来（两档都算未读，筛选和计数不受影响）。<br>红点只说"变了"，那"变了什么"呢？顶栏的<strong>对比</strong>按钮会拿当前内容和<strong>你上次看到的那一版</strong>逐行 diff：绿色新增、红色删除、中间没动的大段自动折叠。<br><strong>保留最近 5 版，可挑任意一版对比、也能回退</strong>：面板顶部的下拉列出留存的历史版本（带时间，与当前内容相同的那版会标出来），选中后点「回退到这一版」就把磁盘上的文件改回去，写入前自动备份。默认对比的是"最近一个内容不同的版本"——打开文档这个动作本身会记一份底本，直接拿它当基准只会得到空 diff。<br>顶栏那个"有改动"的高亮<strong>以内容为准，不只看修改时间</strong>：AI 用相同内容重新生成一遍文档（或 <code>touch</code>、网盘同步）会让 mtime 前进但内容没变，这种情况不再亮起提示。底本存在 <code>~/.atlas/versions/</code>。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M8 2v1M8 14v-1M3.5 8H2.5M13.5 8h-1M8 4a4 4 0 014 4v3l1 2H3l1-2V8a4 4 0 014-4z"/>
-            </svg>
-          </span>
-          桌面通知
-        </h3>
-        <p>文档新增 / 修改时弹系统通知。设置面板一键开关，浏览器原生 Notification API + chokidar + SSE。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M11 3l2 2-7 7H4v-2l7-7zM10 4l2 2"/>
-            </svg>
-          </span>
-          备注名
-        </h3>
-        <p>给文件起一个你能记住的别名。原文件名不变。备注存在 Atlas 自己的存储里，零侵入扫描目录。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M2.5 12V4a1 1 0 011-1h2l1.5 1.5h5.5a1 1 0 011 1V12a1 1 0 01-1 1h-9a1 1 0 01-1-1z"/>
-              <path d="M9 9.5l1.5-1.5L9 6.5"/>
-            </svg>
-          </span>
-          在访达 / 资源管理器中显示
-        </h3>
-        <p>每个文件一键定位。macOS 用 <code>open -R</code>、Windows <code>explorer /select</code>、Linux <code>xdg-open</code>，跨平台一致。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="2" y="3" width="12" height="10" rx="1.5"/>
-              <line x1="6" y1="3" x2="6" y2="13"/>
-            </svg>
-          </span>
-          收侧栏 + 拖拽调宽
-        </h3>
-        <p>侧边栏宽度可拖拽调整，<kbd>⌘B</kbd> 一键收起。iframe 不会因为侧栏切换而抖动——动画曲线经过精心调优。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-              <circle cx="7" cy="7" r="4"/>
-              <path d="M10 10l3 3"/>
-            </svg>
-          </span>
-          全文搜索 + 高亮跳转
-        </h3>
-        <p>搜索框同时匹配文件名 / 备注 / 路径 / 项目名 / <strong>文档内容</strong>。中文单字（"灯"）也能搜。<strong>空格分隔多个关键词按"都要出现"过滤</strong>（<code>配网 转化率</code>），要整段短语就用引号（<code>"error rate"</code>）。打开命中文件后 iframe 内所有关键词自动高亮，顶栏出现 <kbd>X / N</kbd> 跳转栏，<kbd>Enter</kbd> / <kbd>Shift+Enter</kbd> 上下跳。<kbd>/</kbd> 一键聚焦搜索框。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="2" y="3" width="12" height="10" rx="1.5"/>
-              <path d="M5 6h6M5 8h4M5 10h2"/>
-            </svg>
-          </span>
-          键盘导航
-        </h3>
-        <p><kbd>⌘K</kbd> 唤出<strong>快速打开</strong>：敲几个字母模糊匹配文件名 / 备注 / 项目（<code>aprt</code> 能命中 <code>api-report</code>），<kbd>↑↓</kbd> 选、<kbd>Enter</kbd> 直接打开。<br><strong>不记得文件叫什么也没关系——它同时搜正文。</strong>文件名匹配排在最前，文件名没命中但正文里有的另成一组「正文命中」，每条带上下文摘要（关键词已标出）和这篇里出现了几处。选中回车，预览会<strong>直接滚到第一处并高亮</strong>，顶栏出现 <code>n / m</code>，用 ▲▼ 继续在命中处之间跳。AI 生成的报告文件名常常很泛（一堆 <code>README.md</code>），你记得的往往是「某篇里提过转化率」——这条路径就是为它准备的。<br>也可以走侧栏：搜索框按 <kbd>↓</kbd> 进入文件列表，<kbd>↑↓</kbd> 切换，<kbd>Enter</kbd> 打开，<kbd>Esc</kbd> 回搜索框。<kbd>Tab</kbd> 焦点锁在弹窗面板内。完全的键盘流，鼠标可以放一边。<br><kbd>Esc</kbd> 是一条<strong>由近及远的退出阶梯</strong>：关弹窗 → 清空搜索 → 收起对比 → 回到首页。想不起来该按什么退出时，连按几下总会回到该去的地方。<br><strong>不用背——按 <kbd>?</kbd> 就有一份速查表</strong>（侧栏底部和首页也各有一个入口），按场景分组列全：全局、快速打开面板、目录树、正文命中导航、Markdown 预览（<kbd>[</kbd> <kbd>]</kbd> 调阅读宽度）、Markdown 编辑器、分栏条、重命名。打开文档后照样能查。<br>而且<strong>焦点落在预览的文档正文里时，<kbd>⌘K</kbd> / <kbd>⌘B</kbd> 一样有效</strong>——预览是一份独立文档，键盘事件本来不会传到外壳，Atlas 会把这几个和弦转发过来，省掉「先点一下侧栏再按」这一步。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="8" cy="8" r="6"/>
-              <path d="M8 4v4l2.5 1.5"/>
-            </svg>
-          </span>
-          最近打开
-        </h3>
-        <p>侧栏顶部固定一个最近 10 个文件的 LRU 快捷栏，跨项目跳转秒回，可折叠。点过的文件优先显示在最上面。<br>分区头右侧的<strong>清除</strong>一键清空这份浏览记录（会先确认）——只清列表本身，未读红点、收藏和标签都不动。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico" style="color:var(--fav,#f0b429)">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M8 2l1.85 3.9 4.15.56-3.05 2.86.79 4.18L8 11.5l-3.74 2 .79-4.18L2 6.46l4.15-.56z"/>
-            </svg>
-          </span>
-          收藏夹
-        </h3>
-        <p>常看的那几篇文档往往散落在不同项目里，每次都要展开好几个分组去翻。点文件行左侧的 <strong>☆</strong>（或预览时用顶栏的星标按钮）即收藏，侧栏「收藏」区把它们<strong>跨文件夹聚到一处</strong>，按最近收藏排序，一眼可达。可折叠，条目上 ✕ 即取消。收藏记在 Atlas 自己的存储里，重命名文件也会跟着走。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2 2 7l10 5 10-5z"/><path d="m2 12 10 5 10-5"/><path d="m2 17 10 5 10-5"/>
-            </svg>
-          </span>
-          首页概览
-        </h3>
-        <p>没打开文档时，右侧不再是一块空白。<strong>首页直接回答"AI 又改了哪些文档"</strong>：文档总数 / <strong>今天改过</strong> / 待看 / 项目数四个数字，加上按修改时间倒序的<strong>待看队列</strong>、最近打开、收藏三张卡片，点一行就进文档——不用再去目录树里找红点。四个数字里只有「今天改过」会标红：未读会一直累积到几百篇，一个永远亮着的三位数不是警报。<br>看完一篇想回到这屏概览，<strong>三个入口随便挑</strong>：面包屑最左边的「⌂ 首页」、侧栏左上角的 Atlas logo，或者按 <kbd>Esc</kbd>。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 3a6.5 6.5 0 0 0 9 9 9 9 0 1 1-9-9z"/>
-            </svg>
-          </span>
-          深浅色主题可固定
-        </h3>
-        <p>默认跟随系统。如果系统在自动切换而你只想要一种配色，到 ⚙ 设置 → 外观与通知里选<strong>跟随系统 / 浅色 / 深色</strong>。选项会记住，<strong>连 Markdown 预览页也一起钉住</strong>，不会出现"外壳浅色、正文深色"的割裂。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M2.5 7.2V3.5a1 1 0 0 1 1-1h3.7a1 1 0 0 1 .7.3l5.4 5.4a1 1 0 0 1 0 1.4l-3.7 3.7a1 1 0 0 1-1.4 0L2.8 7.9a1 1 0 0 1-.3-.7z"/>
-              <circle cx="5.6" cy="5.6" r="1"/>
-            </svg>
-          </span>
-          标签 + 按标签筛选
-        </h3>
-        <p>目录树是一个文件只能待在一个地方，但"周报""待评审""要归档"这些维度是交叉的。hover 文件 → <strong>标签按钮</strong> → 逗号分隔输入即可（<code>周报, 待评审, AI</code>），大小写重复会自动合并。侧栏随之出现一个「标签」区，<strong>按用量排序并带计数</strong>，点一下只看该标签的文档；<strong>选多个标签是"同时具备"</strong>，还能和搜索、"仅未读"叠加继续收窄。区块头显示「已选 / 总数」，标签攒多了可以<strong>整块收起</strong>（状态记住）——收起后计数变成蓝色，提醒你树还是被过滤过的，不是文档丢了。清空输入并确定即删除全部标签。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="8" cy="8" r="2"/>
-              <path d="M8 1v2M8 13v2M15 8h-2M3 8H1M12.95 3.05l-1.41 1.41M4.46 11.54l-1.41 1.41M12.95 12.95l-1.41-1.41M4.46 4.46L3.05 3.05"/>
-            </svg>
-          </span>
-          多扫描根
-        </h3>
-        <p>设置面板里增删扫描根目录，立即生效。<strong>"浏览…"按钮可视化选择文件夹</strong>，不用手输绝对路径。增删成功 / 重复添加 / 失败都会在右下角弹出 toast 提示，不再静默无感。配置存在 <code>~/.atlas/</code>，永远不会写入你扫描的项目。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M8 1v9M5 7l3 3 3-3M2 12h12v2H2z"/>
-            </svg>
-          </span>
-          一键自升级
-        </h3>
-        <p>新版本发布后 1 小时内自动推送到你所有打开的 tab——Dashboard 顶栏下方弹一条醒目 banner，点 <strong>立即更新</strong> 即可全程不碰终端：实时进度条、可展开 npm 日志、安装完成自动重启 + 重连刷新。失败也能在界面里看到错误原因，再点重试。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M3 4h10M3 8h7M3 12h4"/>
-              <path d="M14 8l-3 3 3 3"/>
-            </svg>
-          </span>
-          灵活排序
-        </h3>
-        <p>侧边栏一行 segmented control 切换三种模式：<strong>按名称</strong>（默认，系列文档自然聚合在一起）/ <strong>按更新时间</strong> / <strong>自定义</strong>。直接拖动文件就自动切到自定义模式——不用先选模式再拖。选择跨会话保留。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M5 1.5h4.5L13 5v9.5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V2.5a1 1 0 0 1 1-1z"/>
-              <path d="M9 1.5V5h4"/>
-              <path d="M6.5 8.5h3M6.5 11h3"/>
-            </svg>
-          </span>
-          导出 PDF
-        </h3>
-        <p>顶栏一键导出当前文档为 PDF——<strong>HTML 与 Markdown 都支持</strong>，后端调本机 Chrome / Edge / Brave headless 渲染，<strong>布局 100% 保真</strong>（不是 html2canvas 那种像素截图）。Markdown 走专门的打印版排版：不带目录侧栏、配色钉回浅色（深色系统下不会导出一张墨黑的纸）、标题不吊在页尾、代码块与表格尽量不被跨页切断、外链把地址打印出来，<strong>塞不进纸宽的宽表会自动收紧字号而不是被纸边裁掉右边几列</strong>。带阶段进度条：启动 → 渲染 → 写入。一键直保存到 Downloads，toast 里直接"在访达中显示"。没装 chromium 系浏览器自动降级到打印对话框。<br><strong>几秒就回来</strong>：Chrome 把 PDF 写完之后并不会自己退出，此前每次导出都要白等到超时上限；现在一检测到文件写完（尾部出现 PDF 的结束标记）就主动收掉它，实测 2~4 秒返回。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M8 3a5 5 0 0 0-4.546 2.916M14.5 7.75v.5l1.22-1.22M14.5 8.25A6.5 6.5 0 0 1 1.5 8.25v-.5"/>
-              <path d="M14.5 7.75l-2.5 2.5l-2.5-2.5"/>
-            </svg>
-          </span>
-          单文档刷新
-        </h3>
-        <p>预览中的 HTML 在外部被 AI 重新生成？顶栏单独一个刷新按钮重载当前 iframe——不刷整个 Dashboard，<strong>树展开、滚动、最近列表全保留</strong>。刷新后顺便把红点清掉，相当于"我看了这次更新"。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M6 9l4-2M6 9a2 2 0 1 1-4 0 2 2 0 0 1 4 0M10 7a2 2 0 1 1 0-4 2 2 0 0 1 0 4M10 13a2 2 0 1 1 0-4 2 2 0 0 1 0 4M6 9l4 2"/>
-            </svg>
-          </span>
-          局域网分享 + 二维码
-        </h3>
-        <p>评审现场要让同事看一份 HTML / Markdown 文档？文件行 hover 出 🔗 按钮——一键生成不可猜的 token URL，弹出大二维码同事手机扫码即看（同 Wi-Fi 即可）。<strong>Markdown 分享链接会直接展示渲染后的预览页面，而不是 Markdown 原文</strong>；顶栏 dashboard 仅本机访问。<br><strong>默认只放行这份文档真正引用到的资源</strong>（图片 / CSS / 脚本），同目录下的其它文件访问不到——分享一份报告不等于把整个目录开放出去。页面在 JS 里动态拼资源路径导致缺图时，可在面板里显式切成「同目录全部资源」。<strong>链接默认 2 小时后自动失效</strong>（可选 30 分钟 / 24 小时 / 不过期），面板实时显示剩余时间；也可以随时<strong>一键停止全部</strong>。</p>
-      </div>
-      <div class="feat">
-        <h3>
-          <span class="feat-ico">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="3" width="10" height="10" rx="1"/>
-              <path d="M6 6.5h4M6 9h4M6 11.5h2.5"/>
-            </svg>
-          </span>
-          归档分组
-        </h3>
-        <p>有些项目暂时不想看到？删除一个项目分组不再"删了又自动回来"——而是进入"已归档"，下次扫描跳过。磁盘上 HTML 文件不会被删，<strong>设置面板里随时一键恢复</strong>。</p>
+    </div>
+
+    <div class="feat-group">
+      <div class="feat-group-title">顺手的细节</div>
+      <div class="features">
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="12" height="8" rx="1.5"/><path d="M4.5 7h.01M7 7h.01M9.5 7h.01M4.5 9.5h7"/></svg></span>全键盘操作</h3>
+          <p><kbd>⌘K</kbd> 快速打开、<kbd>/</kbd> 聚焦搜索、<kbd>Esc</kbd> 逐级退出、<kbd>?</kbd> 出速查表——完整键盘流。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3 5.5 5.5 0 1 0 13 9.5z"/></svg></span>深浅色主题</h3>
+          <p>默认跟随系统，也可固定浅 / 深色，Markdown 预览页一起钉住，不会外壳浅、正文深。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h10M3 8h6M3 12h4"/><path d="M13 7.5l-2.5 2.5 2.5 2.5"/></svg></span>自动更新</h3>
+          <p>桌面 App 自动检查并安装新版本；npm 版在界面里一键自升级，全程不碰终端。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7.2V3.5a1 1 0 0 1 1-1h3.7a1 1 0 0 1 .7.3l5.4 5.4a1 1 0 0 1 0 1.4l-3.7 3.7a1 1 0 0 1-1.4 0L2.8 7.9a1 1 0 0 1-.3-.7z"/><circle cx="5.6" cy="5.6" r="1"/></svg></span>备注名与定位</h3>
+          <p>给文件起个记得住的别名（不改原文件名）；一键在访达 / 资源管理器里定位到磁盘位置。</p>
+        </div>
       </div>
     </div>
   </div>
