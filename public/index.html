@@ -222,6 +222,7 @@
           <button class="match-nav" id="match-prev" type="button" title="上一处（Shift+Enter）" aria-label="上一处匹配">▲</button>
           <span class="match-text">0 / 0</span>
           <button class="match-nav" id="match-next" type="button" title="下一处（Enter）" aria-label="下一处匹配">▼</button>
+          <button class="match-close" id="match-close" type="button" title="清除文档内的搜索高亮（Esc）" aria-label="清除搜索高亮"><svg class="ico" width="11" height="11" aria-hidden="true"><use href="#i-x"/></svg></button>
         </div>
         <a id="update-badge" class="update-badge hidden" href="#" title="点击查看升级命令" role="button" tabindex="0">
           <span class="dot"></span>
@@ -318,8 +319,26 @@
       <pre class="ub-log" aria-live="polite"></pre>
     </div>
 
+    <!-- 多 Tab 标签栏：打开多个文档时出现，每个文档一枚常驻标签（默认隐藏，无 Tab 时不占位）。
+         标签内容由 app.js 的 renderTabs() 渲染，每枚标签对应 .preview 里一个常驻 iframe。 -->
+    <div class="tab-bar hidden" id="tab-bar" role="tablist" aria-label="打开的文档标签"></div>
+
     <div class="preview">
-      <iframe id="preview" title="预览"></iframe>
+      <!-- 预览 iframe 不再是单例：每个 Tab 一个 .preview-frame，由 app.js 动态创建，
+           只有当前 Tab 的那个可见。els.preview 始终指向当前活动 Tab 的 iframe。 -->
+
+      <!-- 文档内查找栏（⌘F）：浮在预览右上角，默认隐藏。搜当前文档正文并高亮，
+           ↑↓ / Enter 在命中处间跳。逻辑复用 iframe 高亮，见 app.js 的 find 部分。 -->
+      <div class="find-bar hidden" id="find-bar" role="search" aria-label="在文档内查找">
+        <svg class="ico find-ico" width="13" height="13" aria-hidden="true"><use href="#i-search"/></svg>
+        <input id="find-input" type="text" spellcheck="false" autocomplete="off"
+               placeholder="在文档内查找…" aria-label="在文档内查找" />
+        <span class="find-count" id="find-count" aria-live="polite">0/0</span>
+        <button class="find-nav" id="find-prev" type="button" title="上一处（Shift+Enter）" aria-label="上一处匹配">▲</button>
+        <button class="find-nav" id="find-next" type="button" title="下一处（Enter）" aria-label="下一处匹配">▼</button>
+        <button class="find-close" id="find-close" type="button" title="关闭查找（Esc）" aria-label="关闭查找"><svg class="ico" width="12" height="12" aria-hidden="true"><use href="#i-x"/></svg></button>
+      </div>
+
       <!-- Markdown 编辑器：源码 + 实时预览分栏（默认隐藏，编辑 md 文件时显示） -->
       <div class="md-editor hidden" id="md-editor">
         <div class="md-editor-pane">

@@ -29,6 +29,12 @@ const state = {
   trusted: new Set(),
   // 设置里的全局开关：打开后所有 HTML 都按信任处理
   trustAllHtml: false,
+  // ---- 多 Tab ----
+  // 打开的文档标签，按显示顺序。每项 { id, path, frame, loaded }：
+  //   frame  = 这个 Tab 专属的常驻 <iframe>（不销毁，切换 Tab 只是显隐）
+  //   loaded = frame 是否已经导航过一次（懒加载：恢复的 Tab 先建帧、激活时才 set src）
+  tabs: [],
+  activeTabId: null,
 };
 
 // 预览区轻量编辑模式状态
@@ -56,7 +62,12 @@ const els = {
   treeCount: document.getElementById('tree-count'),
   btnCollapseAll: document.getElementById('btn-collapse-all'),
   collapseAllIco: document.getElementById('collapse-all-ico'),
-  preview: document.getElementById('preview'),
+  // preview 不再是页面里的静态元素，而是"当前活动 Tab 的 iframe"。
+  // 由 activateTab / ensureFrameLoaded 在切换时重新指向，初始为 null。
+  // 所有既有的 els.preview.xxx 代码因此自动作用到正确的那个帧上。
+  preview: null,
+  previewArea: document.querySelector('.preview'),   // 承载各 Tab iframe 的容器
+  tabBar: document.getElementById('tab-bar'),
   emptyState: document.getElementById('empty-state'),
   homeSub: document.getElementById('home-sub'),
   homeMetrics: document.getElementById('home-metrics'),
@@ -143,6 +154,13 @@ const els = {
   updateBanner: document.getElementById('update-banner'),
   segButtons: document.querySelectorAll('.seg-btn[data-sort]'),
   matchBadge: document.getElementById('match-badge'),
+  matchClose: document.getElementById('match-close'),
+  findBar: document.getElementById('find-bar'),
+  findInput: document.getElementById('find-input'),
+  findCount: document.getElementById('find-count'),
+  findPrev: document.getElementById('find-prev'),
+  findNext: document.getElementById('find-next'),
+  findClose: document.getElementById('find-close'),
   matchPrev: document.getElementById('match-prev'),
   matchNext: document.getElementById('match-next'),
   toastContainer: document.getElementById('toast-container'),
@@ -293,8 +311,8 @@ function needsSandbox(file) {
 // 把 sandbox 属性调整到与当前文件匹配的状态。
 // 返回是否发生了变化——变了就必须重新加载 iframe：sandbox 是在文档创建时
 // 生效的，改属性对已经载入的文档没有任何作用。
-function applyPreviewSandbox(file) {
-  const ifr = els.preview;
+// 按指定帧设置 sandbox（多 Tab：每个 Tab 有独立帧，重载后台 Tab 时也要能定向设置）
+function applyPreviewSandboxTo(ifr, file) {
   if (!ifr) return false;
   const want = needsSandbox(file) ? PREVIEW_SANDBOX : null;
   const has = ifr.getAttribute('sandbox');
@@ -302,6 +320,9 @@ function applyPreviewSandbox(file) {
   if (want === null) ifr.removeAttribute('sandbox');
   else ifr.setAttribute('sandbox', want);
   return true;
+}
+function applyPreviewSandbox(file) {
+  return applyPreviewSandboxTo(els.preview, file);
 }
 
 // 顶栏盾牌按钮：只在预览原始 HTML 时出现（其它类型的预览页是 Atlas 自己渲染的，
@@ -959,13 +980,13 @@ async function fetchState() {
     state.trusted = new Set(Array.isArray(data.trusted) ? data.trusted : []);
     state.trustAllHtml = !!data.trustAllHtml;
     setSaveStatus('idle');
-    // 正在预览的文档在这次扫描后不见了（被归档 / 磁盘上被删 / 改了扫描类型）：
-    // 回首页。不做的话 iframe 会一直挂着一篇已经不在看板里的文档，顶栏按钮还全
-    // 可用，点刷新 / 分享 / 导出全是 404，而侧栏里已经找不到它了。
-    // confirmDirty:false —— 文件都没了，没什么可保存的（草稿会落到本地）
-    if (state.activeFilePath && !state.files[state.activeFilePath]) {
-      await goHome({ confirmDirty: false });
-    }
+    // 这次扫描后消失的文档（被归档 / 磁盘上被删 / 改了扫描类型）：把对应的 Tab 关掉。
+    // 不做的话那个 Tab 的帧会一直挂着一篇已经不在看板里的文档，点刷新 / 分享 / 导出
+    // 全是 404，而侧栏里已经找不到它了。若关掉的是活动 Tab，pruneDeadTabs 会自动
+    // 激活邻居或回首页；草稿由 exitEditMode 落到本地，没什么可保存的。
+    pruneDeadTabs();
+    // 首次拿到文件列表后，恢复上次打开的 Tab（只此一次）
+    restoreTabs();
     renderTagBar();
     render();
     renderRecent();
@@ -1959,12 +1980,19 @@ async function renameFileOnDisk(file) {
       showToast({ kind: 'error', text: '重命名失败', secondary: data.error || ('HTTP ' + r.status) });
       return;
     }
-    // 当前正预览 / 正编辑的就是它 → 让新路径接管，避免预览指向一个已不存在的文件
+    // 让所有指向旧路径的 Tab 接管新路径，避免 fetchState 的 pruneDeadTabs 把它
+    // 当成"文件消失"而关掉；正编辑的也把 editState.path 迁到新路径
+    const renamedTab = findTabByPath(file.path);
     const wasActive = state.activeFilePath === file.path;
     if (editState.active && editState.path === file.path) editState.path = data.path;
+    if (renamedTab) renamedTab.path = data.path;
     if (wasActive) state.activeFilePath = data.path;
     await fetchState();
-    if (wasActive && state.files[data.path]) setActiveFile(data.path, true);
+    if (renamedTab && state.files[data.path]) {
+      reloadTab(renamedTab);   // 帧当前挂在旧 /raw 路径上，强制重载到新文档
+      renderTabs();            // 标签名跟着更新
+      if (wasActive) applyActiveDocUI(state.files[data.path]);
+    }
     showToast({ kind: 'success', text: '已重命名', secondary: data.name });
   } catch (e) {
     showToast({ kind: 'error', text: '重命名失败', secondary: e.message });
@@ -2222,18 +2250,311 @@ function findFolderById(nodes, id) {
   return null;
 }
 
+// ==================== 多 Tab 文档浏览 ====================
+// 过去整个前端假设"同一时刻只有一个文档"：一个 #preview iframe、一个 activeFilePath。
+// 多 Tab 的做法是给每个打开的文档一个常驻 iframe（切 Tab 只显隐、不重载，
+// 因此滚动位置和页面内部状态都留得住），并让 els.preview 始终指向当前活动 Tab 的帧。
+// state.activeFilePath 依旧维护（= 活动 Tab 的 path），几十处读它的既有代码原样可用。
+
+let tabSeq = 0;
+function newTabId() { return 'tab-' + (++tabSeq) + '-' + Date.now().toString(36); }
+function findTabByPath(path) { return state.tabs.find(t => t.path === path) || null; }
+function getActiveTab() { return state.tabs.find(t => t.id === state.activeTabId) || null; }
+function tabBasename(path) {
+  const s = String(path || '');
+  const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+  return i >= 0 ? s.slice(i + 1) : s;
+}
+
+// 让当前活动帧独占 id="preview"（兼容既有以 #preview 定位预览的代码/测试）。
+function setActivePreviewFrameId(frame) {
+  for (const t of state.tabs) {
+    if (t.frame && t.frame !== frame && t.frame.id === 'preview') t.frame.removeAttribute('id');
+  }
+  if (frame) frame.id = 'preview';
+}
+
+// 创建某 Tab 专属的预览 iframe，挂到 .preview 容器最前（覆盖层是 absolute，
+// 永远浮在这些帧之上，DOM 顺序不影响层级）。load 事件按帧绑定。
+function createPreviewFrame() {
+  const ifr = document.createElement('iframe');
+  ifr.className = 'preview-frame hidden';
+  ifr.setAttribute('title', '预览');
+  ifr.addEventListener('load', () => onPreviewFrameLoad(ifr));
+  if (els.previewArea) els.previewArea.insertBefore(ifr, els.previewArea.firstChild);
+  return ifr;
+}
+
+// 懒加载：把 Tab 的帧导航到它的文档。只在首次激活时调用。
+function ensureFrameLoaded(tab) {
+  if (!tab || tab.loaded) return;
+  const file = state.files[tab.path];
+  if (!file) return;
+  els.preview = tab.frame;
+  applyPreviewSandboxTo(tab.frame, file);
+  tab.frame.classList.add('loading');
+  tab.frame.src = previewUrlFor(file);
+  tab.loaded = true;
+}
+
+// 强制重载某 Tab 的帧（重命名 / 回退版本后内容变了）。走 about:blank 往返，
+// 确保 sandbox flags 与新内容都重新生效。
+function reloadTab(tab) {
+  const file = tab && state.files[tab.path];
+  if (!file) return;
+  applyPreviewSandboxTo(tab.frame, file);
+  const url = previewUrlFor(file);
+  tab.frame.classList.add('loading');
+  tab.frame.src = 'about:blank';
+  requestAnimationFrame(() => { tab.frame.src = url; });
+  tab.loaded = true;
+}
+
+// 帧加载完成。只有当前活动帧才做滚动恢复 / 高亮 / 编辑绑定——后台帧正常不会
+// 在加载后仍处于非活动态（创建即激活），这里的 guard 只是防快速连点的兜底。
+function onPreviewFrameLoad(frame) {
+  if (frame !== els.preview) { frame.classList.remove('loading'); return; }
+  bindPreviewShortcutBridge();
+  if (editState.active && editState.kind === 'html') {
+    bindEditableDoc();
+    applyPendingScroll(pendingEditScroll);
+    pendingEditScroll = null;
+  } else if (pendingPreviewScrollPct != null) {
+    applyPendingScrollPct(pendingPreviewScrollPct);
+    pendingPreviewScrollPct = null;
+    updateIframeHighlight();
+  } else {
+    applyPendingScroll(pendingPreviewScroll);
+    pendingPreviewScroll = null;
+    updateIframeHighlight();
+  }
+  frame.classList.remove('loading');
+}
+
+// 在某 Tab 打开文档：已开则激活，未开则建 Tab（含帧）再激活。
+function openInTab(path) {
+  const file = state.files[path];
+  if (!file) return;
+  let tab = findTabByPath(path);
+  if (!tab) {
+    tab = { id: newTabId(), path, frame: createPreviewFrame(), loaded: false };
+    state.tabs.push(tab);
+  }
+  activateTab(tab.id);
+}
+
+// 激活某 Tab：显隐帧、切 els.preview、同步 activeFilePath、更新联动 UI。
+// 前置约定：脏改动由调用方先 confirm；这里把上一个 Tab 的编辑态还原到只读预览。
+function activateTab(id) {
+  const tab = state.tabs.find(t => t.id === id);
+  if (!tab) return;
+  if (id === state.activeTabId) {
+    // 已是活动 Tab：只保证已加载 + UI 就位（重复点同一文件不该退出其编辑态），
+    // 并兑现可能的 ⌘K 正文命中高亮（重开当前文档时）
+    ensureFrameLoaded(tab);
+    // 重标侧栏高亮：清掉键盘导航残留的 kbd-focus，避免"点了已打开的文件后
+    // 还留着另一行的 kbd-focus"造成两个被选中的视觉
+    markSidebarActive(tab.path);
+    updateIframeHighlight();
+    return;
+  }
+  // 离开上一个 Tab：编辑态还原到只读预览（返回时不至于停在编辑文档上），关掉对比面板与查找栏
+  if (editState.active) exitEditMode({ restore: true });
+  if (diffState.open) closeDiff();
+  if (findState.open) closeFind();
+
+  state.activeTabId = id;
+  state.activeFilePath = tab.path;
+  els.preview = tab.frame;
+  // 兼容层：当前活动帧始终带 id="preview"，其余帧去掉 id（保证唯一）。
+  // 这样 document.getElementById('preview') / #preview 选择器 / activeElement.id
+  // 依旧指向"当前正在看的那篇"，既有代码与测试无需改动。
+  setActivePreviewFrameId(tab.frame);
+
+  for (const t of state.tabs) t.frame.classList.toggle('hidden', t !== tab);
+  els.emptyState.classList.add('hidden');
+  els.mdEditor.classList.add('hidden');
+  document.body.classList.remove('no-active-doc');
+
+  const wasLoaded = tab.loaded;
+  ensureFrameLoaded(tab);
+  const file = state.files[tab.path];
+  if (file) applyActiveDocUI(file);
+  markSidebarActive(tab.path);
+  // 已加载的帧：内容就绪，立刻刷新高亮（含 ⌘K 正文命中的兑现）。
+  // 未加载的帧：src 刚设、还没 load，此刻兑现会把待高亮消费在空文档上——
+  // 交给 onPreviewFrameLoad 在 load 完成后再兑现。
+  if (wasLoaded) updateIframeHighlight();
+  renderTabs();
+  persistTabs();
+}
+
+// 用户触发的 Tab 切换（点标签 / 快捷键）：切走带脏改动的编辑先确认。
+async function requestActivateTab(id) {
+  if (id === state.activeTabId) return;
+  const tab = state.tabs.find(t => t.id === id);
+  if (!tab) return;
+  if (editState.active && editState.path && editState.path !== tab.path) {
+    if (!(await confirmDiscardIfDirty())) return;
+  }
+  activateTab(id);
+}
+
+// 关闭 Tab（用户手动）：若关的是正在编辑的脏文档，先确认。
+async function closeTab(id) {
+  const idx = state.tabs.findIndex(t => t.id === id);
+  if (idx < 0) return;
+  const tab = state.tabs[idx];
+  if (editState.active && editState.path === tab.path) {
+    if (!(await confirmDiscardIfDirty())) return;
+    exitEditMode({ restore: false });   // 帧即将销毁，无需恢复
+  }
+  removeTab(idx);
+}
+
+// 底层移除（不确认脏改动）：销毁帧、从列表剔除、必要时激活邻居或回首页。
+function removeTab(idx) {
+  const tab = state.tabs[idx];
+  if (!tab) return;
+  const wasActive = tab.id === state.activeTabId;
+  try { tab.frame.remove(); } catch {}
+  state.tabs.splice(idx, 1);
+  if (wasActive) {
+    const next = state.tabs[idx] || state.tabs[idx - 1] || null;
+    state.activeTabId = null;   // 让 activateTab 不把它当"已是活动 Tab"而提前返回
+    if (next) activateTab(next.id);
+    else goHome({ confirmDirty: false });
+  } else {
+    renderTabs();
+  }
+  persistTabs();
+}
+
+// 扫描后清掉那些文件已消失的 Tab（归档 / 删除 / 改扫描类型）。
+function pruneDeadTabs() {
+  for (let i = state.tabs.length - 1; i >= 0; i--) {
+    const tab = state.tabs[i];
+    if (!state.files[tab.path]) {
+      if (editState.active && editState.path === tab.path) exitEditMode({ restore: false });
+      removeTab(i);
+    }
+  }
+}
+
+// 渲染标签栏。
+function renderTabs() {
+  const bar = els.tabBar;
+  if (!bar) return;
+  const has = state.tabs.length > 0;
+  bar.classList.toggle('hidden', !has);
+  document.body.classList.toggle('has-tabs', has);
+  bar.innerHTML = '';
+  for (const tab of state.tabs) {
+    const file = state.files[tab.path];
+    const dtype = file ? docTypeOf(file) : 'html';
+    const label = file ? (file.alias || file.name) : tabBasename(tab.path);
+    const el = document.createElement('div');
+    el.className = 'tab' + (tab.id === state.activeTabId ? ' active' : '');
+    el.setAttribute('role', 'tab');
+    el.setAttribute('aria-selected', tab.id === state.activeTabId ? 'true' : 'false');
+    el.dataset.tabId = tab.id;
+    el.title = tab.path;
+    el.innerHTML =
+      `<span class="file-type-badge type-${dtype}">${file ? docTypeBadge(file) : 'HTML'}</span>` +
+      `<span class="tab-name"></span>` +
+      `<button class="tab-close" type="button" title="关闭（⌘W）" aria-label="关闭标签">${ic('x', 12)}</button>`;
+    el.querySelector('.tab-name').textContent = label;
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('.tab-close')) return;
+      requestActivateTab(tab.id);
+    });
+    el.querySelector('.tab-close').addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeTab(tab.id);
+    });
+    el.addEventListener('auxclick', (e) => {   // 中键关闭
+      if (e.button === 1) { e.preventDefault(); closeTab(tab.id); }
+    });
+    bar.appendChild(el);
+  }
+  const activeEl = bar.querySelector('.tab.active');
+  if (activeEl) activeEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+// 键盘：前后切换 / 跳到第 n 个
+function switchTabByOffset(delta) {
+  if (state.tabs.length === 0) return;
+  let idx = state.tabs.findIndex(t => t.id === state.activeTabId);
+  if (idx < 0) idx = 0;
+  const n = state.tabs.length;
+  const next = ((idx + delta) % n + n) % n;
+  requestActivateTab(state.tabs[next].id);
+}
+function focusTabByIndex(i) {   // i 从 0 起；越界则取最后一个（浏览器 ⌘9 习惯）
+  if (state.tabs.length === 0) return;
+  const idx = i >= state.tabs.length ? state.tabs.length - 1 : i;
+  const tab = state.tabs[idx];
+  if (tab) requestActivateTab(tab.id);
+}
+
+// ---- 持久化：记住上次打开的 Tab，重启 / 刷新后恢复 ----
+const OPEN_TABS_KEY = 'atlas:openTabs';
+function persistTabs() {
+  try {
+    const active = getActiveTab();
+    localStorage.setItem(OPEN_TABS_KEY, JSON.stringify({
+      paths: state.tabs.map(t => t.path),
+      active: active ? active.path : null,
+    }));
+  } catch {}
+}
+let tabsRestored = false;
+function restoreTabs() {
+  if (tabsRestored) return;
+  tabsRestored = true;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(OPEN_TABS_KEY) || 'null'); } catch { saved = null; }
+  if (!saved || !Array.isArray(saved.paths)) return;
+  const valid = saved.paths.filter(p => state.files[p]);   // 丢弃已不存在的文件
+  for (const p of valid) {
+    if (findTabByPath(p)) continue;
+    state.tabs.push({ id: newTabId(), path: p, frame: createPreviewFrame(), loaded: false });
+  }
+  if (state.tabs.length === 0) return;
+  renderTabs();
+  const activePath = (saved.active && valid.includes(saved.active)) ? saved.active : valid[0];
+  const tab = activePath ? findTabByPath(activePath) : null;
+  if (tab) activateTab(tab.id);
+}
+
+// 桌面 App：接主进程菜单/快捷键转发过来的多 Tab 命令。
+// close-tab 无可关标签时回退为关窗（符合 ⌘W 的原生预期）。
+if (window.atlasDesktop && typeof window.atlasDesktop.onMenuCommand === 'function') {
+  window.atlasDesktop.onMenuCommand((cmd) => {
+    if (cmd === 'close-tab') {
+      const at = getActiveTab();
+      if (at) closeTab(at.id);
+      else if (typeof window.atlasDesktop.closeWindow === 'function') window.atlasDesktop.closeWindow();
+    } else if (cmd === 'next-tab') {
+      switchTabByOffset(1);
+    } else if (cmd === 'prev-tab') {
+      switchTabByOffset(-1);
+    } else if (cmd === 'find-in-page') {
+      openFind();
+    }
+  });
+}
+
 // ---------- 打开文件 ----------
 async function openFile(filePath) {
   const file = state.files[filePath];
   if (!file) return;
-  // 编辑模式下切换到别的文件：先确认丢弃改动再退出编辑
-  // （放在这里而不是 setActiveFile 里：确认框是异步的，而 setActiveFile
-  //   也被 render() 以 doNavigate=false 同步调用，不该被 await 卡住）
+  // 编辑模式下切到别的文件：先确认丢弃改动（真正的退出编辑交给 activateTab，
+  // 它会把上一个 Tab 的帧恢复到只读预览，返回时不至于停在编辑文档上）
   if (editState.active && editState.path && editState.path !== filePath) {
     if (!(await confirmDiscardIfDirty())) return;
-    exitEditMode({ restore: false });
   }
-  setActiveFile(filePath, true);
+  openInTab(filePath);
 
   // 更新 recent（即时本地，server 端会通过 /api/seen 同步）
   state.recent = [filePath, ...(state.recent || []).filter(p => p !== filePath)].slice(0, 10);
@@ -2339,17 +2660,19 @@ function updateUnreadDecorations() {
   updateStats();
 }
 
-function setActiveFile(filePath, doNavigate) {
-  state.activeFilePath = filePath;
-  // 离开首页态：文档工具栏出现（CSS 靠 body.no-active-doc 收起它）
-  document.body.classList.remove('no-active-doc');
+// 侧栏树里把当前文档标为 active（树每次重建后都要重标）。
+function markSidebarActive(filePath) {
   els.tree.querySelectorAll('.file.active').forEach(e => e.classList.remove('active'));
   // 切换 active 时清除键盘焦点态，避免"两个被选中"的视觉异常
   els.tree.querySelectorAll('.file.kbd-focus').forEach(e => e.classList.remove('kbd-focus'));
+  if (!filePath) return;
   const fileEl = els.tree.querySelector(`.file[data-path="${CSS.escape(filePath)}"]`);
   if (fileEl) fileEl.classList.add('active');
+}
 
-  const file = state.files[filePath];
+// 应用"当前文档"相关的联动 UI：面包屑 + 顶栏按钮 + 收藏/对比/信任 + 沙箱提示。
+// 不负责导航 iframe——每个 Tab 的帧自己管加载，切 Tab 只显隐。
+function applyActiveDocUI(file) {
   if (!file) return;
   const aliasPart = file.alias
     ? `<span class="crumb-alias">${escapeHtml(file.alias)}</span><span class="crumb-original">（${escapeHtml(file.name)}）</span>`
@@ -2389,32 +2712,22 @@ function setActiveFile(filePath, doNavigate) {
   updateDiffButton();
   updateTrustButton();
   maybeHintSandbox(file);
+}
 
+// 兼容既有调用点：
+//   render() 重建树后用 (path, false) 重标高亮 + 刷新联动 UI；
+//   少数"内容变了要重载"的场景（重命名 / 回退版本）用 (path, true) 触发对应 Tab 的帧重载。
+function setActiveFile(filePath, doNavigate) {
+  state.activeFilePath = filePath;
+  // 离开首页态：文档工具栏出现（CSS 靠 body.no-active-doc 收起它）
+  document.body.classList.remove('no-active-doc');
+  markSidebarActive(filePath);
+  const file = state.files[filePath];
+  if (!file) return;
+  applyActiveDocUI(file);
   if (doNavigate) {
-    // 切到别的文件时关掉对比面板（面板内容是上一个文件的）
-    if (diffState.open && diffState.path !== filePath) closeDiff();
-    els.preview.classList.remove('hidden');
-    els.emptyState.classList.add('hidden');
-    // 切换前淡出，加载完成后淡入；同 url 直接显示不闪烁
-    const previewUrl = previewUrlFor(file);
-    const targetUrl = new URL(previewUrl, location.href).href;
-    // sandbox 必须在文档载入之前定好：它是创建时生效的属性，
-    // 对已经载入的文档改它没有任何作用
-    const sandboxChanged = applyPreviewSandbox(file);
-    if (els.preview.src !== targetUrl) {
-      els.preview.classList.add('loading');
-      els.preview.src = previewUrl;
-    } else if (sandboxChanged) {
-      // 同一篇文档，但信任态在别处变过了。给相同的 src 重新赋值不会触发导航，
-      // 必须真的走一次 about:blank → url 的往返，新的 sandboxing flags 才会生效
-      els.preview.classList.add('loading');
-      reloadPreviewSandboxed(previewUrl);
-    } else {
-      els.preview.classList.remove('loading');
-      // 同一篇文档再打开一次不会触发 iframe load，
-      // 从 ⌘K 正文命中点进来时得在这里把高亮兑现掉
-      applyPendingPreviewHighlight();
-    }
+    const tab = findTabByPath(filePath);
+    if (tab) reloadTab(tab);
   }
 }
 
@@ -2434,25 +2747,25 @@ function setActiveFile(filePath, doNavigate) {
 async function goHome({ confirmDirty = true } = {}) {
   if (editState.active) {
     if (confirmDirty && !(await confirmDiscardIfDirty())) return false;
-    exitEditMode({ restore: false });
+    // 编辑态还原到只读预览：该 Tab 的帧留一份干净预览，返回时不至于停在编辑文档上
+    exitEditMode({ restore: true });
   }
   if (diffState.open) closeDiff();
+  if (findState.open) closeFind();
 
   state.activeFilePath = null;
+  state.activeTabId = null;
   document.body.classList.add('no-active-doc');   // 回到首页态：收起文档工具栏
-  els.tree.querySelectorAll('.file.active').forEach(e => e.classList.remove('active'));
+  markSidebarActive(null);
 
-  // 卸载 iframe 走 about:blank 而不是 src=''：后者在部分内核里会重新 GET
-  // 当前目录，预览区会闪一个 Cannot GET（reloadPreviewDoc 里同样的理由）
-  els.preview.src = 'about:blank';
-  els.preview.classList.add('hidden');
-  // 顺手清掉 loading（opacity:0）。不清的话下次打开文档会先闪一下空白
-  els.preview.classList.remove('loading');
+  // 多 Tab：不卸载任何帧（Tab 仍在，内容留着可秒回），只把它们全部隐藏、露出首页。
+  // 这和过去"回首页 = 卸载唯一 iframe"不同：现在首页只是一个不选中任何 Tab 的视图。
+  for (const t of state.tabs) t.frame.classList.add('hidden');
   els.mdEditor.classList.add('hidden');
   els.emptyState.classList.remove('hidden');
   els.crumbs.innerHTML = crumbHomePlaceholderHtml();
 
-  // 顶栏按钮全部收回禁用态。这里必须手写一遍：它们只在 setActiveFile 里被
+  // 顶栏按钮全部收回禁用态。这里必须手写一遍：它们只在 applyActiveDocUI 里被
   // 逐个 `= false` 打开过，之前没有任何地方关回去
   for (const b of [els.btnReloadPreview, els.btnDiff, els.btnEdit, els.btnMarkUnread,
     els.btnShare, els.btnExportPdf, els.btnOpenExternal, els.btnReveal, els.btnCopyPath]) {
@@ -2462,7 +2775,8 @@ async function goHome({ confirmDirty = true } = {}) {
   updateFavButton();     // 这两个内部都按 activeFilePath == null 自动收敛
   updateDiffButton();
   updateTrustButton();   // 同上：没有当前文档时它自己隐藏
-  updateIframeHighlight();   // 收掉命中角标：iframe 已经空了，跳转无意义
+  if (els.preview) updateIframeHighlight();   // 收掉命中角标（帧还在，仅隐藏）
+  renderTabs();              // 更新标签的 active 态（此时无活动标签）
   renderHome();              // 离开首页这段时间里数据可能变过
   renderRecent();            // 重画以清掉列表里的 active 高亮
   renderFavorites();
@@ -2567,28 +2881,8 @@ function forwardKeyToShell(e) {
   }));
 }
 
-els.preview.addEventListener('load', () => {
-  // 每次导航都要重新架桥（新文档 = 新的监听目标）
-  bindPreviewShortcutBridge();
-  if (editState.active && editState.kind === 'html') {
-    // 编辑文档加载完成 → 绑定可编辑区域，并恢复进入编辑前的滚动位置
-    bindEditableDoc();
-    applyPendingScroll(pendingEditScroll);
-    pendingEditScroll = null;
-  } else if (pendingPreviewScrollPct != null) {
-    // 退出 Markdown 编辑后重载渲染预览：按百分比恢复浏览位置（扣除底部留白）
-    applyPendingScrollPct(pendingPreviewScrollPct);
-    pendingPreviewScrollPct = null;
-    updateIframeHighlight();
-  } else {
-    // 退出编辑后重载 /raw/：恢复之前的滚动锚点
-    applyPendingScroll(pendingPreviewScroll);
-    pendingPreviewScroll = null;
-    updateIframeHighlight();
-  }
-  // 滚动就位后再淡入，避免看到从顶部滚动的过程
-  els.preview.classList.remove('loading');
-});
+// 预览帧的 load 处理已移到 onPreviewFrameLoad（多 Tab：每个 Tab 一个帧，
+// 在 createPreviewFrame 里按帧绑定，而不是给单例 iframe 挂一个全局监听）。
 
 // ==================== 预览区轻量编辑 ====================
 const EDIT_STYLE_ATTR = 'data-atlas-edit-style';
@@ -4230,8 +4524,9 @@ if (els.diffRevert) {
       }
       showToast({ kind: 'success', text: '已回退到选中的版本', secondary: '原内容已备份到 backups/' });
       await fetchState();
-      // 内容变了：预览要重载，差异要按新的当前内容重新自动选版
-      if (state.activeFilePath === p) setActiveFile(p, true);
+      // 内容变了：对应 Tab 的帧要重载，差异要按新的当前内容重新自动选版
+      const revertedTab = findTabByPath(p);
+      if (revertedTab) reloadTab(revertedTab);
       diffState.version = null;
       loadDiff();
     } catch (e) {
@@ -4436,6 +4731,13 @@ function gotoMatch(delta) {
 }
 
 function updateMatchBadge(total, currentIdx) {
+  // 文档内查找栏（⌘F）打开时，命中计数显示在查找栏上，工具栏那枚命中条不出现，
+  // 避免"一处搜索、两处计数"的重复。
+  if (findState.open) {
+    setFindCount(total, currentIdx);
+    if (els.matchBadge) els.matchBadge.classList.add('hidden');
+    return;
+  }
   const badge = els.matchBadge;
   if (!badge) return;
   if (total === 0) {
@@ -4444,6 +4746,72 @@ function updateMatchBadge(total, currentIdx) {
   }
   badge.classList.remove('hidden');
   badge.querySelector('.match-text').textContent = `${currentIdx + 1} / ${total}`;
+}
+
+// 就地清除文档内的搜索高亮 / 命中导航（不离开文档）。
+// 这是"⌘K 正文命中后搜索退不出"的直接出口：命中条的 ✕、Esc 阶梯、关闭查找栏都走它。
+function clearIframeSearch() {
+  pendingPreviewHighlight = null;
+  const doc = (() => { try { return els.preview && els.preview.contentDocument; } catch { return null; } })();
+  if (doc) clearIframeHighlight(doc);
+  highlightMatches = [];
+  highlightCurrentIdx = -1;
+  updateMatchBadge(0, 0);
+}
+
+// ==================== 文档内查找（⌘F） ====================
+// 复用 iframe 高亮那套（highlightInIframe / gotoMatch / 命中计数）。查找栏是一个
+// 独立于侧栏搜索、独立于 ⌘K 的入口：只在当前文档正文里找，不过滤目录树。
+const findState = { open: false };
+let findSandboxHinted = false;
+
+function setFindCount(total, currentIdx) {
+  if (!els.findCount) return;
+  els.findCount.textContent = total > 0 ? `${currentIdx + 1}/${total}` : '0/0';
+  els.findCount.classList.toggle('none', total === 0 && !!(els.findInput && els.findInput.value));
+}
+
+function openFind() {
+  if (!els.findBar || !els.findInput) return;
+  // 没打开文档、或正处于编辑/对比态时不接管（那些场景 iframe 不是只读预览）
+  if (!state.activeFilePath || editState.active || diffState.open) return;
+  findState.open = true;
+  els.matchBadge && els.matchBadge.classList.add('hidden');   // 让位给查找栏的计数
+  els.findBar.classList.remove('hidden');
+  els.findInput.focus();
+  els.findInput.select();
+  // 已有输入则立即重跑一次（保留上次的查找词，像浏览器那样）
+  if (els.findInput.value) runFind();
+  else setFindCount(0, 0);
+}
+
+function closeFind() {
+  if (!findState.open) return;
+  findState.open = false;
+  if (els.findBar) els.findBar.classList.add('hidden');
+  clearIframeSearch();
+  // 焦点还给预览，方便继续用键盘滚动阅读
+  try { if (els.preview) els.preview.focus(); } catch {}
+}
+
+function runFind() {
+  const q = els.findInput ? els.findInput.value : '';
+  const file = state.files[state.activeFilePath];
+  // 沙箱 HTML 拿不到 contentDocument，标不出命中位置——提示一次并给出出路
+  if (q && file && needsSandbox(file)) {
+    setFindCount(0, 0);
+    if (!findSandboxHinted) {
+      findSandboxHinted = true;
+      showToast({
+        kind: 'info',
+        text: '沙箱预览下无法在文档内查找',
+        secondary: '点顶栏盾牌信任这份文档后可用',
+        duration: 5000,
+      });
+    }
+    return;
+  }
+  highlightInIframe(q);   // 内部会调 updateMatchBadge → setFindCount
 }
 
 // ⌘K 从「正文命中」打开文档时，要高亮的是那次搜索的词，而不是侧栏搜索框里的内容。
@@ -4486,6 +4854,20 @@ function updateIframeHighlight() {
 // 上下跳转按钮
 els.matchPrev.addEventListener('click', () => gotoMatch(-1));
 els.matchNext.addEventListener('click', () => gotoMatch(1));
+// 命中条的 ✕：就地清掉文档内高亮，不离开文档（"搜索退不出"的鼠标出口）
+if (els.matchClose) els.matchClose.addEventListener('click', clearIframeSearch);
+
+// ---- 文档内查找栏（⌘F）的事件接线 ----
+if (els.findInput) {
+  els.findInput.addEventListener('input', runFind);
+  els.findInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); gotoMatch(e.shiftKey ? -1 : 1); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFind(); }
+  });
+}
+if (els.findPrev) els.findPrev.addEventListener('click', () => gotoMatch(-1));
+if (els.findNext) els.findNext.addEventListener('click', () => gotoMatch(1));
+if (els.findClose) els.findClose.addEventListener('click', closeFind);
 
 // 搜索框聚焦时按 Enter 跳到下一处，Shift+Enter 上一处
 els.search.addEventListener('keydown', (e) => {
@@ -4889,11 +5271,24 @@ const SHORTCUTS = [
     group: '全局',
     items: [
       [[MOD, 'K'], '快速打开（模糊匹配文件名，同时搜正文；再按一次收起）'],
+      [[MOD, 'F'], '在当前文档内查找（↑↓ / Enter 在命中处间跳）'],
       [['/'], '聚焦搜索框'],
       [[MOD, 'B'], '收起 / 展开侧边栏'],
       [[MOD, 'S'], '保存改动到文件（编辑态）'],
       [['?'], '打开这份快捷键清单'],
-      [['Esc'], '由近及远地退出：关弹窗 → 清空搜索 → 收起对比 → 回到首页'],
+      [['Esc'], '由近及远地退出：关查找/弹窗 → 清空搜索 → 清除文档内高亮 → 收起对比 → 回到首页'],
+    ],
+  },
+  {
+    group: '多标签',
+    items: [
+      [['点击文件'], '在标签里打开（已开则切到该标签）'],
+      [[MOD, 'W'], '关闭当前标签'],
+      [['中键点标签'], '关闭该标签'],
+      [['Ctrl', 'Tab'], '切到后一个标签'],
+      [['Ctrl', 'Shift', 'Tab'], '切到前一个标签'],
+      [[MOD, '⌥', '←/→'], '切到前 / 后一个标签'],
+      [[MOD, '1–9'], '跳到第 1–9 个标签（9 = 最后一个）'],
     ],
   },
   {
@@ -4918,9 +5313,10 @@ const SHORTCUTS = [
   {
     group: '正文命中导航',
     items: [
-      [['Enter'], '焦点在搜索框时，跳到下一处命中'],
+      [['Enter'], '焦点在搜索框 / 查找栏时，跳到下一处命中'],
       [['Shift', 'Enter'], '跳到上一处命中'],
-      [['▲', '▼'], '顶栏的上下箭头同样可以跳'],
+      [['▲', '▼'], '顶栏命中条 / 查找栏的上下箭头同样可以跳'],
+      [['Esc'], '清除文档内的搜索高亮（顶栏命中条的 ✕ 同效），不离开文档'],
     ],
   },
   {
@@ -5048,6 +5444,40 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
+  // ⌘F / Ctrl+F：在当前文档内查找。桌面 App 里由主进程菜单接管转发（见 electron/main.js），
+  // 这里主要服务浏览器场景。没有只读预览可搜时（首页 / 编辑态 / 对比态）放行给浏览器原生查找。
+  if (mod && e.key.toLowerCase() === 'f' && !e.altKey && !e.shiftKey) {
+    if (isInMdEditor(active)) return;
+    if (!state.activeFilePath || editState.active || diffState.open) return;
+    e.preventDefault();
+    openFind();
+    return;
+  }
+
+  // ---- 多 Tab 快捷键 ----
+  // Ctrl+Tab / Ctrl+Shift+Tab：后 / 前一个标签（跨浏览器与 App 都能收到，不与默认菜单冲突）
+  if (e.key === 'Tab' && e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (state.tabs.length > 1) { e.preventDefault(); switchTabByOffset(e.shiftKey ? -1 : 1); return; }
+  }
+  // ⌘⌥→ / ⌘⌥←：后 / 前一个标签（Safari 式，编辑输入时也安全，因为带 ⌘）
+  if (mod && e.altKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+    if (state.tabs.length > 1) { e.preventDefault(); switchTabByOffset(e.key === 'ArrowRight' ? 1 : -1); return; }
+  }
+  // ⌘1–9：跳到第 n 个标签（⌘9 = 最后一个，浏览器习惯）。编辑器里让位给可能的原生行为
+  if (mod && !e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+    if (state.tabs.length > 0 && !isInMdEditor(active)) {
+      e.preventDefault();
+      focusTabByIndex(e.key === '9' ? state.tabs.length - 1 : (parseInt(e.key, 10) - 1));
+      return;
+    }
+  }
+  // ⌘W：关闭当前标签。桌面 App 里由主进程菜单接管（见 electron/main.js），
+  // 这里是浏览器场景的兜底——浏览器多半会先自己关标签页，能收到就顺手关我们的 Tab。
+  if (mod && e.key.toLowerCase() === 'w' && !e.altKey && !e.shiftKey) {
+    const at = getActiveTab();
+    if (at) { e.preventDefault(); closeTab(at.id); return; }
+  }
+
   // 单键快捷键：焦点在输入框 / 可编辑区里时一律不抢
   if (e.key === '/' && !isTypingTarget(active)) {
     e.preventDefault();
@@ -5062,6 +5492,8 @@ document.addEventListener('keydown', (e) => {
   // 编辑态整段跳过：那时 Escape 的候选动作是"放弃改动"，不该由一个
   // 顺手按下的键来决定，交给顶栏的「取消」按钮走确认流程。
   if (e.key === 'Escape') {
+    // 最先：关掉打开着的文档内查找栏（并清掉它的高亮）
+    if (findState.open) { e.preventDefault(); closeFind(); return; }
     if (active === els.search) {
       els.search.value = '';
       state.search = '';
@@ -5072,6 +5504,13 @@ document.addEventListener('keydown', (e) => {
     }
     if (isTypingTarget(active)) return;
     if (editState.active) return;
+    // 先就地清掉文档内的搜索高亮 / 命中导航（多半是 ⌘K 正文命中留下的），不离开文档；
+    // 再按一次 Esc 才按原阶梯回首页。侧栏搜索有内容时交给上面的搜索框分支处理。
+    if (!state.search && highlightMatches.length > 0) {
+      e.preventDefault();
+      clearIframeSearch();
+      return;
+    }
     if (diffState.open) { e.preventDefault(); closeDiff(); return; }
     if (state.activeFilePath) { e.preventDefault(); goHome(); }
     return;

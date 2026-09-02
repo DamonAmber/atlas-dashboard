@@ -132,7 +132,7 @@ for spec in tests/*.spec.js; do
 done
 ```
 
-> 验证过：把本机 Atlas 完全停掉，全套 44 个 spec 依然全绿，且 `~/.atlas/config.json`
+> 验证过：把本机 Atlas 完全停掉，全套 46 个 spec 依然全绿，且 `~/.atlas/config.json`
 > 与 `store.json` 校验和逐字节未变。若将来某个 spec 在服务停止时失败，说明它偷偷依赖了
 > 你的真实实例，按下面的约定改掉。
 
@@ -154,7 +154,7 @@ done
 >   期望末行 `总计 10 项，失败 0 项`。**记得删掉 tgz**，否则会被 `git add -A` 带进 commit。
 > - `scroll-after-toggle.spec.js` 在 iframe 还没加载出内容时打印 `!! HTML 不够长，没法测试` 并跳过（也是 exit 0）。这是它长期的既有行为，不是本次改动引入的；判断是否回归的办法是 `git stash` 后对比同一行输出。
 
-当前 spec 清单（44 个）。除 `landing-demo`（`file://`）、`diff-algorithm`（纯函数单测）
+当前 spec 清单（46 个）。除 `landing-demo`（`file://`）、`diff-algorithm`（纯函数单测）
 与 `fs-watcher`（直接对着临时目录测监听器，不起服务、不用浏览器）外，其余都通过
 `tests/helpers/isolated-atlas.js` 的 `startAtlas()` 起独立实例：临时 `ATLAS_HOME`
 （自带 config/store）+ 临时扫描根 + 临时 fixture + 随机端口，结束即删。
@@ -183,6 +183,8 @@ done
 > - `shortcuts-panel.spec.js` — 快捷键速查表：三个入口（? 键 / 侧栏底部按钮 / 首页「全部快捷键」）、打开文档后仍可查、焦点在预览 iframe 内按 ? 也能唤出（经快捷键桥转发）、清单覆盖 7 个场景分组且抽查的键位与代码里注册的一致、输入框里 ? 是输入字符不开面板、Esc 关闭并把焦点还给触发按钮（33 项）
 > - `quickopen-content-search.spec.js` — ⌘K 正文搜索：名称命中在前 / 正文命中作为第二组追加且不与名称组重复 / 摘要保留原始大小写并标出关键词 / 命中处数 / 打开后在预览里高亮并滚到第一处、顶栏 n/m 可继续跳 / 换文档后高亮自动失效 / 全程不写侧栏搜索框（不误过滤目录树）/ 单个 ASCII 字符不发请求、中文单字照搜（24 项）
 > - `preview-shortcut-bridge.spec.js` — 预览 iframe 内的 app 级快捷键：焦点在文档正文时 ⌘K / ⌘B 仍生效（键盘事件不跨 iframe 冒泡，靠注入桥转发）、编辑态 ⌘S 被拦下并真的触发保存、文档内打字时不抢 ⌘K/⌘B、非编辑态不抢 ⌘S、单键 `/` 一律不转发、iframe 换文档后桥自动重建（18 项）
+> - `multi-tab.spec.js` — 多 Tab 文档浏览（0.22 新增）：打开多篇 → 标签栏出现、每篇一枚常驻帧、只有活动帧可见且独占 `id="preview"` / 已开文件再点只切回不重复开 / **切走再切回滚动位置保留**（帧不重载）/ 键盘 Ctrl+Tab 前后切、⌘数字跳转 / 关非活动标签不换视图、关活动标签切到邻居、关到最后一个回首页 / **刷新后恢复标签与活动项**（localStorage）/ 全程无 JS 报错（32 项）
+> - `find-in-page.spec.js` — 文档内查找 & 就地退出搜索（0.22 新增）：⌘K 正文命中打开文档后，顶栏命中条的 ✕ 就地清高亮且不弹回首页 / Esc 两级（先清文档内高亮、仍停在文档，再按一次才回首页）/ ⌘F 查找栏 open→输入即高亮+显示 n/m+Enter 跳转+Esc 关闭清高亮、查找打开时顶栏命中条让位（21 项）
 > - `modal-close.spec.js` — 每个弹窗的每条关闭路径：✕ 按钮（含精确点在图标 span 上）、遮罩、Esc、关闭后焦点归还、以及"点弹窗内部不会误关"（22 项）
 > - `misc-hardening.spec.js` — 杂项加固：编辑备份扩展名跟随源文件 / 请求体上限与可读错误 / `/raw` 路由不依赖 `app._router.stack`（扫描根运行时增删后序号重排仍正确）（26 项）
 > - `toast.spec.js` — 扫描根增删与反馈 toast（12 项，含隔离性断言）
@@ -572,6 +574,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.22.0** (2026-09-02) — **App 内多 Tab 浏览文档** + **⌘F 文档内查找**，并修掉 **⌘K 正文搜索"退不出"**。① **多 Tab（核心）**：过去打开第二篇会顶掉第一篇——整个前端围绕单个 `#preview` iframe + 单个 `state.activeFilePath` 构建。现在每篇打开的文档拥有**自己常驻的预览 iframe**，顶部标签栏切换，**切换不重载**（滚动位置、图表、页面内部状态都留得住）。做法：新增 `state.tabs` / `activeTabId` 与一整套 Tab 管理（`public/app.js` 的 openInTab/activateTab/closeTab/removeTab/pruneDeadTabs/renderTabs/reloadTab/persistTabs/restoreTabs 等），让 `els.preview` 始终指向当前活动 Tab 的帧——因此沙箱、快捷键桥、滚动恢复、正文高亮、编辑态等几十处既有代码原样作用到正确的帧上；`state.activeFilePath` 保留为"活动 Tab 的 path"镜像，读它的旧代码不改。**当前活动帧独占 `id="preview"`**（其余帧无 id）作为兼容层，`document.getElementById('preview')` / `#preview` 选择器 / `activeElement.id` 依旧指向"正在看的那篇"。`setActiveFile` 拆成 `markSidebarActive` + `applyActiveDocUI`；`goHome` 改为**非破坏性**（隐藏各帧、不卸载，回首页只是不选中任何 Tab）；`fetchState` 用 `pruneDeadTabs` 关掉文件已消失的 Tab（活动的自动切邻居）；顶层 iframe `load` 监听改为按帧绑定的 `onPreviewFrameLoad`。**持久化**：关掉再开恢复上次的标签与当前项（localStorage，过滤已不存在的文件）。**键盘**：`⌘W` 关、`Ctrl+Tab`/`Ctrl+Shift+Tab` 前后切、`⌘⌥←/→` 切、`⌘1–9` 跳转（`⌘9`=最后一个）。桌面 App 里 `⌘W` 会被默认菜单的"关闭窗口"抢走，故 `electron/main.js` 新增应用菜单接管 `⌘W→close-tab`（IPC 转发前端）、`⇧⌘W` 关窗、`⌃Tab`/`⌃⇧Tab` 菜单项；`electron/preload.js` 暴露 `onMenuCommand`/`closeWindow`。② **⌘F 文档内查找**：预览区右上浮出查找栏（输入+`n/m`+▲▼+✕），只在**当前这一篇**里逐词高亮，`Enter`/`Shift+Enter`/`↑↓` 在命中处间跳，`Esc`/✕ 关闭并清高亮。复用既有 iframe 高亮/导航（`highlightInIframe`/`gotoMatch`）；查找栏打开时命中计数显示在查找栏、工具栏那枚命中条让位隐藏。桌面 App 用自定义"编辑"菜单接管 `⌘F`（默认 Electron 编辑菜单没有 Find，`⌘F` 因此什么都不做），转发 `find-in-page`；浏览器走前端 keydown。沙箱 HTML 读不到内容，提示先点盾牌信任。③ **修 ⌘K "退不出"**：`⌘K` 从"正文命中"进入某篇后会高亮命中并在顶栏显示 `n/m` 命中条，但命中条没有出口、`Esc` 又直接弹回首页——想清掉高亮却留在文档里没有办法。现在给命中条加 **✕**（`clearIframeSearch` 就地清除、不离开文档），`Esc` 改为**分级退出**：关查找栏 → 清空搜索框 → 就地清文档内高亮（`state.search` 为空时）→ 关对比 → 回首页。切 Tab / 回首页会自动关闭查找栏。④ **同步 landing page**（按步骤 1.5）：`docs/index.html` 新增"多 Tab 浏览""⌘F 文档内查找"两张特性卡、"全键盘操作"卡补上 `⌘F`、`#cur-version` 升到 0.22.0；README 同步一句话特性 / Dashboard 功能 / 快捷键表。⑤ **注意 npm 与 App 的差异**：`electron/` 不在 npm 包 `files` 白名单里——多 Tab 与 ⌘F 的**前端**部分（`public/`）npm 与 App 都拿得到，但 `⌘W`/`⌘F` 的**应用菜单接管**只在桌面 App 生效，所以本版**必须重新出 DMG + zip + latest-mac.yml 并传到 Release**，否则客户端用户（以及自动更新）拿不到菜单侧能力。⑥ **测试**：新增 `multi-tab.spec.js`（32 项：打开/去重/切换保留滚动/键盘/关闭切邻居/刷新恢复/回首页）与 `find-in-page.spec.js`（21 项：⌘K 命中后 ✕/Esc 两级退出、⌘F 全流程），均加入 `npm test`；`preview-shortcut-bridge.spec.js` 的取帧改为按 `#preview` 取活动帧（多帧兼容）；`scroll-after-toggle.spec.js` 从"合成 click 打不开文件→静态 #preview 掩盖→静默跳过"改成**真实点击 + 信任 HTML**，现在真正在多 Tab 下验证"切侧栏后滚动不卡"（此前是长期空跑）。全套 44 个 spec 全绿。
 
 - **0.21.2** (2026-09-02) — 重做 **App 图标 / favicon / 菜单栏托盘图 / 应用内品牌 logo**，从原来只有字母「A」的方块换成能一眼看出用途的图形：**一叠汇聚在一起的文档卡片 + 右上未读红点**——正对应 Atlas「把散落各处、AI 生成的文档聚到一处，更新过的标红」这两个核心卖点。① **产物**：`electron/build/icon.icns` 与 `icon-1024.png`（macOS 应用图标，随 DMG 分发，用 `rsvg-convert` 出全尺寸后 `iconutil` 打包）；`electron/build/trayTemplate.png` / `@2x`（菜单栏单色 template 图——单独做的黑白轮廓版，用遮罩把文字行与两卡间隙挖成透明，`setTemplateImage` 下 16px 仍能认出是一叠文档）；`public/favicon.svg`（浏览器标签）。② **应用内品牌标**：`public/index.html` 侧栏 `.brand-mark` 与首页 `.home-logo` 里的字母「A」换成同款内联 SVG（白色堆叠文档 + 红点），`public/styles.css` 加一条 `.brand-glyph { display:block; width:100%; height:100% }` 让图形填满原渐变方块——**渐变底、尺寸、hover/回到首页交互全部不变**。③ **同步 landing page**（`docs/index.html`，按步骤 1.5 的硬性要求）：导航品牌标、产品截图 mockup 的侧栏标、内联 data-URI 兜底 favicon 三处的「A」换成新标识，`docs/favicon.svg` 一并替换，`#cur-version` 兜底版本号升到 0.21.2。④ **纯视觉资源更新**，不涉及任何功能 / API / CLI / 打包行为，全套 spec 全绿（图标不在测试断言范围内，`landing-demo` 也只测 demo 交互不测品牌标文本）。⑤ 所有矢量母版留在 `design/icon/`（`atlas-icon.svg` / `favicon.svg` / `tray.svg` 三个源文件 + 当初的三个概念稿 A/B/C），方便日后调整；旧图标已备份在 `design/icon/_old-backup/`。
 

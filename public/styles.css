@@ -1410,6 +1410,78 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
   background: var(--bg-hover);
   color: var(--text);
 }
+/* ✕：就地清除文档内搜索高亮（不离开文档）。命中条本身没有出口是"搜索退不出"的直接原因 */
+.match-badge .match-close {
+  width: 20px; height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0;
+  display: grid; place-items: center;
+  margin-left: 1px;
+  transition: background var(--dur-fast, 120ms), color var(--dur-fast, 120ms);
+}
+.match-badge .match-close:hover { background: var(--bg-hover); color: var(--text); }
+.match-badge .match-close svg { display: block; }
+
+/* ==================== 文档内查找栏（⌘F） ==================== */
+.find-bar {
+  position: absolute;
+  top: 10px;
+  right: 16px;
+  z-index: 6;   /* 浮在预览帧之上；编辑/对比态下不开启，故无需盖过它们 */
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 4px 4px 8px;
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .18);
+}
+.find-bar.hidden { display: none; }
+.find-bar .find-ico { color: var(--text-dim); flex: 0 0 auto; }
+.find-bar input {
+  width: 200px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 2px;
+}
+.find-bar .find-count {
+  font-size: 11px;
+  color: var(--text-mute);
+  font-variant-numeric: tabular-nums;
+  padding: 0 4px;
+  white-space: nowrap;
+  min-width: 34px;
+  text-align: center;
+  user-select: none;
+}
+.find-bar .find-count.none { color: var(--unread); }
+.find-bar .find-nav,
+.find-bar .find-close {
+  width: 22px; height: 22px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  font-size: 10px;
+  padding: 0;
+  display: grid; place-items: center;
+  transition: background var(--dur-fast, 120ms), color var(--dur-fast, 120ms);
+}
+.find-bar .find-nav:hover,
+.find-bar .find-close:hover { background: var(--bg-hover); color: var(--text); }
+.find-bar .find-close svg { display: block; }
+/* 分隔关闭按钮 */
+.find-bar .find-close { margin-left: 2px; box-shadow: -1px 0 0 var(--border); }
 
 /* 升级提示标签 */
 .update-badge {
@@ -1736,7 +1808,11 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
   overflow-x: hidden;
   overflow-y: auto;
 }
-#preview {
+/* 每个 Tab 一个常驻 iframe。布局与旧的单例 #preview 完全一致：
+   同一时刻只有活动 Tab 的那个不带 .hidden，其余 display:none 退出布局流，
+   于是活动帧的表现和过去单 iframe 时期分毫不差（外层滚动那套逻辑照旧成立）。 */
+#preview,
+.preview-frame {
   width: 100%;
   height: 100%;
   border: 0;
@@ -1744,8 +1820,91 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
   opacity: 1;
   transition: opacity var(--dur-fast) ease;
 }
-#preview.hidden { display: none; }
-#preview.loading { opacity: 0; }
+#preview.hidden,
+.preview-frame.hidden { display: none; }
+#preview.loading,
+.preview-frame.loading { opacity: 0; }
+
+/* ==================== 多 Tab 标签栏 ==================== */
+/* 夹在 main-header 与预览区之间的一条水平标签条。无 Tab 时 .hidden 完全不占位，
+   避免首页凭空多出一条空栏。标签多到放不下时整条横向滚动（细滚动条）。 */
+.tab-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 36px;
+  padding: 4px 8px 0;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.tab-bar.hidden { display: none; }
+.tab-bar::-webkit-scrollbar { height: 6px; }
+.tab-bar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* 单枚标签：类似浏览器 tab，底部与内容区平齐，活动态用 accent 底边 + 高对比背景 */
+.tab {
+  flex: 0 1 200px;
+  min-width: 96px;
+  max-width: 240px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-top-left-radius: var(--r-md);
+  border-top-right-radius: var(--r-md);
+  background: var(--bg);
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  position: relative;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+.tab:hover { background: var(--bg-hover); color: var(--text); }
+.tab.active {
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 600;
+  /* 盖住内容区上边框 1px，制造"标签与内容连成一体"的层级感 */
+  margin-bottom: -1px;
+  padding-bottom: 1px;
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
+/* 复用全站类型徽标（.file-type-badge.type-*）的配色，标签里略微收窄留白 */
+.tab .file-type-badge { flex: 0 0 auto; opacity: 0.85; }
+.tab.active .file-type-badge { opacity: 1; }
+.tab-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 关闭按钮：常态低调，hover 标签或 hover 按钮本身时才醒目 */
+.tab-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: background var(--dur-fast) ease, opacity var(--dur-fast) ease;
+}
+.tab-close:hover { background: var(--bg-hover); opacity: 1; color: var(--text); }
+.tab-close svg { display: block; }
 /* ==================== 首页（无文档打开时） ==================== */
 .empty {
   position: absolute; inset: 0;

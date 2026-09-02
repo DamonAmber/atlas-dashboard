@@ -50,8 +50,11 @@ function check(name, actual, expected) {
   await page.waitForSelector('.file');
 
   // ---- 工具 ----
-  const previewFrame = () => {
-    const f = page.frames().find(fr => fr !== page.mainFrame());
+  // 多 Tab 后 .preview 里可能同时挂着多个 iframe（每个 Tab 一个，非活动的隐藏）。
+  // 当前活动帧独占 id="preview"，所以按 #preview 取帧，才拿得到"正在看的那篇"。
+  const previewFrame = async () => {
+    const h = await page.$('#preview');
+    const f = h && await h.contentFrame();
     if (!f) throw new Error('找不到预览 iframe');
     return f;
   };
@@ -63,7 +66,7 @@ function check(name, actual, expected) {
     page.evaluate(() => document.activeElement.tagName + (document.activeElement.id ? '#' + document.activeElement.id : ''));
   // 把焦点放进预览文档正文（模拟"读文档时"的状态）
   const focusInsideDoc = async () => {
-    await previewFrame().click('h1');
+    await (await previewFrame()).click('h1');
     await page.waitForTimeout(150);
   };
 
@@ -116,9 +119,9 @@ function check(name, actual, expected) {
 
   // ================================================================
   console.log('\n[让位] 文档内正在打字时不抢 ⌘K / ⌘B');
-  await previewFrame().click('#docInput');
+  await (await previewFrame()).click('#docInput');
   await page.waitForTimeout(150);
-  check('焦点在文档自带的 input 上', await previewFrame().evaluate(
+  check('焦点在文档自带的 input 上', await (await previewFrame()).evaluate(
     () => document.activeElement.id), 'docInput');
   await page.keyboard.press('Meta+k');
   await page.waitForTimeout(300);
@@ -139,7 +142,7 @@ function check(name, actual, expected) {
   console.log('\n[⌘S] 只在编辑态下归 Atlas');
   // 非编辑态：桥不应该拦 ⌘S（拦了会吃掉浏览器的「存储网页」）
   await focusInsideDoc();
-  const sHandledIdle = await previewFrame().evaluate(() => {
+  const sHandledIdle = await (await previewFrame()).evaluate(() => {
     // 自己造一个 ⌘S 派发到文档上，看桥有没有 preventDefault
     const ev = new KeyboardEvent('keydown', {
       key: 's', code: 'KeyS', metaKey: true, bubbles: true, cancelable: true,
@@ -153,7 +156,7 @@ function check(name, actual, expected) {
   await page.click('#btn-edit');
   await page.waitForSelector('#btn-edit-save:not(.hidden)');
   await page.waitForTimeout(800);
-  const sHandledEditing = await previewFrame().evaluate(() => {
+  const sHandledEditing = await (await previewFrame()).evaluate(() => {
     const ev = new KeyboardEvent('keydown', {
       key: 's', code: 'KeyS', metaKey: true, bubbles: true, cancelable: true,
     });

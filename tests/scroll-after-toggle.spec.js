@@ -8,6 +8,8 @@ const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
   const atlas = await startAtlas({
     prefix: 'atlas-scroll-after-toggle-spec-',
     files: makeTreeFixtures({ projects: 8, filesPerProject: 15, longContent: true }),
+    // 需要读取 iframe 内滚动（同源）；HTML 默认沙箱，这里显式信任
+    config: { trustAllHtml: true },
   });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -29,10 +31,9 @@ const { startAtlas, makeTreeFixtures } = require('./helpers/isolated-atlas');
     || candidates.find(c => /dashboard.*\.html$/i.test(c.name))
     || candidates[0];
   console.log('选择文件:', candPath.name);
-  await page.evaluate((p) => {
-    const el = [...document.querySelectorAll('.file')].find(f => f.dataset.path === p);
-    if (el) el.click();
-  }, candPath.path);
+  // 用真实点击（pointerdown/up）打开——文件行是按抖动判定开的，页面内合成 el.click()
+  // 不会触发（历史上因此一直静默跳过，多 Tab 移除静态 #preview 后暴露为崩溃）
+  await page.locator(`.file[data-path="${candPath.path.replace(/(["\\])/g, '\\$1')}"]`).first().click();
   // 等 iframe load 事件
   // 等 iframe load 事件 + HTML body 渲染稳定
   await page.evaluate(() => new Promise((res) => {

@@ -81,6 +81,66 @@ function createTray() {
   tray.on('click', showWindow);   // 左键点图标也打开窗口
 }
 
+// 把菜单/快捷键命令转发给当前窗口的前端（多 Tab：close-tab / next-tab / prev-tab）
+function sendMenuCommand(cmd) {
+  const win = BrowserWindow.getFocusedWindow() || mainWindow;
+  if (win) win.webContents.send('atlas:menu-command', cmd);
+}
+
+// 应用菜单。存在的主因：默认菜单里 ⌘W = 关闭窗口，会抢在前端 keydown 之前触发，
+// 多 Tab 下我们要让 ⌘W 关的是"当前标签"而不是整个窗口。于是自建 File 菜单，
+// 把 ⌘W 绑到 close-tab（转发给前端），关窗改用 ⇧⌘W。其余沿用标准 role，
+// 保证复制/粘贴/缩放/最小化等原生行为不丢。
+function buildAppMenu() {
+  const isMac = process.platform === 'darwin';
+  const template = [
+    ...(isMac ? [{ role: 'appMenu' }] : []),
+    {
+      label: '文件',
+      submenu: [
+        { label: '关闭标签', accelerator: 'CmdOrCtrl+W', click: () => sendMenuCommand('close-tab') },
+        { label: '关闭窗口', accelerator: 'Shift+CmdOrCtrl+W', role: 'close' },
+        ...(isMac ? [] : [{ type: 'separator' }, { role: 'quit' }]),
+      ],
+    },
+    {
+      label: '编辑',
+      submenu: [
+        { role: 'undo', label: '撤销' },
+        { role: 'redo', label: '重做' },
+        { type: 'separator' },
+        { role: 'cut', label: '剪切' },
+        { role: 'copy', label: '拷贝' },
+        { role: 'paste', label: '粘贴' },
+        { role: 'selectAll', label: '全选' },
+        { type: 'separator' },
+        // ⌘F：在当前文档内查找。默认编辑菜单没有 Find，桌面 App 里 ⌘F 因此什么都不做，
+        // 这里显式绑定并转发给前端（见 app.js 的 onMenuCommand / openFind）。
+        { label: '在文档内查找…', accelerator: 'CmdOrCtrl+F', click: () => sendMenuCommand('find-in-page') },
+      ],
+    },
+    {
+      label: '显示',
+      submenu: [
+        { label: '下一个标签', accelerator: 'Control+Tab', click: () => sendMenuCommand('next-tab') },
+        { label: '上一个标签', accelerator: 'Control+Shift+Tab', click: () => sendMenuCommand('prev-tab') },
+        { type: 'separator' },
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    { role: 'windowMenu' },
+  ];
+  return Menu.buildFromTemplate(template);
+}
+
 // 收掉我们自己 spawn 的 server（复用已有实例时 child 为 null，不误杀 CLI 守护进程），然后退出。
 function cleanupAndExit(code) {
   if (smokeTimer) { clearTimeout(smokeTimer); smokeTimer = null; }
@@ -108,7 +168,10 @@ async function boot() {
     return;
   }
   createWindow();
-  if (!isSmoke) createTray();
+  if (!isSmoke) {
+    Menu.setApplicationMenu(buildAppMenu());
+    createTray();
+  }
   setupAutoUpdate();
 }
 
@@ -153,6 +216,12 @@ ipcMain.handle('atlas:export-pdf', async (_e, args) => {
   if (!serverInfo) return { ok: false, error: '服务未就绪' };
   const a = args || {};
   return pdf.exportPdf({ serverUrl: serverInfo.url, filePath: a.path, fileName: a.fileName });
+});
+
+// 多 Tab：⌘W 在没有可关标签时回退为关窗（前端判断后调 atlasDesktop.closeWindow）
+ipcMain.on('atlas:close-window', () => {
+  const win = BrowserWindow.getFocusedWindow() || mainWindow;
+  if (win) win.close();
 });
 
 // 单实例：再次双击/启动时聚焦已有窗口，而不是又起一个
