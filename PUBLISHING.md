@@ -421,24 +421,45 @@ curl -s "https://api.github.com/repos/DamonAmber/atlas-dashboard/actions/runs?pe
 # 首次：把签名/公证凭据写进本机 gitignored 文件（模板见 electron/build/notarize.env.example）
 #   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
 source electron/build/notarize.env && npm run app:build
-# 产物：dist-app/Atlas-mac-arm64.dmg（已签名 + 公证 + staple）
+# 产物：dist-app/ 下 Atlas-mac-arm64.dmg（人工下载）+ .zip + latest-mac.yml（自动更新）
+# ⚠️ electron-builder 只公证并 staple 了 .app，DMG 容器本身没被公证/staple —— 要手动补，见下方「DMG 单独公证」
 ```
 
 - 需要钥匙串里有 **Developer ID Application** 证书（`security find-identity -v -p codesigning` 能看到）。
 - `build.artifactName` 固定为 `Atlas-mac-${arch}.dmg`（不带版本号），所以官网可以用稳定链接
   `https://github.com/DamonAmber/atlas-dashboard/releases/latest/download/Atlas-mac-arm64.dmg`。
 - `asar: false` 是刻意的：App 用 `ELECTRON_RUN_AS_NODE` 派生 `server.js`，纯 Node 读不了 asar。
-- 验证：`spctl --assess --type exec dist-app/mac-arm64/Atlas.app`（应 `accepted / Notarized Developer ID`）、
-  `xcrun stapler validate` App 与 DMG。
+- 验证 App：`spctl -a -vvv --type exec dist-app/mac-arm64/Atlas.app`（应 `accepted / source=Notarized Developer ID`）+
+  `xcrun stapler validate dist-app/mac-arm64/Atlas.app`（`The validate action worked!`）。
 
-**挂到 Release：** 在 npm publish + 打 tag（release workflow 会先建好 Release）之后，把 dmg（人工下载）
-以及自动更新要用的 **zip + latest-mac.yml** 一并传上去（0.21.0 起自动更新依赖后两个，缺了 App 就查不到更新）：
+**DMG 单独公证 + staple（构建之后、上传之前）：** `build.mac.notarize: true` 只会公证 **`.app`**——DMG
+是拿已公证的 app 打出来的容器，**它自己没有公证记录**，此时 `xcrun stapler validate <dmg>` 会报
+`does not have a ticket stapled to it`、`stapler staple <dmg>` 会报 `Record not found`（因为压根没提交过）。
+所以要把 DMG 也提交一次公证再 staple，下载的 DMG 才能离线过 Gatekeeper（app 本身已 stapled，这步是让容器也干净、并对齐本节验收）：
 
 ```bash
-gh release upload "v$NEW_VERSION" \
-  dist-app/Atlas-mac-arm64.dmg \
-  dist-app/Atlas-mac-arm64.zip \
-  dist-app/latest-mac.yml --clobber
+source electron/build/notarize.env
+xcrun notarytool submit dist-app/Atlas-mac-arm64.dmg \
+  --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+# 等到 status: Accepted（约 1-3 分钟）后再 staple
+xcrun stapler staple dist-app/Atlas-mac-arm64.dmg
+xcrun stapler validate dist-app/Atlas-mac-arm64.dmg   # 应 The validate action worked!
+```
+
+> staple 会改写 dmg 文件，`Atlas-mac-arm64.dmg.blockmap` 随之失效——但自动更新走的是 **zip**（不是 dmg），
+> dmg.blockmap 只用于 dmg 的差量下载，失配无害，也不需要上传它。zip 没被改动，`latest-mac.yml` 里的 sha512 仍然有效。
+
+**挂到 Release：** 在 npm publish + 打 tag（release workflow 会先建好 Release）之后，把 dmg（人工下载）
+以及自动更新要用的 **zip + latest-mac.yml** 传上去（0.21.0 起自动更新依赖后两个，缺了 App 就查不到更新）：
+
+```bash
+# ⚠️ 别把两个 ~124MB 的大文件塞进同一条命令：合计 ~248MB，gh release upload 常在 5 分钟超时中断，
+#    只留下先传完的小文件（latest-mac.yml）。分开单独传，各自给足时间。
+gh release upload "v$NEW_VERSION" dist-app/Atlas-mac-arm64.zip --clobber
+gh release upload "v$NEW_VERSION" dist-app/Atlas-mac-arm64.dmg --clobber
+gh release upload "v$NEW_VERSION" dist-app/latest-mac.yml --clobber
+# 确认三件都在、大小与本地一致：
+gh release view "v$NEW_VERSION" --json assets --jq '.assets[] | "\(.name)  \(.size)  \(.state)"'
 ```
 
 > `latest-mac.yml` 是 electron-updater 的更新清单（列出 zip 名字、大小、sha512）。发版后可跑
@@ -466,6 +487,8 @@ Developer ID Application 证书 → 导出为 .p12 → `base64 -i cert.p12 | pbc
 | 发完发现 bug | 见 [紧急回滚](#紧急回滚) |
 | tests workflow 失败但本地通过 | 多半是 fixture HTML 不够长 / 不含某关键字。看 `.github/workflows/test.yml` 里 `Prepare fixture HTML files` 那一步，按需调整 |
 | `npm pack` → **`EACCES: permission denied, rename '.../_cacache/tmp/...'`**（或 `EEXIST`） | `~/.npm/_cacache` 里有目录属主是 `root`，历史上某次 `sudo npm` 留下的，跟本仓库无关。**不要 `sudo chown` 用户的 npm 缓存**（影响面比这个问题大得多）。用一次性缓存目录绕开就行：`npm pack --cache /tmp/atlas-npmcache`。步骤 0 里给 `e2e-install.spec.js` 备 tgz 时会撞到这个。0.17.1 发版时遇到过。 |
+| `xcrun stapler validate <dmg>` → **`does not have a ticket stapled to it`**；`stapler staple <dmg>` → **`Record not found` / `Could not find ... ticket`** | 不是构建坏了。`build.mac.notarize: true` 只公证 `.app`，**DMG 容器没被公证**，所以 staple 找不到票。按「[DMG 单独公证 + staple](#桌面-appmacos-dmg发版)」把 dmg 也 `notarytool submit --wait` 一次再 staple。app 本身其实已 notarized+stapled（`spctl` 显示 accepted），这步是让下载的 dmg 容器离线也干净。0.22.0 发版时遇到并补流程。 |
+| `gh release upload` **卡住 / 5 分钟超时中断**，Release 上只挂了 `latest-mac.yml` | 一条命令里塞了两个 ~124MB 的 zip+dmg（合计 ~248MB），超过默认超时。**分开单独上传**（各给足时间），传完用 `gh release view --json assets` 核对三件都在、`size` 与本地 `stat -f %z` 一致。0.22.0 发版时遇到。 |
 
 ---
 
