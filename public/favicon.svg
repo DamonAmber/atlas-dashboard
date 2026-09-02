@@ -6,5 +6,18 @@
     </linearGradient>
   </defs>
   <rect width="32" height="32" rx="7" fill="url(#g)"/>
-  <path d="M8 25 L16 7 L24 25 M11.5 19 L20.5 19" stroke="#fff" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- back card -->
+  <rect x="9.5" y="8.5" width="13" height="16.5" rx="2" fill="#ffffff" opacity="0.5"
+        transform="rotate(8 16 16)"/>
+  <!-- front card -->
+  <rect x="9" y="8" width="13" height="16.5" rx="2" fill="#ffffff"/>
+  <!-- text lines -->
+  <g fill="#aebfe0">
+    <rect x="11.3" y="11.3" width="6.5" height="1.7" rx="0.85"/>
+    <rect x="11.3" y="14.3" width="8.4" height="1.7" rx="0.85"/>
+    <rect x="11.3" y="17.3" width="7.2" height="1.7" rx="0.85"/>
+  </g>
+  <!-- unread red dot -->
+  <circle cx="22" cy="8.6" r="3.3" fill="#ffffff"/>
+  <circle cx="22" cy="8.6" r="2.2" fill="#ff4d4f"/>
 </svg>

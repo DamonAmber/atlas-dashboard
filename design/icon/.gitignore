@@ -1,0 +1,5 @@
+# 只跟踪矢量母版(*.svg)。以下都是由母版生成/派生的产物，用 rsvg-convert + iconutil 可重出，
+# 正式副本在 electron/build/ 与 public/，无需在此重复入库。详见 PUBLISHING.md 0.21.2。
+*.png
+*.icns
+_old-backup/

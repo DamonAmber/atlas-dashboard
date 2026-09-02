@@ -273,6 +273,8 @@ body.resizing iframe { pointer-events: none; }
   font-size: 14px;
   flex: none;
 }
+/* 品牌小图标（堆叠文档 + 未读红点），与 App 图标同款；渐变方块由 .brand-mark / .home-logo 提供 */
+.brand-glyph { display: block; width: 100%; height: 100%; }
 .brand-title {
   display: block;
   font-weight: 650; letter-spacing: 0.2px; font-size: 14px;
