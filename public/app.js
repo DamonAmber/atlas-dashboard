@@ -1916,21 +1916,26 @@ function animateFolderChildren(folderEl, expand) {
     childrenEl.classList.remove('animating', 'is-opening');
     childrenEl.style.height = '';
     childrenEl._collapseCleanup = null;
-    if (!expand) folderEl.classList.add('collapsed');   // 折叠末态：真正 display:none
   }
   childrenEl._collapseCleanup = cleanup;
 
+  // 关键：.collapsed 类【同步】切好（点完立刻就在），不推迟到动画结束——否则
+  // "点击后立即读 .collapsed" 的调用方（含 folder-toggle-with-jitter 测试）会读到旧值。
+  // 动画期间 .animating 的 display:block !important 盖过 .collapsed 的 display:none，
+  // 让折叠过程可见；结束后 cleanup 摘掉 .animating，.collapsed 的 display:none 才真正生效。
+  childrenEl.classList.add('animating');
   if (expand) {
-    folderEl.classList.remove('collapsed');             // 先可见才能量高
-    childrenEl.classList.add('animating', 'is-opening');
+    folderEl.classList.remove('collapsed');
+    childrenEl.classList.add('is-opening');
     const target = childrenEl.scrollHeight;
     childrenEl.style.height = '0px';
     void childrenEl.offsetHeight;                        // 强制回流，认账起点
     childrenEl.addEventListener('transitionend', onEnd);
     childrenEl.style.height = target + 'px';
   } else {
-    childrenEl.classList.add('animating');
-    childrenEl.style.height = childrenEl.scrollHeight + 'px';
+    folderEl.classList.add('collapsed');                 // 同步进入折叠态（display 由 .animating 兜住）
+    const start = childrenEl.scrollHeight;               // .animating 保证此刻仍可见、量得到真实高度
+    childrenEl.style.height = start + 'px';
     void childrenEl.offsetHeight;
     childrenEl.addEventListener('transitionend', onEnd);
     childrenEl.style.height = '0px';
