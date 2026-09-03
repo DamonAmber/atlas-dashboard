@@ -1881,12 +1881,71 @@ function renderFile(file, node) {
 function saveCollapsed() {
   localStorage.setItem('atlas:collapsed', JSON.stringify([...state.collapsed]));
 }
+// 是否尊重系统「减少动态效果」
+function prefersReducedMotion() {
+  return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+// 单个分组的展开 / 折叠高度动画。
+// 关键约束：末态一律落到 .collapsed 类（CSS 里 = display:none）。这保证三条链路和
+// 过去完全一致——① 键盘上下导航按 .folder.collapsed 过滤；② 折叠后文件行"真的
+// 不可见"（高度动画到 0 时子行仍有自己的包围盒，仅靠 overflow 不算隐藏）；
+// ③ collapse-all / 首屏走整树重建，分组一出生即 .collapsed，压根不进这个函数、
+// 也就没有"满屏分组一起展开"。动画只发生在用户单击某个分组头这一条路径。
+function animateFolderChildren(folderEl, expand) {
+  const childrenEl = folderEl.querySelector(':scope > .folder-children');
+  // 没有子容器、或系统要求减少动效：直接切类（0ms 过渡不触发 transitionend，
+  // 若还指望它收尾会导致分组永远收不起来）
+  if (!childrenEl || prefersReducedMotion()) {
+    folderEl.classList.toggle('collapsed', !expand);
+    return;
+  }
+  // 打断可能在途的上一次动画（快速连点同一个分组）
+  if (childrenEl._collapseCleanup) childrenEl._collapseCleanup();
+
+  let done = false;
+  let timer = 0;
+  const onEnd = (e) => {
+    if (e.target === childrenEl && e.propertyName === 'height') cleanup();
+  };
+  function cleanup() {
+    if (done) return;
+    done = true;
+    childrenEl.removeEventListener('transitionend', onEnd);
+    clearTimeout(timer);
+    childrenEl.classList.remove('animating', 'is-opening');
+    childrenEl.style.height = '';
+    childrenEl._collapseCleanup = null;
+    if (!expand) folderEl.classList.add('collapsed');   // 折叠末态：真正 display:none
+  }
+  childrenEl._collapseCleanup = cleanup;
+
+  if (expand) {
+    folderEl.classList.remove('collapsed');             // 先可见才能量高
+    childrenEl.classList.add('animating', 'is-opening');
+    const target = childrenEl.scrollHeight;
+    childrenEl.style.height = '0px';
+    void childrenEl.offsetHeight;                        // 强制回流，认账起点
+    childrenEl.addEventListener('transitionend', onEnd);
+    childrenEl.style.height = target + 'px';
+  } else {
+    childrenEl.classList.add('animating');
+    childrenEl.style.height = childrenEl.scrollHeight + 'px';
+    void childrenEl.offsetHeight;
+    childrenEl.addEventListener('transitionend', onEnd);
+    childrenEl.style.height = '0px';
+  }
+  // 兜底：transitionend 可能因中断不触发，超时强制收尾（略大于 --dur 200ms）
+  timer = setTimeout(cleanup, 400);
+}
+
 function toggleFolder(id) {
+  const willExpand = state.collapsed.has(id);   // 当前折叠 → 这次点击是展开
   if (state.collapsed.has(id)) state.collapsed.delete(id);
   else state.collapsed.add(id);
   saveCollapsed();
   const el = els.tree.querySelector(`.folder[data-folder-id="${id}"]`);
-  if (el) el.classList.toggle('collapsed');
+  if (el) animateFolderChildren(el, willExpand);
   updateCollapseAllBtn();
 }
 
@@ -2818,9 +2877,20 @@ function markSidebarActive(filePath) {
   els.tree.querySelectorAll('.file.active').forEach(e => e.classList.remove('active'));
   // 切换 active 时清除键盘焦点态，避免"两个被选中"的视觉异常
   els.tree.querySelectorAll('.file.kbd-focus').forEach(e => e.classList.remove('kbd-focus'));
+  // 清掉上一次的祖先路径高亮
+  els.tree.querySelectorAll('.folder.on-active-path').forEach(e => e.classList.remove('on-active-path'));
   if (!filePath) return;
   const fileEl = els.tree.querySelector(`.file[data-path="${CSS.escape(filePath)}"]`);
-  if (fileEl) fileEl.classList.add('active');
+  if (fileEl) {
+    fileEl.classList.add('active');
+    // 点亮当前文件所在的整条层级链的缩进引导线（VS Code 同款）：从文件向上，
+    // 给每一层 .folder 加 .on-active-path，CSS 据此把 border-left 染成 accent。
+    let p = fileEl.parentElement;
+    while (p && p !== els.tree) {
+      if (p.classList && p.classList.contains('folder')) p.classList.add('on-active-path');
+      p = p.parentElement;
+    }
+  }
 }
 
 // 应用"当前文档"相关的联动 UI：面包屑 + 顶栏按钮 + 收藏/对比/信任 + 沙箱提示。

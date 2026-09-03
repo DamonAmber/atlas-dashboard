@@ -135,47 +135,55 @@
       </label>
     </div>
 
-    <!-- 标签筛选区：只在有标签存在时显示（renderTagBar 控制）。
-         结构刻意与「收藏 / 最近打开」对齐——分区头 + 可折叠内容区。
-         原来是一排裸 chip 直接顶在 sort-bar 的分隔线上：既没有"这排东西是干什么的"
-         的说明，也没有呼吸空间，标签一多还会把文件树挤下去。 -->
-    <div id="tag-bar" class="tag-bar hidden" role="group" aria-label="按标签筛选">
-      <div class="tag-bar-head">
-        <!-- 折叠按钮和「清除」是两个动作，必须是并列的两个 button（button 不能嵌套） -->
-        <button class="section-head tag-bar-toggle" id="tag-bar-toggle" type="button" aria-expanded="true" aria-controls="tag-bar-chips" title="收起 / 展开标签筛选">
+    <!-- 快捷区：收藏 / 最近 / 标签三段收进一个视觉独立的面板。
+         过去三段是并排的裸分区，各画一条分隔线、长得一模一样，堆在一起像表格，
+         也和下面的目录树糊成一片（"分区不清晰"的根源）。现在给它一个凹陷底色 +
+         发丝边 + 圆角的容器身份，一眼就是"快捷入口"这一块，和可滚动的全量树分开。
+         容器空时（无收藏/最近/标签）靠 :has() 整块隐藏，不留空面板。
+         顺序调成 收藏 → 最近 → 标签：前两个是并列的平铺列表，标签是过滤树的筛选器，
+         放最下方紧贴目录树，"筛的就是下面这棵树"的关系更直白。
+         每段内部结构 / id / 折叠与显隐逻辑完全不变，只是换了容器与外观。 -->
+    <div class="quick-zone" id="quick-zone">
+      <div id="fav-bar" class="fav-bar hidden">
+        <button class="section-head" id="fav-toggle" type="button" aria-expanded="true" aria-controls="fav-list" title="收起 / 展开收藏夹">
           <svg class="ico section-chev" width="12" height="12" aria-hidden="true"><use href="#i-chevron-down"/></svg>
-          <svg class="ico section-ico" width="12" height="12" aria-hidden="true"><use href="#i-tag"/></svg>
-          <span class="section-title">标签</span>
-          <span class="section-count" id="tag-bar-count"></span>
+          <svg class="ico section-ico" width="12" height="12" aria-hidden="true"><use href="#i-star"/></svg>
+          <span class="section-title">收藏</span>
+          <span class="section-count" id="fav-count"></span>
         </button>
-        <button id="tag-bar-clear" class="tag-bar-clear hidden" type="button" title="清除标签筛选" aria-label="清除标签筛选">清除</button>
+        <div id="fav-list" class="fav-list"></div>
       </div>
-      <div id="tag-bar-chips" class="tag-bar-chips"></div>
-    </div>
 
-    <div id="fav-bar" class="fav-bar hidden">
-      <button class="section-head" id="fav-toggle" type="button" aria-expanded="true" aria-controls="fav-list" title="收起 / 展开收藏夹">
-        <svg class="ico section-chev" width="12" height="12" aria-hidden="true"><use href="#i-chevron-down"/></svg>
-        <svg class="ico section-ico" width="12" height="12" aria-hidden="true"><use href="#i-star"/></svg>
-        <span class="section-title">收藏</span>
-        <span class="section-count" id="fav-count"></span>
-      </button>
-      <div id="fav-list" class="fav-list"></div>
-    </div>
-
-    <div id="recent-bar" class="recent-bar hidden">
-      <!-- 折叠和「清除」是两个动作，必须是并列的两个 button（button 不能嵌套），
-           结构与 tag-bar-head 一致 -->
-      <div class="recent-bar-head">
-        <button class="section-head recent-toggle" id="recent-toggle" type="button" aria-expanded="true" aria-controls="recent-list" title="收起 / 展开最近打开列表">
-          <svg class="ico section-chev" width="12" height="12" aria-hidden="true"><use href="#i-chevron-down"/></svg>
-          <svg class="ico section-ico" width="12" height="12" aria-hidden="true"><use href="#i-clock"/></svg>
-          <span class="section-title">最近</span>
-          <span class="section-count" id="recent-count"></span>
-        </button>
-        <button id="recent-clear" class="recent-clear" type="button" title="清除最近浏览记录" aria-label="清除最近浏览记录">清除</button>
+      <div id="recent-bar" class="recent-bar hidden">
+        <!-- 折叠和「清除」是两个动作，必须是并列的两个 button（button 不能嵌套），
+             结构与 tag-bar-head 一致 -->
+        <div class="recent-bar-head">
+          <button class="section-head recent-toggle" id="recent-toggle" type="button" aria-expanded="true" aria-controls="recent-list" title="收起 / 展开最近打开列表">
+            <svg class="ico section-chev" width="12" height="12" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+            <svg class="ico section-ico" width="12" height="12" aria-hidden="true"><use href="#i-clock"/></svg>
+            <span class="section-title">最近</span>
+            <span class="section-count" id="recent-count"></span>
+          </button>
+          <button id="recent-clear" class="recent-clear" type="button" title="清除最近浏览记录" aria-label="清除最近浏览记录">清除</button>
+        </div>
+        <div id="recent-list" class="recent-list"></div>
       </div>
-      <div id="recent-list" class="recent-list"></div>
+
+      <!-- 标签筛选区：只在有标签存在时显示（renderTagBar 控制）。
+           分区头 + 可折叠 chip 区。 -->
+      <div id="tag-bar" class="tag-bar hidden" role="group" aria-label="按标签筛选">
+        <div class="tag-bar-head">
+          <!-- 折叠按钮和「清除」是两个动作，必须是并列的两个 button（button 不能嵌套） -->
+          <button class="section-head tag-bar-toggle" id="tag-bar-toggle" type="button" aria-expanded="true" aria-controls="tag-bar-chips" title="收起 / 展开标签筛选">
+            <svg class="ico section-chev" width="12" height="12" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+            <svg class="ico section-ico" width="12" height="12" aria-hidden="true"><use href="#i-tag"/></svg>
+            <span class="section-title">标签</span>
+            <span class="section-count" id="tag-bar-count"></span>
+          </button>
+          <button id="tag-bar-clear" class="tag-bar-clear hidden" type="button" title="清除标签筛选" aria-label="清除标签筛选">清除</button>
+        </div>
+        <div id="tag-bar-chips" class="tag-bar-chips"></div>
+      </div>
     </div>
 
     <div class="tree-head">

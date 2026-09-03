@@ -586,6 +586,46 @@ body.no-active-doc .tb-sep { display: none; }
 .tree-head-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tree-head-btn:disabled { opacity: 0.35; cursor: default; background: transparent; color: var(--text-faint); }
 
+/* ============================================================
+ * 快捷区（收藏 / 最近 / 标签的共同外壳）
+ * ------------------------------------------------------------
+ * 过去这三段是并排的裸分区，各占一条灰线、字号字色一模一样，堆在一起像表格，
+ * 又和下面的目录树糊成一片——这正是"分区不清晰 / 上世纪办公软件"的主因。
+ * 现在给它们一个凹陷面板身份：比侧栏表面（--bg-elev）更沉一档的底色 + 发丝边 +
+ * 圆角。于是"快捷入口"是明确的一块，"全量目录树"是另一块，中间自然断开。
+ * 三段全空时用 :has() 把整块收掉，不留空框。每段内部 id / 折叠 / 显隐逻辑不变。 */
+.quick-zone {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 8px 10px 2px;
+  padding: 3px;
+  border-radius: var(--r-lg);
+  background: var(--bg);
+  border: 1px solid var(--hairline);
+}
+/* 三段都为空（或都 .hidden）→ 整块隐藏。Chromium 原生支持 :has() 的相对选择器列表 */
+.quick-zone:not(:has(> .fav-bar:not(.hidden), > .recent-bar:not(.hidden), > .tag-bar:not(.hidden))) {
+  display: none;
+  margin: 0;
+  border: none;
+}
+/* 收进面板后，各段自身的外边距收紧——呼吸感交给面板统一给 */
+.quick-zone > .fav-bar,
+.quick-zone > .recent-bar,
+.quick-zone > .tag-bar {
+  padding: 1px 2px 2px;
+}
+/* 段与段之间一条极淡分隔（仅在同时可见时出现，避免顶部第一段头上挂线） */
+.quick-zone > .fav-bar:not(.hidden) ~ .recent-bar:not(.hidden),
+.quick-zone > .fav-bar:not(.hidden) ~ .tag-bar:not(.hidden),
+.quick-zone > .recent-bar:not(.hidden) ~ .tag-bar:not(.hidden) {
+  border-top: 1px solid var(--hairline);
+  margin-top: 1px;
+  padding-top: 3px;
+}
+
 /* 最近打开。
  * 不再画 border-bottom：标签 / 收藏 / 最近三段各画一条线的话，侧栏上半部分
  * 会叠出三条横线，看起来像表格而不像分区。Bear 的做法是纯靠间距分组——
@@ -638,7 +678,10 @@ body.no-active-doc .tb-sep { display: none; }
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 8px 6px 12px;
+  /* 顶部 padding 归零：否则顶层分组头 sticky 到 top:0 时，上方这段 padding 会
+   * 露出下方正在滚动的内容（一丝上一行的残影）。顶部呼吸感由上面的
+   * 「全部文档」分区头提供，这里不再重复留白。 */
+  padding: 0 6px 12px;
 }
 
 .folder { margin: 1px 0; }
@@ -654,6 +697,17 @@ body.no-active-doc .tb-sep { display: none; }
 }
 .folder-header:hover { background: var(--bg-hover); }
 .folder-header.drop-target { background: var(--bg-active); }
+/* 顶层分组头吸顶：深滚几百篇文档时，"我在哪个顶层分组"始终挂在树顶（VS Code 的
+ * tree sticky scroll 同款）。只做顶层一级——嵌套多级吸顶会互相堆叠、拖拽排序时抖动。 */
+.tree > .folder > .folder-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+/* 吸顶时要一层实底遮住下方滚动内容。用 :where() 让这条背景规则特异性为 0，于是
+ * :hover / .drop-target / .drag-hover 的背景仍照常覆盖；底色取侧栏表面色，静息
+ * （未吸顶）时与背景同色"看不见"，只有真正吸顶盖住内容那一刻才起遮挡作用。 */
+:where(.tree > .folder > .folder-header) { background: var(--bg-elev); }
 /* 拖拽悬停 600ms 即将自动展开的视觉提示 */
 .folder-header.drag-hover {
   background: var(--bg-active);
@@ -691,12 +745,15 @@ body.no-active-doc .tb-sep { display: none; }
 .folder.collapsed > .folder-header .folder-toggle { transform: rotate(-90deg); }
 .folder-icon {
   width: 14px; height: 14px; flex: none;
-  color: var(--text-faint);
+  /* 比文件类型 icon（--text-faint）实一档，强化"这是容器不是文件"的层级 */
+  color: var(--text-dim);
 }
 .folder-name {
   flex: 1;
   font-weight: var(--fw-semi);
   font-size: var(--fs-base);
+  /* 分组名是这一层的主角，字距收紧一点点让它更"结实"，和文件名的常规字重拉开 */
+  letter-spacing: -0.01em;
   color: var(--text);
   outline: none;
   border-radius: 3px;
@@ -778,10 +835,48 @@ body.no-active-doc .tb-sep { display: none; }
   margin-left: 10px;
   /* 常显的极淡竖线：804 个文件的树里，靠缩进量猜层级很累 */
   border-left: 1px solid var(--hairline);
+  /* 注意：不在这里常驻 overflow:hidden——那会裁掉行内按钮的键盘焦点环。
+   * 只有动画期间（.animating）才需要裁剪来实现高度收缩，见下方规则。 */
   transition: border-color var(--dur-fast);
 }
 .folder-children:hover { border-left-color: var(--border-strong); }
+/* 选中文件所在的整条层级链，缩进引导线点亮成 accent——一眼看清"当前文件在哪条支上"
+ * （祖先链的 .on-active-path 由 markSidebarActive 维护）。 */
+.folder.on-active-path > .folder-children { border-left-color: var(--accent-ring); }
+
+/* 折叠末态：display:none。三个理由缺一不可——
+ *   ① 键盘上下导航 visibleFilesInOrder() 靠 .folder.collapsed 类过滤，class 一直在；
+ *   ② 折叠后文件行必须"真的不可见"（overflow:hidden + height:0 时子行仍有自己的
+ *      包围盒，会被判定为可见）；
+ *   ③ collapse-all / 首屏渲染走整树重建，元素一出生即 .collapsed，直接 none、无动画，
+ *      不会出现"满屏分组一起展开"。
+ * 单个分组的展开 / 折叠高度动画由 JS 驱动（toggleFolder → animateFolderChildren），
+ * 动画期间临时挂 .animating 覆盖 display / min-height / overflow。 */
 .folder.collapsed > .folder-children { display: none; }
+.folder-children.animating {
+  display: block !important;
+  min-height: 0;
+  overflow: hidden;
+  transition: height var(--dur) var(--ease-out);
+}
+/* 展开时子项依次淡入并轻微上移，给折叠展开一点"空间连续性"。
+ * 只 stagger 前 8 个，长分组尾部不再拖延迟；reduced-motion 下 --dur=0 自然失效。 */
+@keyframes treeItemIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: none; }
+}
+.folder-children.is-opening > .file,
+.folder-children.is-opening > .folder {
+  animation: treeItemIn var(--dur) var(--ease-out) both;
+}
+.folder-children.is-opening > :nth-child(1) { animation-delay: 0ms; }
+.folder-children.is-opening > :nth-child(2) { animation-delay: 16ms; }
+.folder-children.is-opening > :nth-child(3) { animation-delay: 32ms; }
+.folder-children.is-opening > :nth-child(4) { animation-delay: 48ms; }
+.folder-children.is-opening > :nth-child(5) { animation-delay: 64ms; }
+.folder-children.is-opening > :nth-child(6) { animation-delay: 80ms; }
+.folder-children.is-opening > :nth-child(7) { animation-delay: 96ms; }
+.folder-children.is-opening > :nth-child(n+8) { animation-delay: 112ms; }
 
 /* 文件行。
  * flex-wrap 是为了 .file-snippet：搜索命中正文时它 flex-basis:100% 强制换行，
@@ -848,6 +943,13 @@ body.no-active-doc .tb-sep { display: none; }
  * 也就是"想操作某个文件时，恰恰看不清它叫什么"。时间戳在 hover 的那一刻
  * 是最不重要的信息，让它先走。 */
 .file:hover .file-mtime { display: none; }
+/* 静息态默认不显示右侧时间戳。一列右对齐的 03-25 / 03-18 正是"上世纪办公软件
+ * 详细信息列表"观感的主要来源；时间信息在行 title 与顶栏面包屑「更新于」里都有，
+ * 加上按时间排序本身就表达了新旧，树里不必再挂一列日期。
+ * 唯一例外：仅内容命中的行保留时间戳（连同前置放大镜标记）——它是"这行为什么
+ * 会出现在结果里"的直接答案，属于有效信息而非噪音。 */
+.file .file-mtime { display: none; }
+.file.content-match:not(:hover) .file-mtime { display: inline; }
 
 .unread-dot {
   width: 6px; height: 6px;
@@ -957,11 +1059,14 @@ body.no-active-doc .tb-sep { display: none; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 9.5px;
   line-height: 1.5;
-  padding: 0 5px;
+  padding: 0 6px;
   border-radius: var(--r-full);
-  background: var(--bg-elev-2);
+  /* 去掉描边、底色再压淡：行内标签是次要信息，带边框的实心 chip 一多就把文件名
+   * 挤成一排"药丸墙"。改成无边框的轻底色，安静地待在名字后面即可（完整标签在
+   * title 里，筛选也照常）。 */
+  background: var(--accent-soft);
   color: var(--text-dim);
-  border: 1px solid var(--border);
+  border: none;
 }
 .file-tag.more {
   color: var(--text-faint);
