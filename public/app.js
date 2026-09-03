@@ -70,12 +70,16 @@ const els = {
   tabBar: document.getElementById('tab-bar'),
   emptyState: document.getElementById('empty-state'),
   homeSub: document.getElementById('home-sub'),
-  homeMetrics: document.getElementById('home-metrics'),
-  homeUnread: document.getElementById('home-unread'),
-  homeUnreadCount: document.getElementById('home-unread-count'),
+  homeEyebrow: document.getElementById('home-eyebrow'),
+  homeHeroLine: document.getElementById('home-hero-line'),
+  homeChips: document.getElementById('home-chips'),
+  homePulse: document.getElementById('home-pulse'),
+  homeFeedCount: document.getElementById('home-feed-count'),
+  homeFeedHint: document.getElementById('home-feed-hint'),
+  homeGrid: document.getElementById('home-grid'),
   homeRecent: document.getElementById('home-recent'),
   homeFav: document.getElementById('home-fav'),
-  homeFavCard: document.getElementById('home-fav-card'),
+  homeFavRail: document.getElementById('home-fav-rail'),
   crumbs: document.getElementById('crumbs'),
   btnHome: document.getElementById('btn-home'),
   saveStatus: document.getElementById('save-status'),
@@ -105,6 +109,9 @@ const els = {
   btnEditSave: document.getElementById('btn-edit-save'),
   btnEditCancel: document.getElementById('btn-edit-cancel'),
   btnCopyPath: document.getElementById('btn-copy-path'),
+  btnMore: document.getElementById('btn-more'),
+  tbMore: document.getElementById('tb-more'),
+  tbMoreMenu: document.getElementById('tb-more-menu'),
   // settings modal
   modal: document.getElementById('settings-modal'),
   rootList: document.getElementById('root-list'),
@@ -775,7 +782,68 @@ function updateStats() {
 // ---------- 首页 ----------
 // 「AI 又改了哪些文档」是这个工具存在的理由，首页就直接答这个问题：
 // 未读队列按 mtime 倒序，点一行直接进文档。最近 / 收藏同理。
-const HOME_LIST_MAX = 7;
+const HOME_LIST_MAX = 7;   // 最近 / 收藏 两条轨道各取前几条
+const HOME_FEED_MAX = 8;   // 首页封面墙一屏放几张
+
+// 路径 → 稳定色相（0–360）。djb2 哈希，够散、零依赖。同一输入永远同一色，
+// 于是封面和项目色点在整个界面里保持一致。
+function hashStr(s) {
+  let h = 5381;
+  const str = String(s || '');
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+function hueFor(s) { return hashStr(s) % 360; }
+
+// 生成式封面卡：不截图，用"项目名 → 色相"哈希出的渐变 + 类型字形水印。
+// 用项目名而不是完整路径做色相——同一项目的文档共享一个色系，扫一眼按颜色成堆。
+// S/L 交给 CSS 的 --cover-* 令牌（按主题两套），这里只把 --h 传下去。
+function coverCard(file, i = 0) {
+  const name = file.alias || stripDocExt(file.name);
+  // 基色相来自项目名（同项目同色系），再按文件路径叠 ±15° 微扰——
+  // 一屏全是同一个项目时不至于死板，但依然明显是一个色族。
+  const base = hueFor(file.projectName || file.path);
+  const jitter = (hashStr(file.path) % 30) - 15;
+  const h = (base + jitter + 360) % 360;
+  const fresh = isFreshUnread(file);
+  return `
+    <button class="cover-card" type="button" style="--h:${h};--i:${i}"
+            data-path="${escapeHtml(file.path)}" title="${escapeHtml(file.relPath)}">
+      <span class="cover-art" aria-hidden="true">
+        <span class="cover-glyph">${docTypeIcon(file, 30)}</span>
+        <span class="cover-badge">${docTypeBadge(file)}</span>
+        ${fresh ? '<span class="cover-fresh"></span>' : ''}
+      </span>
+      <span class="cover-body">
+        <span class="cover-name">${escapeHtml(name)}</span>
+        <span class="cover-meta">
+          <span class="cover-proj">${escapeHtml(file.projectName || '未分组')}</span>
+          <span class="cover-dot"></span>
+          <span>${fmtMtime(file.mtime)}</span>
+        </span>
+      </span>
+    </button>`;
+}
+
+// 活动脉冲：过去 24h 每小时的改动数做成小竖条（最近的在右侧）。
+function homePulseHtml(all) {
+  const now = Date.now();
+  const H = 24, HOUR = 3_600_000;
+  const buckets = new Array(H).fill(0);
+  for (const f of all) {
+    const age = now - (f.mtime || 0);
+    if (age < 0 || age >= H * HOUR) continue;
+    const idx = H - 1 - Math.floor(age / HOUR);
+    if (idx >= 0 && idx < H) buckets[idx]++;
+  }
+  const max = Math.max(1, ...buckets);
+  return buckets.map((c, i) => {
+    const pct = Math.max(8, Math.round((c / max) * 100));
+    return `<span class="home-pulse-bar${c > 0 ? ' on' : ''}" style="height:${pct}%;--i:${i}" title="${c} 篇改动"></span>`;
+  }).join('');
+}
+
+// 单行（最近 / 收藏 轨道复用）
 function homeRow(file) {
   const name = file.alias || stripDocExt(file.name);
   const stale = file.unread && !isFreshUnread(file);
@@ -789,55 +857,77 @@ function homeRow(file) {
       <span class="home-row-time">${fmtMtime(file.mtime)}</span>
     </button>`;
 }
+
+const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
 function renderHome() {
-  if (!els.homeUnread) return;
+  if (!els.homeGrid) return;
   const all = Object.values(state.files);
   const total = all.length;
+
+  if (els.homeEyebrow) els.homeEyebrow.textContent = `今日 · ${WEEKDAYS[new Date().getDay()]}`;
+
   if (total === 0) {
-    els.homeSub.textContent = '还没扫到任何文档。到 ⚙ 设置里加一个扫描根目录试试。';
-    els.homeMetrics.innerHTML = '';
-    els.homeUnread.innerHTML = '';
+    els.homeHeroLine.textContent = '还没有文档';
+    els.homeSub.textContent = '到 ⚙ 设置里加一个扫描根目录，Atlas 就会把里面的 HTML / Markdown 都收进来。';
+    if (els.homeChips) els.homeChips.innerHTML = '';
+    if (els.homePulse) els.homePulse.innerHTML = '';
+    els.homeFeedCount.textContent = '';
+    if (els.homeFeedHint) els.homeFeedHint.textContent = '';
+    els.homeGrid.innerHTML = homeEmpty({
+      icon: 'search', title: '空空如也', hint: '添加扫描根目录后，文档会出现在这里',
+    });
     els.homeRecent.innerHTML = '';
+    if (els.homeFavRail) els.homeFavRail.classList.add('hidden');
     return;
   }
+
   const unread = all.filter(f => f.unread).sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
   const projects = new Set(all.map(f => f.projectName).filter(Boolean));
   // 「今天改过」才是这个 dashboard 真正要回答的问题（"AI 刚动了什么"）。
-  // 原来 KPI 把「未读」标红，可未读会一直累积到几百篇——一个永远亮红的
-  // 三位数不是警报，是背景噪音。红色只留给这个 24h 窗口内的数字。
+  // 红色只留给这个 24h 窗口内的数字——几百篇常亮未读不是警报，是背景噪音。
   const fresh = unread.filter(isFreshUnread);
 
-  els.homeSub.textContent = fresh.length
-    ? `今天有 ${fresh.length} 篇被改过${unread.length > fresh.length ? `，另有 ${unread.length - fresh.length} 篇更早的还没看` : ''}`
-    : unread.length
-      ? `今天没有新变动，还有 ${unread.length} 篇待看`
-      : '所有文档都看过了';
-
-  els.homeMetrics.innerHTML = [
-    { k: '文档', v: total },
-    { k: '今天改过', v: fresh.length, hot: fresh.length > 0 },
-    { k: '待看', v: unread.length },
-    { k: '项目', v: projects.size },
-  ].map(m => `
-    <div class="home-metric${m.hot ? ' hot' : ''}">
-      <div class="home-metric-v">${m.v}</div>
-      <div class="home-metric-k">${m.k}</div>
-    </div>`).join('');
-
-  // 待看
-  if (unread.length) {
-    els.homeUnreadCount.textContent = unread.length;
-    els.homeUnread.innerHTML = unread.slice(0, HOME_LIST_MAX).map(homeRow).join('')
-      + (unread.length > HOME_LIST_MAX
-        ? `<div class="home-more">还有 ${unread.length - HOME_LIST_MAX} 篇，在左侧勾选「仅未读」查看全部</div>`
-        : '');
+  // 英雄标题：数字（喷品牌渐变）是句子的一部分，而不是一格格仪表
+  if (fresh.length) {
+    els.homeHeroLine.innerHTML = `今天 AI 改了 <span class="n">${fresh.length}</span> 篇文档`;
+    els.homeSub.textContent = unread.length > fresh.length
+      ? `另有 ${unread.length - fresh.length} 篇更早的还没看`
+      : '点开封面即可查看，看完自动清除红点';
+  } else if (unread.length) {
+    els.homeHeroLine.innerHTML = `还有 <span class="n">${unread.length}</span> 篇待看`;
+    els.homeSub.textContent = '今天没有新变动，慢慢看';
   } else {
-    els.homeUnreadCount.textContent = '';
-    els.homeUnread.innerHTML = homeEmpty({
-      icon: 'check-circle',
-      title: '没有未读文档',
-      hint: '有新改动时会自动回到这里排队',
-    });
+    els.homeHeroLine.innerHTML = `全部 <span class="n calm">${total}</span> 篇都看过了`;
+    els.homeSub.textContent = 'AI 一有更新，这里就会重新排起队';
+  }
+
+  // 统计 chips：数字放大、单位轻描，比原来的四个大方块克制
+  if (els.homeChips) {
+    els.homeChips.innerHTML = [
+      { k: '文档', v: total },
+      { k: '项目', v: projects.size },
+      { k: '待看', v: unread.length },
+    ].map(c => `<span class="home-chip"><b>${c.v}</b>${c.k}</span>`).join('');
+  }
+
+  // 活动脉冲
+  if (els.homePulse) els.homePulse.innerHTML = homePulseHtml(all);
+
+  // 待看：封面图卡墙
+  els.homeFeedCount.textContent = unread.length ? unread.length : '';
+  if (unread.length) {
+    if (els.homeFeedHint) {
+      els.homeFeedHint.textContent = unread.length > HOME_FEED_MAX ? '在左侧勾选「仅未读」看全部' : '';
+    }
+    els.homeGrid.innerHTML = unread.slice(0, HOME_FEED_MAX).map((f, i) => coverCard(f, i)).join('');
+  } else {
+    if (els.homeFeedHint) els.homeFeedHint.textContent = '';
+    els.homeGrid.innerHTML = `<div class="home-cheer">
+      <span class="home-cheer-badge">${ic('check', 24)}</span>
+      <span class="home-cheer-title">收件箱清空了</span>
+      <span class="home-cheer-hint">没有未读文档，AI 一更新就会回到这里</span>
+    </div>`;
   }
 
   // 最近打开
@@ -851,9 +941,9 @@ function renderHome() {
         action: { label: '快速打开', icon: 'search', kbd: '⌘K', attr: 'data-open-quickopen' },
       });
 
-  // 收藏（没有收藏就整张卡片不出现，不占版面）
+  // 收藏（没有收藏就整条轨道不出现，不占版面）
   const favs = (state.favorites || []).filter(p => state.files[p]).slice(0, HOME_LIST_MAX);
-  els.homeFavCard.classList.toggle('hidden', favs.length === 0);
+  if (els.homeFavRail) els.homeFavRail.classList.toggle('hidden', favs.length === 0);
   if (favs.length) els.homeFav.innerHTML = favs.map(p => homeRow(state.files[p])).join('');
 }
 // 首页卡片的空状态。
@@ -877,9 +967,19 @@ document.addEventListener('click', (e) => {
     openQuickOpen();
     return;
   }
-  const row = e.target.closest && e.target.closest('.home-row');
+  const row = e.target.closest && e.target.closest('.home-row, .cover-card');
   if (row && row.dataset.path) openFile(row.dataset.path);
 });
+
+// 首页 ↔ 文档 的柔和交叉淡入。只包外壳容器的 DOM 变更，iframe 内部不参与。
+// 浏览器不支持 View Transitions（或用户开了 reduce-motion）就直接执行，逻辑不变。
+function withViewTransition(fn) {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (typeof document.startViewTransition === 'function' && !reduce) {
+    try { document.startViewTransition(fn); return; } catch { /* 降级到直接执行 */ }
+  }
+  fn();
+}
 
 // ---------- 工具 ----------
 // 「新鲜的未读」= 24h 内被改动过。侧栏文件行的红点与粗体、分组红点、
@@ -2448,7 +2548,10 @@ function renderTabs() {
   const has = state.tabs.length > 0;
   bar.classList.toggle('hidden', !has);
   document.body.classList.toggle('has-tabs', has);
-  bar.innerHTML = '';
+  // 只移除旧的 .tab，保留常驻的滑动指示层——重建会打断过渡，指示层必须一直在 DOM 里，
+  // 改它的 transform 才能从"上一个标签"平滑滑到"新标签"，而不是每次重新出现。
+  bar.querySelectorAll('.tab').forEach(el => el.remove());
+  ensureTabIndicator();
   for (const tab of state.tabs) {
     const file = state.files[tab.path];
     const dtype = file ? docTypeOf(file) : 'html';
@@ -2477,8 +2580,58 @@ function renderTabs() {
     });
     bar.appendChild(el);
   }
+  // 指示层挪到最后一个子元素：它是 absolute（不占布局）、z-index 垫底（不挡标签），
+  // 放末尾能让 .tab:nth-child(1) 仍指向第一个标签（否则会把标签整体挤后一位）。
+  if (els.tabIndicator) bar.appendChild(els.tabIndicator);
   const activeEl = bar.querySelector('.tab.active');
   if (activeEl) activeEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  positionTabIndicator(true);
+}
+
+// 常驻的滑动指示层：只创建一次，之后一直待在 tab-bar 里当第一个子元素（垫在所有 tab 之下）。
+// renderTabs 每次只删 .tab、不删它，所以切换时它的 transform 能连续过渡。
+function ensureTabIndicator() {
+  if (!els.tabBar) return;
+  if (!els.tabIndicator) {
+    const ind = document.createElement('div');
+    ind.className = 'tab-indicator';
+    ind.setAttribute('aria-hidden', 'true');
+    els.tabIndicator = ind;
+  }
+  if (els.tabIndicator.parentNode !== els.tabBar) {
+    els.tabBar.appendChild(els.tabIndicator);
+  }
+}
+
+// 把指示层移到当前激活标签的位置 / 宽度。
+// animate=false（或首次出现）时无动画直接就位——用于首帧和窗口 / 侧栏改宽的即时跟随；
+// animate=true 时靠 CSS 过渡从旧位置滑到新位置——用于切换标签。
+function positionTabIndicator(animate) {
+  const ind = els.tabIndicator;
+  const bar = els.tabBar;
+  if (!ind || !bar) return;
+  const active = bar.querySelector('.tab.active');
+  if (!active) { ind.classList.remove('show'); return; }
+  const left = active.offsetLeft;
+  const width = active.offsetWidth;
+  if (!animate || !ind.classList.contains('show')) {
+    const prev = ind.style.transition;
+    ind.style.transition = 'none';
+    ind.style.transform = `translateX(${left}px)`;
+    ind.style.width = `${width}px`;
+    void ind.offsetWidth;               // 强制回流，让"无动画就位"落定
+    ind.style.transition = prev || '';
+    ind.classList.add('show');
+  } else {
+    ind.style.transform = `translateX(${left}px)`;
+    ind.style.width = `${width}px`;
+  }
+}
+
+// 窗口 / 侧栏改宽会改变标签的排布，指示层要即时跟随（不滑动，避免拖影）。
+// ResizeObserver 一网打尽：窗口 resize、侧栏拖拽 / 收起展开导致的 tab-bar 宽度变化都会触发。
+if (window.ResizeObserver && els.tabBar) {
+  new ResizeObserver(() => positionTabIndicator(false)).observe(els.tabBar);
 }
 
 // 键盘：前后切换 / 跳到第 n 个
@@ -2691,6 +2844,7 @@ function applyActiveDocUI(file) {
   els.btnReveal.disabled = false;
   els.btnOpenExternal.disabled = false;
   els.btnCopyPath.disabled = false;
+  if (els.btnMore) els.btnMore.disabled = false;
   els.btnReloadPreview.disabled = false;
   els.btnExportPdf.disabled = false;
   els.btnExportPdf.title = '导出为 PDF 保存到 Downloads';
@@ -2753,6 +2907,7 @@ async function goHome({ confirmDirty = true } = {}) {
   if (diffState.open) closeDiff();
   if (findState.open) closeFind();
 
+  withViewTransition(() => {
   state.activeFilePath = null;
   state.activeTabId = null;
   document.body.classList.add('no-active-doc');   // 回到首页态：收起文档工具栏
@@ -2768,9 +2923,10 @@ async function goHome({ confirmDirty = true } = {}) {
   // 顶栏按钮全部收回禁用态。这里必须手写一遍：它们只在 applyActiveDocUI 里被
   // 逐个 `= false` 打开过，之前没有任何地方关回去
   for (const b of [els.btnReloadPreview, els.btnDiff, els.btnEdit, els.btnMarkUnread,
-    els.btnShare, els.btnExportPdf, els.btnOpenExternal, els.btnReveal, els.btnCopyPath]) {
+    els.btnShare, els.btnExportPdf, els.btnOpenExternal, els.btnReveal, els.btnCopyPath, els.btnMore]) {
     if (b) b.disabled = true;
   }
+  closeMoreMenu();   // 回首页时把可能开着的「更多」菜单收掉
   if (els.btnShare) els.btnShare.classList.remove('shared');
   updateFavButton();     // 这两个内部都按 activeFilePath == null 自动收敛
   updateDiffButton();
@@ -2780,6 +2936,7 @@ async function goHome({ confirmDirty = true } = {}) {
   renderHome();              // 离开首页这段时间里数据可能变过
   renderRecent();            // 重画以清掉列表里的 active 高亮
   renderFavorites();
+  });
   return true;
 }
 
@@ -5230,15 +5387,11 @@ els.btnExportPdf.addEventListener('click', async () => {
 });
 els.btnCopyPath.addEventListener('click', () => {
   if (!state.activeFilePath) return;
-  // 只改按钮里的图标 span，别动按钮自身（否则会把 aria-label 之外的结构冲掉）
-  const icon = els.btnCopyPath.querySelector('span') || els.btnCopyPath;
-  navigator.clipboard.writeText(state.activeFilePath).then(() => {
-    const orig = icon.textContent;
-    icon.textContent = '✓';
-    setTimeout(() => { icon.textContent = orig; }, 1000);
-  }).catch(() => {
-    showToast({ kind: 'error', text: '复制失败', secondary: '浏览器拒绝了剪贴板访问' });
-  });
+  // 现在它是「更多」菜单里的一行，复制后菜单会关掉，就地改文字看不见，
+  // 改用 toast 给反馈（也顺带修掉旧写法把按钮内容整段替换的隐患）
+  navigator.clipboard.writeText(state.activeFilePath)
+    .then(() => showToast({ kind: 'success', text: '已复制文件路径' }))
+    .catch(() => showToast({ kind: 'error', text: '复制失败', secondary: '浏览器拒绝了剪贴板访问' }));
 });
 
 // 判断焦点是否落在"正在输入文字"的元素上。
@@ -6010,6 +6163,60 @@ document.querySelectorAll('[data-theme-pick]').forEach(btn => {
   btn.addEventListener('click', () => applyTheme(btn.dataset.themePick));
 });
 applyTheme(localStorage.getItem('atlas:theme') || 'system');
+
+// ---------- 界面色调（冷 / 暖 中性皮肤） ----------
+// 只切换中性色令牌（[data-skin]），主色 / 品牌 / 封面色不变，和浅/深主题正交。
+// 防闪由 index.html 顶部内联脚本负责（和主题同理）。
+function applySkin(mode) {
+  const root = document.documentElement;
+  if (mode === 'warm') root.setAttribute('data-skin', 'warm');
+  else { root.removeAttribute('data-skin'); mode = 'cool'; }
+  try { localStorage.setItem('atlas:skin', mode); } catch {}
+  document.querySelectorAll('[data-skin-pick]').forEach(b => {
+    const on = b.dataset.skinPick === mode;
+    b.classList.toggle('is-on', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+  });
+}
+document.querySelectorAll('[data-skin-pick]').forEach(btn => {
+  btn.addEventListener('click', () => applySkin(btn.dataset.skinPick));
+});
+applySkin(localStorage.getItem('atlas:skin') || 'cool');
+
+// ---------- 顶栏「更多」菜单 ----------
+// 菜单项（新标签打开 / 访达 / 复制路径）各自的动作由原按钮监听器处理，
+// 这里只管开合。closeMoreMenu 供 goHome 调用（回首页时收掉）。
+function closeMoreMenu() {
+  if (!els.tbMoreMenu || els.tbMoreMenu.classList.contains('hidden')) return;
+  els.tbMoreMenu.classList.add('hidden');
+  if (els.btnMore) els.btnMore.setAttribute('aria-expanded', 'false');
+}
+function toggleMoreMenu() {
+  if (!els.tbMoreMenu || !els.btnMore || els.btnMore.disabled) return;
+  const willOpen = els.tbMoreMenu.classList.contains('hidden');
+  els.tbMoreMenu.classList.toggle('hidden', !willOpen);
+  els.btnMore.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+}
+if (els.btnMore) {
+  els.btnMore.addEventListener('click', (e) => { e.stopPropagation(); toggleMoreMenu(); });
+}
+if (els.tbMoreMenu) {
+  els.tbMoreMenu.addEventListener('click', () => closeMoreMenu());
+}
+if (els.tbMore) {
+  // Esc 先关菜单，别让它顺着全局 Esc 阶梯把文档也关掉（焦点此时在触发器上，冒泡经过 tb-more）
+  els.tbMore.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && els.tbMoreMenu && !els.tbMoreMenu.classList.contains('hidden')) {
+      e.stopPropagation();
+      closeMoreMenu();
+      els.btnMore.focus();
+    }
+  });
+}
+// 点菜单以外任何地方都收起
+document.addEventListener('click', (e) => {
+  if (els.tbMore && !(e.target.closest && e.target.closest('#tb-more'))) closeMoreMenu();
+});
 
 // ---------- 安全：全局信任开关 ----------
 if (els.trustAllToggle) {

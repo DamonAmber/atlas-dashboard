@@ -103,7 +103,7 @@ const api = async (base, method, url, body) => {
   console.log('\n[①-6 底栏统计与首页待看]');
   check('底栏显示「3 篇文档 · 全部已读」', (await page.textContent('#stats')).trim(), '3 篇文档 · 全部已读');
   check('底栏没有未读徽标', await page.locator('#stats .stat-unread').count(), 0);
-  check('首页「待看」为空态', (await page.textContent('#home-unread')).includes('没有未读文档'), true);
+  check('首页「待看」为空态（收件箱清空的庆祝态）', (await page.textContent('#home-grid')).includes('收件箱清空了'), true);
 
   console.log('\n[②-1 全部折叠按钮]');
   const btn = '#btn-collapse-all';

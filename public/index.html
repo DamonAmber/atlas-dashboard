@@ -20,6 +20,10 @@
         if (th === 'light' || th === 'dark') {
           document.documentElement.setAttribute('data-theme', th);
         }
+        // 界面色调（冷/暖中性）：同样要在 CSS 生效前设好，否则暖灰用户先看到一帧冷灰
+        if (localStorage.getItem('atlas:skin') === 'warm') {
+          document.documentElement.setAttribute('data-skin', 'warm');
+        }
       } catch (e) {}
     })();
   </script>
@@ -254,11 +258,29 @@
           <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-file-down"/></svg>
         </button>
         <span class="tb-sep" aria-hidden="true"></span>
-        <button id="btn-open-external" disabled title="在浏览器新标签打开" aria-label="在浏览器新标签打开">
-          <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-external"/></svg>
-        </button>
-        <button id="btn-reveal" disabled title="在访达中显示" aria-label="在访达中显示"><svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-folder-open"/></svg></button>
-        <button id="btn-copy-path" disabled title="复制文件路径" aria-label="复制文件路径"><svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-clipboard"/></svg></button>
+        <!-- 「更多」菜单：把三个低频的"跳出 Atlas"动作（新标签打开 / 访达 / 复制路径）
+             收进一个下拉，顶栏从一排 ~10 个图标降到几个常用的 + 一个 ⋯。
+             菜单项复用原按钮 id，所以 app.js 里的事件绑定与启用/禁用逻辑一律不动。 -->
+        <div class="tb-more" id="tb-more">
+          <button id="btn-more" class="tb-more-trigger" disabled
+                  title="更多操作" aria-label="更多操作" aria-haspopup="true" aria-expanded="false">
+            <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-more"/></svg>
+          </button>
+          <div class="tb-more-menu hidden" id="tb-more-menu" role="menu" aria-label="更多操作">
+            <button id="btn-open-external" role="menuitem" disabled title="在浏览器新标签打开">
+              <svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-external"/></svg>
+              <span class="tb-more-label">在浏览器打开</span>
+            </button>
+            <button id="btn-reveal" role="menuitem" disabled title="在访达中显示">
+              <svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-folder-open"/></svg>
+              <span class="tb-more-label">在访达中显示</span>
+            </button>
+            <button id="btn-copy-path" role="menuitem" disabled title="复制文件路径">
+              <svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-clipboard"/></svg>
+              <span class="tb-more-label">复制文件路径</span>
+            </button>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -418,38 +440,46 @@
            未读队列 + 最近打开 + 收藏，点一下就进文档。 -->
       <div class="empty" id="empty-state">
         <div class="home">
-          <header class="home-head">
-            <div class="home-title">
-              <span class="home-logo"><svg class="brand-glyph" viewBox="0 0 28 28" width="28" height="28" aria-hidden="true"><rect x="9" y="6.4" width="11" height="14" rx="2" fill="#fff" opacity=".5" transform="rotate(9 14 14)"/><rect x="8" y="6.8" width="11" height="14" rx="2" fill="#fff"/><g fill="#aebfe0"><rect x="10" y="9.6" width="5.2" height="1.4" rx=".7"/><rect x="10" y="12.2" width="6.8" height="1.4" rx=".7"/><rect x="10" y="14.8" width="5.8" height="1.4" rx=".7"/></g><circle cx="19.2" cy="7" r="2.7" fill="#fff"/><circle cx="19.2" cy="7" r="1.8" fill="#ff4d4f"/></svg></span>
-              <span>Atlas</span>
+          <section class="home-hero" id="home-hero">
+            <div class="home-hero-glow" aria-hidden="true"></div>
+            <div class="home-hero-body">
+              <span class="home-hero-eyebrow" id="home-eyebrow">今日</span>
+              <h1 class="home-hero-line" id="home-hero-line">正在扫描本地文档…</h1>
+              <p class="home-hero-sub" id="home-sub"></p>
+              <div class="home-chips" id="home-chips"></div>
             </div>
-            <p class="home-sub" id="home-sub">正在扫描本地文档…</p>
-          </header>
+            <div class="home-pulse" id="home-pulse" aria-hidden="true"></div>
+          </section>
 
-          <div class="home-metrics" id="home-metrics"></div>
+          <section class="home-feed" id="home-feed">
+            <div class="home-feed-head">
+              <svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-mail-open"/></svg>
+              <span>待看</span>
+              <span class="home-feed-count" id="home-feed-count"></span>
+              <span class="home-feed-hint" id="home-feed-hint"></span>
+            </div>
+            <!-- 首屏骨架：扫描回来前先摆几张微光卡，renderHome 一跑即被覆盖 -->
+            <div class="home-grid" id="home-grid">
+              <div class="skeleton-card"></div>
+              <div class="skeleton-card"></div>
+              <div class="skeleton-card"></div>
+              <div class="skeleton-card"></div>
+            </div>
+          </section>
 
-          <div class="home-cards">
-            <section class="home-card" id="home-unread-card">
-              <div class="home-card-head">
-                <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-mail-open"/></svg>
-                <span class="home-card-title">待看</span>
-                <span class="home-card-count" id="home-unread-count"></span>
-              </div>
-              <div class="home-list" id="home-unread"></div>
-            </section>
-
-            <section class="home-card" id="home-recent-card">
-              <div class="home-card-head">
+          <div class="home-rails">
+            <section class="home-rail" id="home-recent-rail">
+              <div class="home-rail-head">
                 <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-clock"/></svg>
-                <span class="home-card-title">最近打开</span>
+                <span>最近打开</span>
               </div>
               <div class="home-list" id="home-recent"></div>
             </section>
 
-            <section class="home-card hidden" id="home-fav-card">
-              <div class="home-card-head">
+            <section class="home-rail hidden" id="home-fav-rail">
+              <div class="home-rail-head">
                 <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-star"/></svg>
-                <span class="home-card-title">收藏</span>
+                <span>收藏</span>
               </div>
               <div class="home-list" id="home-fav"></div>
             </section>
@@ -583,6 +613,20 @@
           <button class="theme-option" type="button" role="radio" data-theme-pick="dark" aria-checked="false">
             <svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-moon"/></svg>
             <span>深色</span>
+          </button>
+        </div>
+      </section>
+      <section class="modal-section" data-pane="appearance">
+        <h3>界面色调</h3>
+        <p class="muted">中性灰的冷暖偏好。<strong>冷灰</strong>是默认（偏工具感）；<strong>暖灰</strong>更柔和、有纸感。只影响 Atlas 的外壳与首页，主色、封面和文档内容都不变，可与浅色 / 深色任意搭配。</p>
+        <div class="theme-choice" role="radiogroup" aria-label="界面色调">
+          <button class="theme-option" type="button" role="radio" data-skin-pick="cool" aria-checked="true">
+            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="#8b93a1"/></svg>
+            <span>冷灰</span>
+          </button>
+          <button class="theme-option" type="button" role="radio" data-skin-pick="warm" aria-checked="false">
+            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="#b3a48f"/></svg>
+            <span>暖灰</span>
           </button>
         </div>
       </section>

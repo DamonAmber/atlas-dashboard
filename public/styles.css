@@ -122,7 +122,41 @@
   --ease-out: cubic-bezier(.22, 1, .36, 1);
   --dur: 200ms;
   --dur-fast: 120ms;
+
+  /* ---------- UI 升级迭代新增令牌 ----------
+   * 下面这几组是这次「有温度的编辑感」升级引入的：弹簧曲线让 hover / 卡片
+   * 浮起带一点生命，品牌渐变从 brand-mark 抽成全站一处，封面色相体系让
+   * 793 篇文档凭颜色成堆。都只作用在 chrome / 首页，正文阅读区一律不碰。 */
+
+  /* 弹簧曲线：尾部轻微过冲，用于卡片 hover / 弹出。--dur-slow 给入场动效 */
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --dur-slow: 420ms;
+
+  /* 品牌渐变：brand-mark 一直是 #5b9cff→#8b5bff，抽成令牌统一来源 */
+  --brand-1: #5b9cff;
+  --brand-2: #8b5bff;
+  --brand-grad: linear-gradient(135deg, var(--brand-1), var(--brand-2));
+  /* 英雄区 / 侧栏头背后的极淡光晕，深浅色各一档 */
+  --brand-glow: light-dark(rgba(123, 108, 255, .16), rgba(123, 108, 255, .24));
+
+  /* 生成式封面 / 项目色：色相由路径哈希得出（元素上设 --h），S/L 按主题两套。
+   * ⚠️ 不能用 light-dark() —— 它只接受 <color>，塞百分比会让整个 hsl() 非法、
+   * 封面回退成透明。所以走 prefers-color-scheme + [data-theme] 显式切换。
+   * 浅色是默认值，深色在下方覆盖。 */
+  --cover-s:  72%;
+  --cover-l1: 60%;
+  --cover-l2: 46%;
+
+  /* 英雄区大标题字号：比页面标题再大一档，作为首页唯一的视觉落点 */
+  --fs-hero: 34px;
 }
+
+/* 封面色的深色档：跟随系统（未强制浅色时）+ 显式深色 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --cover-s: 56%; --cover-l1: 44%; --cover-l2: 27%; }
+}
+:root[data-theme="dark"]  { --cover-s: 56%; --cover-l1: 44%; --cover-l2: 27%; }
+:root[data-theme="light"] { --cover-s: 72%; --cover-l1: 60%; --cover-l2: 46%; }
 
 :root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"]  { color-scheme: dark; }
@@ -261,8 +295,12 @@ body.resizing iframe { pointer-events: none; }
   border-radius: var(--r-md);
   transition: background var(--dur-fast);
 }
-.brand:hover { background: var(--bg-hover); }
+/* hover 用半透明品牌色晕染，而不是不透明中性灰——侧栏头带一层紫调品牌渐变，
+ * 灰块盖上去会发脏、突兀。半透明品牌色晕在深浅色 / 冷暖皮肤上都自然融入。 */
+.brand:hover { background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .brand:hover .brand-title { color: var(--accent); }
+/* logo 轻轻一顶：hover 时品牌方块微放大 + 侧倾，作为"点这里回首页"的俏皮暗示 */
+.brand:hover .brand-mark { transform: scale(1.08) rotate(-3deg); }
 .brand:focus-visible { outline: none; box-shadow: var(--ring); }
 .brand-text { min-width: 0; }
 .brand-mark {
@@ -299,7 +337,7 @@ body.resizing iframe { pointer-events: none; }
   cursor: pointer;
   font-size: 13px;
   line-height: 1;
-  transition: background var(--dur-fast), transform 80ms ease,
+  transition: background var(--dur-fast), transform var(--dur-fast) var(--ease-spring),
               border-color var(--dur-fast), color var(--dur-fast);
   display: inline-flex;
   align-items: center;
@@ -308,8 +346,9 @@ body.resizing iframe { pointer-events: none; }
 }
 .actions button:hover:not(:disabled),
 .main-actions > button:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  transform: scale(1.06);
 }
 /* ---------- 弹窗里的文字按钮：保留实体控件外观 ----------
  * 用 :not(:where(...)) 把三类"不是控件"的按钮排除掉：关闭 ✕、分区导航项、
@@ -1304,9 +1343,9 @@ body.sidebar-collapsed .main { margin-left: 0; }
   justify-content: center;
   flex: none;
   transition: background var(--dur-fast), border-color var(--dur-fast),
-              color var(--dur-fast), transform 80ms ease;
+              color var(--dur-fast), transform var(--dur-fast) var(--ease-spring);
 }
-.toggle-sidebar:hover { background: var(--bg-hover); color: var(--text); }
+.toggle-sidebar:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); transform: scale(1.06); }
 .toggle-sidebar svg { display: block; transition: transform var(--dur) var(--ease); }
 body.sidebar-collapsed .toggle-sidebar svg { transform: scaleX(-1); }
 
@@ -1830,11 +1869,12 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
    避免首页凭空多出一条空栏。标签多到放不下时整条横向滚动（细滚动条）。 */
 .tab-bar {
   flex: 0 0 auto;
+  position: relative;   /* 滑动指示层 .tab-indicator 的定位锚点 */
   display: flex;
-  align-items: stretch;
-  gap: 2px;
-  height: 36px;
-  padding: 4px 8px 0;
+  align-items: center;
+  gap: 3px;
+  height: 42px;
+  padding: 0 8px;
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
@@ -1845,40 +1885,63 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
 .tab-bar::-webkit-scrollbar { height: 6px; }
 .tab-bar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-/* 单枚标签：类似浏览器 tab，底部与内容区平齐，活动态用 accent 底边 + 高对比背景 */
+/* 单枚标签：iOS / macOS 分段控件式的胶囊 chip，取代旧的"浏览器 tab 描边"。
+ * 未选中 = 纯 ghost 文本；选中 = 一枚带 accent 淡填充的圆角胶囊——没有描边、
+ * 没有单边 accent 线，选中感全靠"填充 + 悬停微浮起"，和系统分段控件同一套语言。 */
 .tab {
   flex: 0 1 200px;
-  min-width: 96px;
+  min-width: 92px;
   max-width: 240px;
+  height: 30px;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 6px 0 10px;
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-top-left-radius: var(--r-md);
-  border-top-right-radius: var(--r-md);
-  background: var(--bg);
+  padding: 0 4px 0 10px;
+  border: none;
+  border-radius: var(--r-lg);
+  background: transparent;
   color: var(--text-dim);
   font-size: 12px;
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
   position: relative;
-  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+  z-index: 1;   /* 浮在滑动指示层之上，文字 / 徽标 / 关闭键都可见可点 */
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease,
+              transform var(--dur-fast) var(--ease-spring);
 }
-.tab:hover { background: var(--bg-hover); color: var(--text); }
-.tab.active {
-  background: var(--bg);
+/* 未选中的 hover：轻轻上浮一点点 + 半透明品牌色晕，和顶栏图标同一套 hover 语言 */
+.tab:hover:not(.active) {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
   color: var(--text);
-  font-weight: 600;
-  /* 盖住内容区上边框 1px，制造"标签与内容连成一体"的层级感 */
-  margin-bottom: -1px;
-  padding-bottom: 1px;
-  box-shadow: inset 0 2px 0 0 var(--accent);
+  transform: translateY(-1px);
 }
+.tab.active {
+  background: transparent;   /* 选中填充改由常驻的滑动指示层 .tab-indicator 提供 */
+  color: var(--text);
+  font-weight: var(--fw-semi);
+}
+.tab:focus-visible { outline: none; box-shadow: var(--ring); }
+
+/* 滑动指示层：常驻一枚 accent 淡填充胶囊，切换标签时平滑滑到新标签的位置
+ * （iOS 分段控件里那块会滑动的选中滑块）。left/width 由 JS positionTabIndicator 设置，
+ * 首次出现不滑（无动画就位后淡入），之后每次切换都用弹簧曲线滑过去。 */
+.tab-indicator {
+  position: absolute;
+  top: 6px; bottom: 6px; left: 0;
+  width: 0;
+  border-radius: var(--r-lg);
+  background: var(--bg-active);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
+  transition: transform var(--dur) var(--ease-spring),
+              width var(--dur) var(--ease-spring),
+              opacity var(--dur-fast) ease;
+}
+.tab-indicator.show { opacity: 1; }
 /* 复用全站类型徽标（.file-type-badge.type-*）的配色，标签里略微收窄留白 */
-.tab .file-type-badge { flex: 0 0 auto; opacity: 0.85; }
+.tab .file-type-badge { flex: 0 0 auto; opacity: 0.8; }
 .tab.active .file-type-badge { opacity: 1; }
 .tab-name {
   flex: 1 1 auto;
@@ -1903,7 +1966,7 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
   opacity: 0.55;
   transition: background var(--dur-fast) ease, opacity var(--dur-fast) ease;
 }
-.tab-close:hover { background: var(--bg-hover); opacity: 1; color: var(--text); }
+.tab-close:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); opacity: 1; color: var(--accent); }
 .tab-close svg { display: block; }
 /* ==================== 首页（无文档打开时） ==================== */
 .empty {
@@ -1917,110 +1980,214 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
 }
 .empty.hidden { display: none; }
 
-/* max-width 从 880 提到 1180：1440 宽的屏幕上原来右侧空着 500px，
- * 而这一屏恰恰是信息最该铺开的地方（待看队列越宽，文件名越不容易截断）。 */
+/* max-width 从 880 提到 1120：1440 宽的屏幕上原来右侧空着一大块，
+ * 而这一屏恰恰是信息最该铺开的地方（封面墙越宽，一屏能看到的越多）。 */
 .home {
   width: 100%;
-  max-width: 1180px;
-  padding: 48px 32px 40px;
+  max-width: 1120px;
+  padding: 40px 32px 40px;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-5);
+  gap: var(--sp-6);
 }
-.home-head { display: flex; flex-direction: column; gap: 6px; }
-.home-title {
-  display: flex; align-items: center; gap: 10px;
-  font-size: var(--fs-xl); font-weight: var(--fw-bold); letter-spacing: -.01em;
-  color: var(--text);
-}
-.home-logo {
-  width: 28px; height: 28px; border-radius: var(--r-md);
-  background: linear-gradient(135deg, #5b9cff, #8b5bff);
-  color: #fff; font-size: var(--fs-md); font-weight: 700;
-  display: grid; place-items: center;
-}
-.home-sub { margin: 0; font-size: var(--fs-base); color: var(--text-dim); }
 
-/* ---------- 四个数字 ---------- */
-.home-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--sp-2);
-}
-/* 去掉 box-shadow：底座取向是"分层靠 border"，一排带投影的白卡片是
- * admin 模板最典型的长相。label 放在数字上方并拉开字距（Vercel 的 KPI 就是
- * 这个顺序）——先告诉你这是什么，再给数字，扫视时不用回看。 */
-.home-metric {
+/* ---------- 「今日」英雄区 ----------
+ * 取代四个 KPI 数字方块。这个 dashboard 真正要回答的是"AI 今天动了什么"——
+ * 于是用一句大标题把它讲出来，数字（喷了品牌渐变）是句子的一部分而不是一格格
+ * 仪表。背后垫一层极淡品牌光晕给首页一个焦点，正文阅读区一律不碰这层光。 */
+.home-hero {
+  position: relative;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 14px 16px;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-6);
+  padding: 26px 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--bg-elev);
+  overflow: hidden;
+  isolation: isolate;
+}
+.home-hero-glow {
+  position: absolute;
+  z-index: -1;
+  top: -60%; right: -8%;
+  width: 460px; height: 460px;
+  background: radial-gradient(circle, var(--brand-glow), transparent 62%);
+  pointer-events: none;
+}
+.home-hero-body { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.home-hero-eyebrow {
+  font-size: var(--fs-xs); font-weight: var(--fw-semi);
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-faint);
+}
+.home-hero-line {
+  margin: 0;
+  font-size: var(--fs-hero);
+  font-weight: var(--fw-bold);
+  line-height: 1.1;
+  letter-spacing: -.02em;
+  color: var(--text);
+  text-wrap: balance;
+}
+/* 数字喷品牌渐变——首页唯一一处彩色文字，作为视觉落点 */
+.home-hero-line .n {
+  font-variant-numeric: tabular-nums;
+  background: var(--brand-grad);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+/* "全部看过了"那种数字不该喷渐变——0 篇待看不是喜事需要庆祝的对象 */
+.home-hero-line .n.calm {
+  background: none; -webkit-text-fill-color: currentColor; color: var(--text);
+}
+.home-hero-sub { margin: 0; font-size: var(--fs-md); color: var(--text-dim); }
+.home-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.home-chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 4px 10px;
+  border-radius: var(--r-full);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  font-size: var(--fs-sm); color: var(--text-dim);
+}
+.home-chip b { font-weight: var(--fw-bold); color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* 活动脉冲：过去 24h 每小时的改动数做成小竖条。今天忙就"有生命"，
+ * 没动作就整条低平——不用读数字就知道最近是不是频繁在改。 */
+.home-pulse {
+  flex: none;
+  display: flex; align-items: flex-end; gap: 3px;
+  height: 56px; width: 208px;
+}
+.home-pulse-bar {
+  flex: 1;
+  border-radius: 2px 2px 0 0;
+  background: color-mix(in srgb, var(--accent) 20%, var(--bg-elev-2));
+  transform-origin: bottom;
+}
+.home-pulse-bar.on { background: var(--brand-grad); }
+@media (max-width: 760px) { .home-pulse { display: none; } }
+
+/* ---------- 待看：封面图卡流 ----------
+ * 原来 793 篇文档每一篇只是"图标 + 一行字"，这是最像上世纪文件管理器的地方。
+ * 给每篇一张按路径哈希生成的渐变封面（同一项目同色系），列表就变成杂志式的
+ * 图卡墙。封面不是截图（截 793 篇代价太大、还要后端管线），而是稳定的生成图——
+ * 既有视觉密度又零成本，主题切换也是纯 CSS 跟着走。 */
+.home-feed { display: flex; flex-direction: column; gap: var(--sp-3); }
+.home-feed-head {
+  display: flex; align-items: center; gap: 8px;
+  color: var(--text);
+  font-size: var(--fs-lg); font-weight: var(--fw-bold); letter-spacing: -.01em;
+}
+.home-feed-head .ico { color: var(--text-faint); }
+.home-feed-count {
+  font-size: var(--fs-sm); font-weight: var(--fw-medium);
+  color: var(--text-faint); font-variant-numeric: tabular-nums;
+}
+.home-feed-hint {
+  margin-left: auto;
+  font-size: var(--fs-sm); font-weight: var(--fw-normal); color: var(--text-faint);
+}
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(212px, 1fr));
+  gap: var(--sp-3);
+}
+.cover-card {
+  display: flex; flex-direction: column;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   background: var(--bg-elev);
-}
-.home-metric-v {
-  font-size: var(--fs-2xl); font-weight: var(--fw-bold); line-height: 1;
-  letter-spacing: -.02em;
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
   color: var(--text);
-  font-variant-numeric: tabular-nums;
-  order: 2;
+  padding: 0;
+  transition: transform var(--dur) var(--ease-spring),
+              box-shadow var(--dur), border-color var(--dur);
+  will-change: transform;
 }
-.home-metric-k {
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: 0.06em;
-  color: var(--text-faint);
-  order: 1;
+.cover-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-2);
+  border-color: var(--border-strong);
 }
-/* 只有「今天改过」会 hot（见 app.js renderHome 的注释）：
- * 红色是稀缺资源，一个永远亮红的三位数等于没有警报。 */
-.home-metric.hot { border-color: color-mix(in srgb, var(--unread) 32%, var(--border)); }
-.home-metric.hot .home-metric-v { color: var(--unread); }
+.cover-card:focus-visible { outline: none; box-shadow: var(--ring); }
+.cover-art {
+  position: relative;
+  height: 96px;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  background: linear-gradient(135deg,
+    hsl(var(--h) var(--cover-s) var(--cover-l1)),
+    hsl(calc(var(--h) + 42) var(--cover-s) var(--cover-l2)));
+}
+/* 大号类型字形水印：给同色系封面一点区分度与"内容感" */
+.cover-art .cover-glyph { color: #fff; opacity: .92; filter: drop-shadow(0 1px 3px rgba(0,0,0,.2)); }
+/* 细斜纹，避免纯渐变太"塑料" */
+.cover-art::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(45deg, rgba(255,255,255,.05) 0 8px, transparent 8px 16px);
+}
+.cover-badge {
+  position: absolute; top: 8px; left: 8px;
+  display: inline-flex; align-items: center;
+  height: 18px; padding: 0 7px;
+  border-radius: var(--r-full);
+  background: rgba(0, 0, 0, .3);
+  color: #fff; font-size: 10px; font-weight: var(--fw-semi); letter-spacing: .04em;
+  backdrop-filter: blur(4px);
+}
+.cover-fresh {
+  position: absolute; top: 8px; right: 8px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--unread);
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, .2);
+}
+.cover-body { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px 12px; }
+.cover-name {
+  font-size: var(--fs-base); font-weight: var(--fw-semi); line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.cover-meta {
+  display: flex; align-items: center; gap: 6px;
+  font-size: var(--fs-xs); color: var(--text-faint); font-variant-numeric: tabular-nums;
+}
+.cover-meta .cover-proj {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim);
+}
+.cover-meta .cover-dot { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--text-faint); }
 
-/* ---------- 卡片 ---------- */
-/* 「待看」是首页的主角：占左列并纵向铺满，最近 / 收藏叠在右列。
- * 用 auto-fit 自动排会让三张卡片按行填充，右下角空一大块。 */
-.home-cards {
+/* ---------- 最近 / 收藏 轨道 ----------
+ * 降为次要信息：两列紧凑列表，复用 .home-row。封面墙是主角，这两条只是
+ * "顺手回去"的入口，不再和待看抢版面。 */
+.home-rails {
   display: grid;
-  grid-template-columns: 1.08fr .92fr;
-  grid-auto-rows: min-content;
+  grid-template-columns: 1fr 1fr;
   gap: var(--sp-3);
   align-items: start;
 }
-#home-unread-card { grid-column: 1; grid-row: 1 / span 2; }
-#home-recent-card { grid-column: 2; grid-row: 1; }
-#home-fav-card    { grid-column: 2; grid-row: 2; }
-@media (max-width: 860px) {
-  .home-cards { grid-template-columns: minmax(0, 1fr); }
-  #home-unread-card, #home-recent-card, #home-fav-card { grid-column: 1; grid-row: auto; }
-}
-.home-card {
+@media (max-width: 860px) { .home-rails { grid-template-columns: minmax(0, 1fr); } }
+.home-rail {
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   background: var(--bg-elev);
   overflow: hidden;
 }
-.home-card.hidden { display: none; }
-/* 头体分离：卡片头用 elev-2 底色 + 一条 border，和列表区拉开层次。
- * 原来头体同色，只靠一条线分隔，"这是个卡片"的感觉很弱。 */
-.home-card-head {
+.home-rail.hidden { display: none; }
+.home-rail-head {
   display: flex; align-items: center; gap: 6px;
   padding: 9px 14px;
   background: var(--bg-elev-2);
   border-bottom: 1px solid var(--border);
-  color: var(--text-faint);
+  color: var(--text-dim);
   font-size: var(--fs-xs); font-weight: var(--fw-semi);
   letter-spacing: 0.06em;
 }
-.home-card-title { color: var(--text-dim); }
-.home-card-count {
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-  font-size: var(--fs-xs);
-  color: var(--text-faint);
-  letter-spacing: 0;
-}
+.home-rail-head .ico { color: var(--text-faint); }
 .home-list { padding: 6px; display: flex; flex-direction: column; gap: 1px; }
 
 .home-row {
@@ -2134,8 +2301,8 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
 /* 「全部快捷键」按钮的样式在下方「首页提示行末尾的入口」一节，不在这里重复 */
 
 @media (max-width: 720px) {
-  .home { padding: 32px 20px; }
-  .home-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .home { padding: 28px 18px; }
+  .home-hero { flex-direction: column; align-items: stretch; gap: var(--sp-4); }
   .home-tips-more span { display: none; }
 }
 /* 键帽：全站统一一种。
@@ -3695,3 +3862,171 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
   border-color: var(--border);
   color: var(--text);
 }
+
+/* ============================================================
+ * UI 升级迭代：动效系统 · 外壳品牌感 · 加载骨架 · 庆祝态
+ * ------------------------------------------------------------
+ * 原则：动效只作用在"一屏可数"的首页卡片与 chrome 上，密集列表（目录树几百行）
+ * 不加入场动画——几百行一起动只会晕。所有动效都在 prefers-reduced-motion 下
+ * 自动归零（:root 已把 --dur / --dur-fast 清零，另见下方各处的媒体查询）。
+ * ============================================================ */
+
+/* ---------- 入场：错峰浮起 ----------
+ * 首页元素带 --i 序号，逐个淡入上移。45ms 的步距足够看出"依次出现"又不拖沓。 */
+@keyframes atlas-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+.home-hero, .home-feed, .home-rails, .home-tips, .cover-card {
+  animation: atlas-rise var(--dur-slow) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+
+/* ---------- 新鲜未读：呼吸 ----------
+ * 只有 24h 内的变更（数量稀少）才呼吸，陈旧未读是静止灰点——呼吸的稀缺性
+ * 正是它成为"信号"的原因。 */
+@keyframes atlas-breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .45; }
+}
+.home-row.unread:not(.stale) .home-row-dot,
+.cover-fresh {
+  animation: atlas-breathe 2.4s var(--ease) infinite;
+}
+
+/* ---------- View Transitions：首页 ↔ 文档 的柔和交叉淡入 ----------
+ * 只影响外壳容器的切换观感，iframe 内部不参与。浏览器不支持就自动降级到硬切。 */
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 240ms;
+    animation-timing-function: var(--ease-out);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-hero, .home-feed, .home-rails, .home-tips, .cover-card,
+  .home-row.unread:not(.stale) .home-row-dot, .cover-fresh,
+  .home-cheer-badge, .skeleton-card {
+    animation: none !important;
+  }
+}
+
+/* ---------- 外壳品牌感 ----------
+ * 侧栏头顶一层极淡品牌渐变，把 Atlas logo 所在的区域和下面的列表拉开。
+ * 只在 chrome 上，绝不进正文，保证阅读区干净。 */
+.sidebar-header {
+  background:
+    linear-gradient(180deg, var(--brand-glow), transparent 72%),
+    var(--bg-elev);
+}
+/* brand-mark / home-logo 的渐变改走令牌，和首页数字、封面同一处来源 */
+.brand-mark, .home-logo { background: var(--brand-grad); }
+/* logo hover 微顶的弹簧过渡（配合 .brand:hover .brand-mark） */
+.brand-mark { transition: transform 260ms var(--ease-spring); }
+
+/* ---------- 加载骨架 ----------
+ * 扫描还没回来时，首页 feed 先摆几张微光骨架卡，而不是空白或一行"扫描中…"。 */
+@keyframes atlas-shimmer { to { background-position: -200% 0; } }
+.skeleton-card {
+  height: 152px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: linear-gradient(100deg,
+    var(--bg-elev) 30%, var(--bg-hover) 50%, var(--bg-elev) 70%);
+  background-size: 200% 100%;
+  animation: atlas-shimmer 1.4s linear infinite;
+}
+
+/* ---------- 全部已读的小庆祝 ----------
+ * 收件箱清空是这个工具里少数值得给一点正反馈的时刻。 */
+.home-cheer {
+  grid-column: 1 / -1;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 40px 20px;
+  text-align: center;
+}
+.home-cheer-badge {
+  width: 52px; height: 52px; border-radius: var(--r-full);
+  display: grid; place-items: center;
+  color: #fff; background: var(--brand-grad);
+  box-shadow: var(--shadow-2);
+  animation: atlas-pop var(--dur-slow) var(--ease-spring) both;
+}
+@keyframes atlas-pop { from { transform: scale(.6); opacity: 0; } to { transform: none; opacity: 1; } }
+.home-cheer-title { font-size: var(--fs-md); font-weight: var(--fw-semi); color: var(--text); }
+.home-cheer-hint { font-size: var(--fs-sm); color: var(--text-faint); }
+
+/* ============================================================
+ * 暖中性皮肤（[data-skin="warm"]）
+ * ------------------------------------------------------------
+ * 只覆盖中性色（表面 / 描边 / 文字）——主色、品牌渐变、封面色、语义色一律不动。
+ * 依旧用 light-dark() 写一遍，所以"冷/暖"与"浅/深"两个维度正交，四种组合各自自洽。
+ * 只作用在 Atlas 外壳与首页；md / csv 等预览页由服务端渲染，保持中性纸白。
+ * ============================================================ */
+:root[data-skin="warm"] {
+  --bg:        light-dark(#faf8f4, #0c0a07);
+  --bg-elev:   light-dark(#fffdf9, #15110c);
+  --bg-elev-2: light-dark(#f2eee6, #1e1912);
+  --bg-hover:  light-dark(#eae4d9, #26211a);
+  --border:        light-dark(#ebe4d8, #241f17);
+  --border-strong: light-dark(#d4cab9, #383025);
+  --hairline:      light-dark(rgba(60, 45, 20, .05), rgba(255, 250, 240, .05));
+  --text:       light-dark(#1b1712, #f6f2ea);
+  --text-dim:   light-dark(#6a6155, #a79e90);
+  --text-faint: light-dark(#948b7d, #766e60);
+}
+
+/* ============================================================
+ * 顶栏「更多」菜单
+ * ------------------------------------------------------------
+ * 把三个低频的"跳出 Atlas"动作收进一个下拉，顶栏从一排 ~10 个图标降到
+ * 几个常用的 + 一个 ⋯。菜单项复用原按钮 id，事件与启用/禁用逻辑不动。
+ * ============================================================ */
+.tb-more { position: relative; display: inline-flex; }
+/* 触发器视觉与其它 ghost 工具按钮一致（它不是 .main-actions 的直接子元素，
+ * 拿不到那条规则，所以在这里重铺一遍） */
+.tb-more-trigger {
+  height: var(--h-ctl); min-width: var(--h-ctl); padding: 0 7px;
+  border: 1px solid transparent; background: transparent; color: var(--text-dim);
+  border-radius: var(--r-sm); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background var(--dur-fast), color var(--dur-fast), transform var(--dur-fast) var(--ease-spring);
+}
+.tb-more-trigger:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); transform: scale(1.06); }
+.tb-more-trigger[aria-expanded="true"] { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.tb-more-trigger:active:not(:disabled) { transform: scale(.95); }
+.tb-more-trigger:disabled { opacity: .32; cursor: not-allowed; }
+.tb-more-trigger:focus-visible { outline: none; box-shadow: var(--ring); }
+
+.tb-more-menu {
+  position: absolute; top: calc(100% + 6px); right: 0;
+  min-width: 188px;
+  padding: 5px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-3);
+  z-index: 60;
+  display: flex; flex-direction: column; gap: 2px;
+  animation: atlas-menu-in var(--dur-fast) var(--ease-out);
+}
+.tb-more-menu.hidden { display: none; }
+@keyframes atlas-menu-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.tb-more-menu button {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; height: 32px; padding: 0 9px;
+  border: none; background: transparent; color: var(--text);
+  border-radius: var(--r-sm); cursor: pointer;
+  font: inherit; font-size: var(--fs-base); text-align: left;
+  transition: background var(--dur-fast);
+}
+.tb-more-menu button:hover:not(:disabled) { background: var(--bg-hover); }
+.tb-more-menu button:disabled { opacity: .4; cursor: not-allowed; }
+.tb-more-menu button:focus-visible { outline: none; box-shadow: var(--ring); }
+.tb-more-menu .ico { flex: none; color: var(--text-faint); }
+.tb-more-menu button:hover:not(:disabled) .ico { color: var(--text-dim); }
+.tb-more-label { flex: 1; }
+
+/* 首页态：没有当前文档时整个「更多」入口收起（和其它文档工具按钮一致） */
+body.no-active-doc .tb-more { display: none; }
