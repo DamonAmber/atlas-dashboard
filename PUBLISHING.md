@@ -6,6 +6,12 @@
 > - 下次发版时如果发现本文档与实际不符，**先修文档再发版**。
 > - 这是约束，不是建议。
 
+> 📌 **「发版」的口径（用户约定，2026-09-03 起）**：当用户说"发版 / 发布"，默认指
+> **npm + macOS DMG + 官网 三者一起同步更新**，不是只发 npm。一次完整发版 =
+> `npm publish` + 打 tag（触发 GitHub Release）+ 出 **DMG / zip / latest-mac.yml** 传到 Release
+> （见[桌面 App 章节](#桌面-appmacos-dmg发版)）+ landing page 随 `docs/` push 自动部署。
+> 三条渠道缺任一条都算没发完。（唯一例外：用户明确说"只发 npm / 先不出 DMG"时才拆开。）
+
 仓库：https://github.com/DamonAmber/atlas-dashboard
 npm：https://www.npmjs.com/package/atlas-dashboard
 
