@@ -1,6 +1,16 @@
 name: release
 
-# 推送 v* 格式的 tag 时触发，从 PUBLISHING.md 抽取该版本的描述创建 GitHub Release
+# 推送 v* 格式的 tag 时触发，从 PUBLISHING.md 抽取该版本的描述创建 GitHub Release。
+#
+# ⚠️ 刻意创建为 **草稿（draft）**：草稿不会被 GitHub 计入 "latest"，所以
+# `releases/latest/download/<asset>` 在本版资产还没传完之前，仍然指向上一版
+# 已发布的 Release（下载到的是旧版但有效，绝不 404）。发版流程会在
+# 「npm publish → 传完 DMG/zip/latest-mac.yml → 才发布草稿」之后再把草稿转正，
+# 转正的同一刻资产已就位、才成为 latest。最后再推 docs 更新官网。
+# 详见 PUBLISHING.md 的 TL;DR 与「桌面 App」章节。
+#
+# 👉 因此：推完 tag 只会看到一个 draft，**必须**在流程末尾手动
+#    `gh release edit "v<版本>" --draft=false --latest` 转正，否则用户看不到这个版本。
 on:
   push:
     tags:
@@ -65,7 +75,10 @@ jobs:
           # 替换 $VERSION
           BODY="${BODY//\$VERSION/$VERSION}"
 
+          # --draft：先建草稿，不成为 latest（避免"空 Release 抢了 latest → 下载 404"）。
+          # 资产上传完毕后由发版流程手动转正（gh release edit --draft=false --latest）。
           gh release create "v$VERSION" \
             --title "Atlas $VERSION" \
             --notes "$BODY" \
+            --draft \
             --verify-tag

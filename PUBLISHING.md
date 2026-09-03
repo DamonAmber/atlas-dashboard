@@ -37,35 +37,63 @@ npm：https://www.npmjs.com/package/atlas-dashboard
 
 适用：你已经做完代码改动 + 跑过测试 + 改过 `PUBLISHING.md` 加了新版描述。
 
+> 🚦 **顺序铁律（0.24.0 后修订）——「三条渠道谁先谁后」**：
+> **npm 上架 → GitHub Release 带齐资产并转正 → 最后才更新官网**。
+> 官网（`docs/`）一旦 push 到 main，GitHub Pages 立刻部署、访客立刻看到新版并去点下载；
+> 所以官网必须是**最后一步**，等 npm 和 Release 资产都就位了再推，否则用户会在
+> "官网说有新版、但包还没传完" 的窗口里下载到 404。同理 tag 触发的 Release 建成
+> **草稿**（见 `release.yml`），传完 DMG/zip/yml 才转正——草稿期间 `releases/latest`
+> 仍指向上一版，stable 下载链接不会 404。**违反这个顺序 = 用户 404，是 P0。**
+
 ```bash
 cd ~/Documents/AIProjects/Atlas
 
-# 1. 升版本号（手动改 package.json，或用下面的 node 一行）
+# 0. 前提：代码改完、测试全绿、PUBLISHING.md 已加新版描述。
+#    landing page（docs/index.html）的改动【现在就改好，但先别 commit】——它留到第 10 步才推。
 NEW_VERSION="0.x.y"   # 替换成实际新版本号
+
+# 1. 升版本号
 node -e "const p=require('./package.json'); p.version='$NEW_VERSION'; require('fs').writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n');"
 
-# 2. 看清单（不真发）
+# 2. 先把 macOS App 打好 + 公证（放在打 tag 之前，让资产提前躺在 dist-app/ 里就位）
+source electron/build/notarize.env && npm run app:build
+#    再单独公证 DMG 容器 + staple —— 见「桌面 App（macOS DMG）发版」章节
+#    （npm-only 发版、用户说"先不出 DMG"时跳过第 2 / 8 步）
+
+# 3. 看清单（不真发）
 npm publish --dry-run
 
-# 3. commit + push 到 GitHub（CI 自动跑测试）
-git add <改动的文件>          # 别用 -A，避免把 tgz / 临时脚本带进去
+# 4. commit + push —— 【只提代码 + PUBLISHING.md + package.json，不含 docs/index.html】
+git add <代码文件> PUBLISHING.md package.json   # ⚠️ 先别 add docs/index.html（官网留到第 10 步）；也别用 -A
 git commit -m "feat/fix: <一句话描述本版改动>"
 git push
 
-# 4. 等 CI 绿（publish 是不可逆的，绿灯之后再发）
+# 5. 等 CI 绿（publish 不可逆，绿灯之后再发）
 gh run watch                  # 或 gh run list --limit 1
 
-# 5. 真发布到 npm（已配 token，免 OTP）
+# 6. 真发布到 npm（已配 token，免 OTP）
 npm publish
+npm view atlas-dashboard version   # 确认 registry 已同步
 
-# 6. 验证 registry 同步
-npm view atlas-dashboard version
-
-# 7. 创建并推送 tag → 自动触发 GitHub Release workflow
+# 7. 打 tag → release.yml 自动建【草稿】Release（草稿不抢 latest，期间下载链接仍指向上一版、不 404）
 git tag "v$NEW_VERSION"
 git push origin "v$NEW_VERSION"
 
-# 8. 升级本机的全局 atlas（让未来发版时 update-check 基准是新版）
+# 8. 把三件资产传到草稿 Release（分开传，避免 5 分钟超时）
+gh release upload "v$NEW_VERSION" dist-app/Atlas-mac-arm64.zip --clobber
+gh release upload "v$NEW_VERSION" dist-app/Atlas-mac-arm64.dmg --clobber
+gh release upload "v$NEW_VERSION" dist-app/latest-mac.yml --clobber
+
+# 9. 资产齐了，才把草稿【转正】—— 此刻 0.24.0 才成为 latest，且资产已就位，stable 链接立即可用
+gh release view "v$NEW_VERSION" --json assets --jq '.assets[]|"\(.name) \(.size) \(.state)"'  # 先核对 3 件都在
+gh release edit "v$NEW_VERSION" --draft=false --latest
+
+# 10. 【最后一步】才推 landing page → Pages 部署，官网此刻才显示新版（npm 与 Release 都已就位，不会再指向 404）
+git add docs/index.html
+git commit -m "docs: sync landing page to v$NEW_VERSION"
+git push
+
+# 11. 升级本机的全局 atlas（让未来发版时 update-check 基准是新版）
 npm install -g atlas-dashboard@latest
 atlas --version   # 应显示新版本号
 atlas restart     # 让本机服务也用新版
@@ -73,14 +101,18 @@ atlas restart     # 让本机服务也用新版
 
 发完之后**必看**：[验证发版成功](#验证发版成功) 章节确认 4 项绿。
 
-> **为什么是「先 push，再 publish，最后 tag」**（0.14.0 起改成这个顺序）：
-> 三步里只有 `npm publish` 不可逆（24h 外只能 deprecate，版本号永久占用），
-> 所以要把它排在能反悔的步骤之后、并且拿到 CI 绿灯再按。
-> 早先的顺序是 publish 在 push 之前，风险是**发完包才发现推不上去**
-> （git 凭据过期、CI 红、本地有没提交干净的东西）——那时 npm 上就有了一个
-> GitHub 上找不到对应代码的版本，只能靠再发一个补丁号收场。
-> 唯一的硬约束是 **tag 必须在 publish 之后**：tag 触发的 Release 说明里带
-> `npmjs.com/package/atlas-dashboard/v/<版本>` 链接，包还没上架就是一条坏链。
+> **为什么是这个顺序**（0.14.0 起「先 push、再 publish、最后 tag」；0.24.0 起补上「草稿 Release + 官网最后推」）：
+> - `npm publish` 是唯一不可逆的一步（24h 外只能 deprecate、版本号永久占用），所以排在
+>   能反悔的动作之后、且拿到 CI 绿灯再按。
+> - **tag 必须在 publish 之后**：Release 说明里带 `npmjs.com/.../v/<版本>` 链接，包没上架就是坏链。
+> - **Release 建成草稿、传完资产才转正**：tag 一推，`release.yml` 会立刻建 Release。若它不是草稿，
+>   就马上成为 "latest"，而 130MB 的 dmg 还在上传——这段时间 `releases/latest/download/Atlas-mac-arm64.dmg`
+>   指向一个还没有该资产的 Release，返回 **404**。草稿不被计入 latest，期间 latest 仍是上一版
+>   （下载到旧版但有效），转正的同一刻资产已齐、才成为 latest。
+> - **官网（docs/）最后才推**：Pages 在任何 push 到 main 时部署 `docs/`。官网一更新，访客就看到
+>   新版号并去点下载/`npm i`。所以它必须排在 npm 上架 + Release 转正之后，否则官网领先于实际产物，
+>   用户撞 404。**0.24.0 发版时就是把 docs 和代码放在同一个首 commit 一起推了，导致官网提前几分钟
+>   宣告新版、而包还在传 —— 本条铁律由此而来。**
 
 ---
 
@@ -249,9 +281,17 @@ done
       但 [验证发版成功](#验证发版成功) 的第 ④ 项是 `curl | grep` 读 HTML 源码，漏改就会判失败。
       （0.12.0 发版时就漏了这处，发完才由验证 ④ 兜住。）
 
-改完 push 即可（不需要发 npm 新版），GitHub Pages 自动重新部署到 https://damonamber.github.io/atlas-dashboard/
+⚠️ **改好了，但先别 push —— landing page 是整个发版的最后一步**（TL;DR 第 10 步）。
+GitHub Pages 一旦收到 `docs/` 的 push 就立刻部署，访客随即看到新版号并去点下载 / `npm i`。
+所以 `docs/index.html` 的改动**现在就编辑好、但把它单独留着，等 npm 上架 + Release 转正带齐资产之后
+才 commit + push**（不要和代码放同一个 commit 一起推）。这样官网永远不会领先于真实产物、不会把用户
+指向还不存在的下载。push 后 Pages 自动部署到 https://damonamber.github.io/atlas-dashboard/ 。
 
-> 这一步**不是事后补**。发版前就要做完。如果发完版才发现网页落后于功能，立即 commit + push 修，并在下次发版的 PUBLISHING.md 描述里说明（"② 同步遗漏的 landing page 文档"）。
+> 这一步**不是事后补**：内容发版前就要写好。它「最后 push」指的是**部署时机**，不是"可以忘"。
+> 如果发完版才发现网页落后于功能，立即 commit + push 修，并在下次发版的 PUBLISHING.md 描述里说明
+> （"② 同步遗漏的 landing page 文档"）。
+> **0.24.0 的教训**：docs 和代码放在同一个首 commit 一起推，官网提前几分钟宣告了新版、而 npm 包与
+> DMG 还在上传，用户在这个窗口里点下载就是 404。此后本流程把官网钉死为最后一步。
 
 ### 步骤 2：升 package.json 版本号
 
@@ -455,8 +495,10 @@ xcrun stapler validate dist-app/Atlas-mac-arm64.dmg   # 应 The validate action 
 > staple 会改写 dmg 文件，`Atlas-mac-arm64.dmg.blockmap` 随之失效——但自动更新走的是 **zip**（不是 dmg），
 > dmg.blockmap 只用于 dmg 的差量下载，失配无害，也不需要上传它。zip 没被改动，`latest-mac.yml` 里的 sha512 仍然有效。
 
-**挂到 Release：** 在 npm publish + 打 tag（release workflow 会先建好 Release）之后，把 dmg（人工下载）
-以及自动更新要用的 **zip + latest-mac.yml** 传上去（0.21.0 起自动更新依赖后两个，缺了 App 就查不到更新）：
+**挂到 Release（草稿 → 转正）：** tag 推上去后 `release.yml` 会建一个**草稿** Release（见该文件注释）。
+往这个草稿里传 dmg（人工下载）+ 自动更新要用的 **zip + latest-mac.yml**（0.21.0 起自动更新依赖后两个，
+缺了 App 就查不到更新），**传齐之后再把草稿转正**——转正的同一刻资产已就位、才成为 latest，
+`releases/latest/download/...` 立即可用、全程不 404：
 
 ```bash
 # ⚠️ 别把两个 ~124MB 的大文件塞进同一条命令：合计 ~248MB，gh release upload 常在 5 分钟超时中断，
@@ -465,8 +507,15 @@ gh release upload "v$NEW_VERSION" dist-app/Atlas-mac-arm64.zip --clobber
 gh release upload "v$NEW_VERSION" dist-app/Atlas-mac-arm64.dmg --clobber
 gh release upload "v$NEW_VERSION" dist-app/latest-mac.yml --clobber
 # 确认三件都在、大小与本地一致：
-gh release view "v$NEW_VERSION" --json assets --jq '.assets[] | "\(.name)  \(.size)  \(.state)"'
+gh release view "v$NEW_VERSION" --json isDraft,assets --jq '{draft:.isDraft, assets:[.assets[]|"\(.name) \(.size) \(.state)"]}'
+# 三件齐了 → 转正（此前它一直是草稿、不抢 latest）
+gh release edit "v$NEW_VERSION" --draft=false --latest
 ```
+
+> ⚠️ **草稿一定要转正**：`release.yml` 现在刻意把 Release 建成草稿来避免"空 Release 抢 latest → 下载 404"。
+> 代价是**推完 tag 只会看到一个草稿**，用户看不到，直到你 `--draft=false`。忘了转正 = 版本永远不公开。
+> npm-only 发版（不出 DMG）也要记得转正：`gh release edit "v$NEW_VERSION" --draft=false --latest`（无资产直接转）。
+> 转正**之后**才走 TL;DR 第 10 步推 landing page 更新官网。
 
 > `latest-mac.yml` 是 electron-updater 的更新清单（列出 zip 名字、大小、sha512）。发版后可跑
 > 打包好的 App 验证更新源连通：应对最新 Release 报 `update-not-available`（版本相同即最新）。
@@ -495,6 +544,7 @@ Developer ID Application 证书 → 导出为 .p12 → `base64 -i cert.p12 | pbc
 | `npm pack` → **`EACCES: permission denied, rename '.../_cacache/tmp/...'`**（或 `EEXIST`） | `~/.npm/_cacache` 里有目录属主是 `root`，历史上某次 `sudo npm` 留下的，跟本仓库无关。**不要 `sudo chown` 用户的 npm 缓存**（影响面比这个问题大得多）。用一次性缓存目录绕开就行：`npm pack --cache /tmp/atlas-npmcache`。步骤 0 里给 `e2e-install.spec.js` 备 tgz 时会撞到这个。0.17.1 发版时遇到过。 |
 | `xcrun stapler validate <dmg>` → **`does not have a ticket stapled to it`**；`stapler staple <dmg>` → **`Record not found` / `Could not find ... ticket`** | 不是构建坏了。`build.mac.notarize: true` 只公证 `.app`，**DMG 容器没被公证**，所以 staple 找不到票。按「[DMG 单独公证 + staple](#桌面-appmacos-dmg发版)」把 dmg 也 `notarytool submit --wait` 一次再 staple。app 本身其实已 notarized+stapled（`spctl` 显示 accepted），这步是让下载的 dmg 容器离线也干净。0.22.0 发版时遇到并补流程。 |
 | `gh release upload` **卡住 / 5 分钟超时中断**，Release 上只挂了 `latest-mac.yml` | 一条命令里塞了两个 ~124MB 的 zip+dmg（合计 ~248MB），超过默认超时。**分开单独上传**（各给足时间），传完用 `gh release view --json assets` 核对三件都在、`size` 与本地 `stat -f %z` 一致。0.22.0 发版时遇到。 |
+| 用户反馈**官网说有新版、但点下载 404**；或 `releases/latest/download/Atlas-mac-arm64.dmg` 一段时间内 404 | 发版顺序错了：官网（`docs/`）或空 Release 领先于真实产物。根因两条——① docs 和代码放同一个 commit 一起 push，Pages 立刻部署、官网提前宣告新版而包还在传；② tag 触发的 Release 若不是草稿会立刻抢 `latest`，130MB dmg 上传期间 latest 指向一个还没这个资产的 Release。**修复（已固化进流程）**：Release 由 `release.yml` 建成**草稿**，传齐资产再 `gh release edit --draft=false --latest` 转正；**官网（docs/）永远最后一步 push**（TL;DR 第 10 步）。0.24.0 发版时踩到，由此修订顺序铁律。 |
 
 ---
 
@@ -587,6 +637,9 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 3. **publish 前必须 dry-run** 确认包内容，并且**必须先 commit + push 拿到 CI 绿灯**。
    `npm publish` 是整个流程里唯一不可逆的一步（24h 外只能 deprecate，版本号永久占用），
    把它排在所有能反悔的动作之后。tag 则必须排在 publish 之后。
+   **顺序铁律（别破坏）**：npm 上架 → tag 建【草稿】Release → 传齐 DMG/zip/yml → 转正草稿
+   （`gh release edit --draft=false --latest`）→ **最后才 push `docs/` 更新官网**。官网领先于真实
+   产物 = 用户 404（P0）。所以 `docs/index.html` 的改动要单独留到最后一步推，不要和代码同 commit。
 4. **凭据类东西从不在聊天里贴**：npm token、access token、recovery codes、密码——一律让用户在他自己终端粘贴到 `~/.npmrc` 或环境变量。
 5. **发布后必须验证**（[验证发版成功](#验证发版成功) 4 项）。
 6. **流程有变化？发完最后必须做的事**：
