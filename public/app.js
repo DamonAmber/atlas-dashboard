@@ -193,7 +193,10 @@ const els = {
     if (window.AtlasMarkdown && !document.getElementById('atlas-md-css')) {
       const st = document.createElement('style');
       st.id = 'atlas-md-css';
-      st.textContent = window.AtlasMarkdown.markdownCss;
+      // previewThemeCss 让预览面板的正文配色跟随 Atlas 强制主题（data-theme），
+      // 而不是只跟随系统的 @media (prefers-color-scheme)——否则「系统深色 +
+      // 应用钉浅色」时右侧预览会变成白底浅灰字，几乎看不清。
+      st.textContent = window.AtlasMarkdown.markdownCss + (window.AtlasMarkdown.previewThemeCss || '');
       document.head.appendChild(st);
     }
   } catch (e) {}

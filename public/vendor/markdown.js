@@ -570,6 +570,17 @@
     '--md-alert-note:#4d8ef7;--md-alert-tip:#3fb950;--md-alert-important:#a371f7;',
     '--md-alert-warning:#d29922;--md-alert-caution:#f85149;'
   ].join('');
+  // dashboard 专用：编辑器右侧的实时预览是主文档里的 <div class="md-body">，不是
+  // iframe。markdownCss 里的深色配色靠 @media (prefers-color-scheme) 切换，它只读
+  // 系统设置；而 .md-preview-pane 的背景走 light-dark() 跟随 Atlas 的强制主题
+  // (:root[data-theme])。两者一旦不一致（系统深色 + 应用钉浅色），就会出现
+  // 白底配浅灰字、几乎看不清。这里按 data-theme 显式钉住预览正文的配色变量：
+  // [data-theme] 祖先选择器特异性高于裸 .md-body，稳定压过 @media；主题为 system
+  // （无 data-theme）时两条都不匹配，仍由 @media 跟随系统，行为不变。
+  var previewThemeCss = [
+    ':root[data-theme="light"] .md-body{' + mdVarsLight + '}',
+    ':root[data-theme="dark"] .md-body{' + mdVarsDark + '}',
+  ].join('');
   // 打印时给「即使按纸宽排版也塞不下」的宽表用的两档紧凑样式。
   // 由 printFitScript 测量后挂 class——12 列的月度数据表在 A4 纵向上物理放不下，
   // 不缩就会被纸张边缘裁掉右边几列，导出 PDF 发给别人时那几列凭空消失。
@@ -1772,6 +1783,8 @@
     renderPage: renderPage,
     htmlToMarkdown: htmlToMarkdown,
     markdownCss: markdownCss,
+    // dashboard 编辑预览面板专用：按 data-theme 跟随强制主题的配色覆盖
+    previewThemeCss: previewThemeCss,
     pageCss: pageCss,
     tocCss: tocCss,
     forcedThemeCss: forcedThemeCss,
