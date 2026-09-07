@@ -14,6 +14,7 @@
 
 const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 const serverManager = require('./server-manager');
 const pdf = require('./pdf');
@@ -26,6 +27,47 @@ let tray = null;
 let serverInfo = null;      // { url, port, child, reused }
 let smokeTimer = null;
 let quitting = false;
+
+// ---- 「用 Atlas 打开这个文件」----
+// 来源两条：① macOS 从 Finder「打开方式」/ 双击 → app 'open-file' 事件；
+//          ② Windows / Linux 双击或命令行 → 文件路径落在 process.argv 里。
+// 主进程只负责把路径接住、转交给前端；前端拿到后走 /api/resolve-open 判断该文件
+// 在不在扫描根内，必要时提示把所在目录加为扫描根，然后打开（见 app.js openExternalPath）。
+// 冷启动时窗口 / 前端还没就绪：先存进 pendingOpenPath，前端初始化时用
+// atlas:take-pending-open 主动来取；已运行时则直接 push 给前端。
+let pendingOpenPath = null;
+const OPEN_DOC_EXT = new Set(['.md', '.markdown', '.html', '.htm', '.txt', '.text', '.csv', '.tsv', '.json', '.svg']);
+
+// 从一组命令行参数里挑出第一个"存在于磁盘、且是受支持文档类型"的文件路径。
+// 跳过选项（- 开头）与自身的脚本参数。
+function fileArgFrom(argv) {
+  for (const a of (argv || [])) {
+    if (!a || typeof a !== 'string' || a.startsWith('-')) continue;
+    const ext = path.extname(a).toLowerCase();
+    if (!OPEN_DOC_EXT.has(ext)) continue;
+    try { if (fs.statSync(a).isFile()) return path.resolve(a); } catch {}
+  }
+  return null;
+}
+
+// 把待打开路径 push 给前端（仅当窗口已建好且页面加载完成）。否则留在 pendingOpenPath 里，
+// 由 did-finish-load 或前端的 take-pending-open 兜底。
+function flushOpenPath() {
+  if (!pendingOpenPath || !mainWindow || mainWindow.isDestroyed()) return;
+  const wc = mainWindow.webContents;
+  if (wc.isLoading()) return;   // 等 did-finish-load 再发
+  const p = pendingOpenPath;
+  pendingOpenPath = null;
+  wc.send('atlas:open-path', p);
+}
+
+// 收到一个待打开路径：记下来，确保有窗口，然后尽力立刻转交。
+function handleOpenPath(p) {
+  if (!p) return;
+  pendingOpenPath = p;
+  if (serverInfo) { if (mainWindow) showWindow(); else createWindow(); }
+  flushOpenPath();
+}
 
 function createWindow() {
   if (mainWindow) { mainWindow.show(); mainWindow.focus(); return; }
@@ -47,7 +89,9 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => { if (!isSmoke) mainWindow.show(); });
 
   mainWindow.webContents.on('did-finish-load', () => {
-    if (isSmoke) { console.log('ATLAS_SMOKE_OK'); cleanupAndExit(0); }
+    if (isSmoke) { console.log('ATLAS_SMOKE_OK'); cleanupAndExit(0); return; }
+    // 冷启动带文件（open-file / argv 在窗口就绪前就到了）：页面加载完再转交
+    flushOpenPath();
   });
   mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {
     console.error(`页面加载失败 (${code}): ${desc}`);
@@ -149,6 +193,13 @@ function cleanupAndExit(code) {
 }
 
 async function boot() {
+  // 冷启动带文件（Windows / Linux 双击或命令行）：文件路径在 argv 里。
+  // macOS 走 open-file 事件（可能已在 will-finish-launching 期间把 pendingOpenPath 填好），
+  // 这里不覆盖已有的 pending。
+  if (!isSmoke && !pendingOpenPath) {
+    const initial = fileArgFrom(process.argv);
+    if (initial) pendingOpenPath = initial;
+  }
   // 原生「关于 Atlas」面板显示版本号（菜单栏 Atlas → 关于 Atlas）
   app.setAboutPanelOptions({
     applicationName: 'Atlas',
@@ -224,11 +275,35 @@ ipcMain.on('atlas:close-window', () => {
   if (win) win.close();
 });
 
+// 前端初始化时主动来取"待打开文件"（冷启动场景：open-file / argv 在前端就绪前就到了）。
+// 取走即清空，避免和 flushOpenPath 的 push 重复打开同一个文件。
+ipcMain.handle('atlas:take-pending-open', () => {
+  const p = pendingOpenPath;
+  pendingOpenPath = null;
+  return p || null;
+});
+
+// macOS：从 Finder「打开方式」/ 双击文件启动或唤起 Atlas 时走 open-file 事件。
+// 必须在 app ready 之前注册（冷启动时它会先于 whenReady 触发），所以放在
+// will-finish-launching 里。handleOpenPath 会缓存路径并在窗口就绪后转交前端。
+app.on('will-finish-launching', () => {
+  app.on('open-file', (e, filePath) => {
+    e.preventDefault();
+    handleOpenPath(filePath);
+  });
+});
+
 // 单实例：再次双击/启动时聚焦已有窗口，而不是又起一个
 if (!app.requestSingleInstanceLock()) {
   app.exit(0);
 } else {
-  app.on('second-instance', () => showWindow());
+  // second-instance：已在运行时又双击一个文件（Windows / Linux 把路径放在 argv 里；
+  // macOS 走上面的 open-file，argv 里没有，fileArgFrom 返回 null 即只聚焦窗口）
+  app.on('second-instance', (_e, argv) => {
+    showWindow();
+    const p = fileArgFrom(argv);
+    if (p) handleOpenPath(p);
+  });
   app.whenReady().then(boot);
   app.on('activate', () => { if (serverInfo) showWindow(); });   // 点 dock 图标
   app.on('window-all-closed', () => {

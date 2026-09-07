@@ -23,6 +23,14 @@ const state = {
   // 'name' | 'mtime' | 'custom'：folder.children 排序模式
   // 默认按名称——一系列文档（v1/v2/v3）会自动聚合在一起
   sortMode: localStorage.getItem('atlas:sortMode') || 'name',
+  // 侧栏目录树视图：
+  //   'groups' —— 虚拟分组（默认）：可拖拽重排、手工建分组、归档，持久化在 store.tree
+  //   'tree'   —— 真实目录树：完全按磁盘上的多级目录结构展示（只读镜像，不持久化、不可拖拽），
+  //               解决"深层嵌套目录被压平成一级、多个 README 分不清"的问题
+  viewMode: localStorage.getItem('atlas:viewMode') === 'tree' ? 'tree' : 'groups',
+  // 目录视图当前这一帧的顶层节点（由 buildDirTree 生成）。缓存供 allFolderIds / collapse-all 复用，
+  // 避免它们各自重建一遍
+  dirTree: [],
   // path → { token, urls } —— 用于文件行渲染时判断是否已分享 + 状态角标
   sharesByPath: new Map(),
   // 已显式信任的 HTML 路径。未信任的走沙箱 iframe 预览（拿不到同源权限）
@@ -160,6 +168,7 @@ const els = {
   updateBadge: document.getElementById('update-badge'),
   updateBanner: document.getElementById('update-banner'),
   segButtons: document.querySelectorAll('.seg-btn[data-sort]'),
+  viewButtons: document.querySelectorAll('.seg-btn[data-view]'),
   matchBadge: document.getElementById('match-badge'),
   matchClose: document.getElementById('match-close'),
   findBar: document.getElementById('find-bar'),
@@ -1243,6 +1252,70 @@ function countDescendants(node) {
   return { files, unread, fresh };
 }
 
+// ---------- 目录视图：按磁盘真实层级即时构建多级树 ----------
+// 只读镜像，不写 store：从 state.files 的 relPath 逐段建 folder 节点，末端挂 file。
+// 节点结构和虚拟分组树完全一致（type: 'folder' | 'file'），所以 renderNode /
+// countDescendants / nodeMatches / sortChildren 全部原样复用。目录 folder 用
+// kind:'dir' 标记，renderFolder 据此只给它折叠 + 「在访达中显示」，不给重命名 /
+// 删除 / 新建子分组（那些只对虚拟分组有意义）。
+//
+// folder.id 用稳定的 'dir:<rootIndex>/<相对目录>' —— 和虚拟分组的 'f-xxxx' 不会撞，
+// 所以折叠状态（state.collapsed）在两个视图间各记各的、互不干扰。
+function buildDirTree() {
+  const files = Object.values(state.files || {});
+  // 只扫到一个根时，顶层直接是根下的第一级目录 / 散落文件；扫到多个根时，
+  // 顶层先按根分一层（用根目录名），避免不同根下的同名目录混在一起。
+  const multiRoot = new Set(files.map(f => f.rootIndex)).size > 1;
+  const rootNodes = [];
+  const dirIndex = new Map();   // id → folder 节点
+
+  const mkDir = (id, name, dirPath, container) => {
+    let node = dirIndex.get(id);
+    if (!node) {
+      node = { id, type: 'folder', kind: 'dir', name, dirPath, collapsed: false, children: [] };
+      dirIndex.set(id, node);
+      container.push(node);
+    }
+    return node;
+  };
+
+  for (const f of files) {
+    const sep = f.path.includes('\\') ? '\\' : '/';
+    const rel = f.relPath || f.name;
+    const segs = rel.split(/[\\/]/).filter(Boolean);
+    // 根的绝对路径 = 绝对路径去掉相对路径尾巴（含尾部分隔符）
+    let curAbs = f.path.slice(0, Math.max(0, f.path.length - rel.length)).replace(/[\\/]+$/, '');
+    let container = rootNodes;
+    let idKey = 'dir:' + f.rootIndex;
+
+    if (multiRoot) {
+      const rootName = curAbs.split(/[\\/]/).filter(Boolean).pop() || curAbs;
+      const rootFolder = mkDir(idKey + ':@root', rootName, curAbs, container);
+      container = rootFolder.children;
+    }
+
+    // 中间目录（不含最后一段文件名）逐级建 folder
+    for (let i = 0; i < segs.length - 1; i++) {
+      curAbs = curAbs + sep + segs[i];
+      idKey = idKey + '/' + segs[i];
+      const df = mkDir(idKey, segs[i], curAbs, container);
+      container = df.children;
+    }
+    container.push({ type: 'file', path: f.path });
+  }
+  return rootNodes;
+}
+
+// 当前视图要渲染的顶层节点：目录视图用即时构建的目录树（并缓存到 state.dirTree），
+// 分组视图用持久化的 store.tree
+function currentTreeData() {
+  if (state.viewMode === 'tree') {
+    state.dirTree = buildDirTree();
+    return state.dirTree;
+  }
+  return state.tree;
+}
+
 // ---------- 渲染 ----------
 // 树里是否有正在进行的行内重命名（分组名 / 备注名）
 function isInlineEditing() {
@@ -1259,13 +1332,16 @@ function render() {
   renderSkippedDuringEdit = false;
   els.tree.innerHTML = '';
   const filtering = hasActiveFilter();
-  for (const node of state.tree) {
+  const nodes = currentTreeData();
+  for (const node of nodes) {
     if (filtering) {
       if (!nodeMatches(node)) continue;
     }
     els.tree.appendChild(renderNode(node));
   }
-  initSortables();
+  // 拖拽重排只对虚拟分组有意义；目录视图是磁盘的只读镜像，不挂 Sortable。
+  if (state.viewMode === 'tree') destroySortables();
+  else initSortables();
   updateCollapseAllBtn();
   if (state.activeFilePath && state.files[state.activeFilePath]) {
     setActiveFile(state.activeFilePath, false);
@@ -1608,6 +1684,25 @@ els.segButtons.forEach(btn => {
 });
 updateSortBar();
 
+// 目录树视图切换：分组（虚拟分组，可拖拽/归档）↔ 目录（磁盘真实多级结构，只读镜像）
+function updateViewBar() {
+  els.viewButtons.forEach(btn => {
+    btn.setAttribute('aria-checked', String(btn.dataset.view === state.viewMode));
+  });
+}
+function setViewMode(mode, opts = {}) {
+  if (mode !== 'tree' && mode !== 'groups') return;
+  if (mode === state.viewMode) { updateViewBar(); return; }
+  state.viewMode = mode;
+  localStorage.setItem('atlas:viewMode', mode);
+  updateViewBar();
+  if (!opts.noRender) render();
+}
+els.viewButtons.forEach(btn => {
+  btn.addEventListener('click', () => setViewMode(btn.dataset.view));
+});
+updateViewBar();
+
 function renderNode(node) {
   if (node.type === 'folder') return renderFolder(node);
   if (node.type === 'file') return renderFile(state.files[node.path], node);
@@ -1620,8 +1715,11 @@ function renderFolder(folder) {
   // 表现为"筛选了但什么都没出来"。只在渲染时忽略折叠，不写 state.collapsed，
   // 所以清除筛选后每个分组的折叠状态原样恢复。
   const isCollapsed = hasActiveFilter() ? false : state.collapsed.has(folder.id);
+  // 目录视图里的目录节点（kind:'dir'）是磁盘的只读镜像：只给折叠 + 「在访达中显示」，
+  // 不给重命名 / 删除 / 新建子分组（那些只对虚拟分组有意义），也不能拖拽或双击改名。
+  const isDir = folder.kind === 'dir';
   const folderEl = document.createElement('div');
-  folderEl.className = 'folder' + (isCollapsed ? ' collapsed' : '');
+  folderEl.className = 'folder' + (isCollapsed ? ' collapsed' : '') + (isDir ? ' dir-node' : '');
   folderEl.dataset.nodeType = 'folder';
   folderEl.dataset.folderId = folder.id;
 
@@ -1640,10 +1738,12 @@ function renderFolder(folder) {
     ${counts.unread > 0 ? `<span class="folder-unread-dot${counts.fresh ? '' : ' stale'}" title="${counts.unread} 个未读${counts.fresh ? `，其中 ${counts.fresh} 个今天改过` : '（都超过 24 小时）'}"></span>` : ''}
     <span class="folder-count">${counts.files}</span>
     <span class="folder-actions">
-      ${folder.autoFor ? `<button data-act="reveal-folder" title="在访达中显示这个目录" aria-label="在访达中显示「${escapeHtml(folder.name)}」">${ic('folder-open', 12)}</button>` : ''}
-      <button data-act="new-sub" title="在此分组内新建子分组" aria-label="在「${escapeHtml(folder.name)}」内新建子分组">${ic('plus', 12)}</button>
-      <button data-act="rename" title="重命名" aria-label="重命名分组「${escapeHtml(folder.name)}」">${ic('pencil', 11)}</button>
-      <button data-act="delete" title="删除分组（文件下次扫描会回到所属项目）" aria-label="删除分组「${escapeHtml(folder.name)}」">${ic('x', 12)}</button>
+      ${isDir
+        ? `<button data-act="reveal-dir" title="在访达中显示这个目录" aria-label="在访达中显示「${escapeHtml(folder.name)}」">${ic('folder-open', 12)}</button>`
+        : `${folder.autoFor ? `<button data-act="reveal-folder" title="在访达中显示这个目录" aria-label="在访达中显示「${escapeHtml(folder.name)}」">${ic('folder-open', 12)}</button>` : ''}`
+          + `<button data-act="new-sub" title="在此分组内新建子分组" aria-label="在「${escapeHtml(folder.name)}」内新建子分组">${ic('plus', 12)}</button>`
+          + `<button data-act="rename" title="重命名" aria-label="重命名分组「${escapeHtml(folder.name)}」">${ic('pencil', 11)}</button>`
+          + `<button data-act="delete" title="删除分组（文件下次扫描会回到所属项目）" aria-label="删除分组「${escapeHtml(folder.name)}」">${ic('x', 12)}</button>`}
     </span>
   `;
   folderEl.appendChild(header);
@@ -1678,7 +1778,9 @@ function renderFolder(folder) {
     }
   });
   header.addEventListener('pointercancel', () => { hpdDown = false; });
-  header.querySelector('[data-act="new-sub"]').addEventListener('click', async (e) => {
+  // 下面几个按钮只在分组视图存在（目录视图的 dir 节点没有），逐个判空后再绑。
+  const newSubBtn = header.querySelector('[data-act="new-sub"]');
+  if (newSubBtn) newSubBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
     const name = await showPrompt({
       title: '新建子分组',
@@ -1699,11 +1801,13 @@ function renderFolder(folder) {
       fetchState();
     }
   });
-  header.querySelector('[data-act="rename"]').addEventListener('click', (e) => {
+  const renameBtn = header.querySelector('[data-act="rename"]');
+  if (renameBtn) renameBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     startRenameFolder(folder, header.querySelector('.folder-name'));
   });
-  header.querySelector('[data-act="delete"]').addEventListener('click', (e) => {
+  const deleteBtn = header.querySelector('[data-act="delete"]');
+  if (deleteBtn) deleteBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     deleteFolder(folder);
   });
@@ -1727,10 +1831,33 @@ function renderFolder(folder) {
       }
     });
   }
-  header.querySelector('.folder-name').addEventListener('dblclick', (e) => {
-    e.stopPropagation();
-    startRenameFolder(folder, e.currentTarget);
-  });
+  // 目录视图的 dir 节点：reveal 走通用的 /api/reveal（传真实目录绝对路径）
+  const revealDirBtn = header.querySelector('[data-act="reveal-dir"]');
+  if (revealDirBtn) {
+    revealDirBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        const r = await fetch('/api/reveal', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path: folder.dirPath }),
+        });
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          showToast({ kind: 'error', text: '打开失败', secondary: data.error || ('HTTP ' + r.status) });
+        }
+      } catch (err) {
+        showToast({ kind: 'error', text: '打开失败', secondary: err.message });
+      }
+    });
+  }
+  // 双击分组名改名：只对可重命名的虚拟分组绑定，目录节点不改名
+  if (!isDir) {
+    header.querySelector('.folder-name').addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      startRenameFolder(folder, e.currentTarget);
+    });
+  }
 
   return folderEl;
 }
@@ -1782,6 +1909,14 @@ function renderFile(file, node) {
   const isShared = state.sharesByPath && state.sharesByPath.has(file.path);
   if (isShared) fileEl.classList.add('shared');
   const typeIcon = ic(docTypeIconName(file), 12);
+  // 分组视图里，分组名之下还有子目录的深层文件（relPath 段数 > 2）在行上补一个
+  // 中间目录提示，让多个同名文件（README / index …）平铺后仍能区分——正是用户
+  // 反馈的痛点。目录视图本身已按真实层级展示，不需要这个提示。
+  const relSegs = (file.relPath || '').split(/[\\/]/).filter(Boolean);
+  const midDirs = relSegs.slice(1, -1);
+  const dirHintHtml = (state.viewMode !== 'tree' && midDirs.length)
+    ? `<span class="file-dir-hint" title="${escapeHtml(file.relPath)}">${escapeHtml(midDirs.join('/'))}</span>`
+    : '';
   // 星标是常驻按钮（不在 .file-actions 里）：收藏是高频二元操作，不该藏在 hover
   // 才出现的那排按钮里。代价是它落在拖拽把手区内，必须同时做两件事——
   //   ① 加进 initSortables 的 filter，否则按下星标会启动拖拽
@@ -1804,6 +1939,7 @@ function renderFile(file, node) {
     </button>
     <span class="folder-icon file-type-icon">${typeIcon}</span>
     <span class="file-name" data-path="${escapeHtml(file.path)}">${escapeHtml(displayName)}</span>
+    ${dirHintHtml}
     ${tagsHtml}
     <span class="file-type-badge type-${dtype}">${docTypeBadge(file)}</span>
     <span class="share-badge" title="正在分享到局域网" aria-hidden="${isShared ? 'false' : 'true'}">
@@ -1958,7 +2094,11 @@ function toggleFolder(id) {
 }
 
 // 树里所有分组的 id（含子分组）
-function allFolderIds(nodes = state.tree, out = []) {
+function allFolderIds(nodes, out = []) {
+  // 默认取当前视图的数据源：目录视图用即时目录树、分组视图用 store.tree。
+  // 目录视图下 state.dirTree 由最近一次 render() 更新，collapse-all 直接复用它，
+  // 不必再重建一遍。
+  if (nodes === undefined) nodes = state.viewMode === 'tree' ? state.dirTree : state.tree;
   for (const n of nodes) {
     if (n && n.type === 'folder') {
       out.push(n.id);
@@ -2763,6 +2903,114 @@ if (window.atlasDesktop && typeof window.atlasDesktop.onMenuCommand === 'functio
       openFind();
     }
   });
+}
+
+// 桌面 App：从 Finder「打开方式」/ 双击 / 命令行传入的文件路径。
+// 已运行时主进程 push 过来（onOpenPath），冷启动时前端主动来取一次（takePendingOpen）。
+if (window.atlasDesktop && typeof window.atlasDesktop.onOpenPath === 'function') {
+  window.atlasDesktop.onOpenPath((p) => { if (p) openExternalPath(p); });
+  if (typeof window.atlasDesktop.takePendingOpen === 'function') {
+    window.atlasDesktop.takePendingOpen()
+      .then((p) => { if (p) openExternalPath(p); })
+      .catch(() => {});
+  }
+}
+
+// ---------- 用 Atlas 打开外部传入的文件 / 目录 ----------
+// 桌面 App 从系统拿到一个绝对路径后走这里。先问 /api/resolve-open 该路径当前的状态，
+// 再按状态处理：直接打开 / 询问启用类型 / 询问加扫描根 / 报错。全部用户确认过才动配置，
+// 不静默污染 scanRoots。
+const DOC_TYPE_LABELS = { html: 'HTML', md: 'Markdown', csv: 'CSV', json: 'JSON', txt: '文本', svg: 'SVG' };
+
+async function openExternalPath(rawPath) {
+  if (!rawPath) return;
+  const base = String(rawPath).split(/[\\/]/).filter(Boolean).pop() || String(rawPath);
+  let info;
+  try {
+    const r = await fetch('/api/resolve-open', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: rawPath }),
+    });
+    info = await r.json();
+  } catch (e) {
+    showToast({ kind: 'error', text: '打开失败', secondary: e.message });
+    return;
+  }
+
+  if (info.status === 'not-found') {
+    showToast({ kind: 'error', text: '找不到这个文件', secondary: rawPath, duration: 4000 });
+    return;
+  }
+  if (info.status === 'not-doc') {
+    showToast({ kind: 'error', text: 'Atlas 打不开这种文件', secondary: base, duration: 4000 });
+    return;
+  }
+  if (info.status === 'ready') {
+    if (info.kind === 'dir') {
+      setViewMode('tree');
+      await fetchState();
+      showToast({ kind: 'success', text: '已在目录视图中打开', secondary: base });
+      return;
+    }
+    await fetchState();
+    await openPathAfterState(info.path, base);
+    return;
+  }
+  if (info.status === 'need-doctype') {
+    const label = DOC_TYPE_LABELS[info.docType] || info.docType;
+    const ok = await showConfirm({
+      title: '启用文档类型',
+      body: `「${base}」是 ${label} 文件，但当前没有启用这种类型。是否启用「${label}」并打开？`,
+      confirmText: '启用并打开',
+    });
+    if (!ok) return;
+    const cfg = await (await fetch('/api/config')).json();
+    const nextTypes = [...new Set([...(cfg.docTypes || []), info.docType])];
+    if (!(await updateConfig({ docTypes: nextTypes }))) return;
+    await fetchState();
+    await openPathAfterState(info.path, base);
+    return;
+  }
+  if (info.status === 'need-root') {
+    const ok = await showConfirm({
+      title: '添加扫描目录',
+      body: info.kind === 'dir'
+        ? `目录还不在 Atlas 的扫描范围内：\n${info.dir}\n是否把它加为扫描根？`
+        : `「${base}」不在 Atlas 的扫描范围内。\n是否把它所在的目录\n${info.dir}\n加为扫描根后打开？`,
+      confirmText: '添加并打开',
+    });
+    if (!ok) return;
+    const cfg = await (await fetch('/api/config')).json();
+    if (!(cfg.scanRoots || []).includes(info.dir)) {
+      if (!(await updateConfig({ scanRoots: [...(cfg.scanRoots || []), info.dir] }))) return;
+    }
+    // 文件类型没启用的话，一并启用（否则加了根也扫不到这个文件）
+    if (info.docType) {
+      const cfg2 = await (await fetch('/api/config')).json();
+      if (!(cfg2.docTypes || []).includes(info.docType)) {
+        await updateConfig({ docTypes: [...new Set([...(cfg2.docTypes || []), info.docType])] });
+      }
+    }
+    await fetchState();
+    if (info.kind === 'dir') {
+      setViewMode('tree');
+      showToast({ kind: 'success', text: '已添加目录', secondary: info.dir });
+    } else {
+      await openPathAfterState(info.path, base);
+    }
+    return;
+  }
+}
+
+// 打开一个刚确认在扫描范围内的文件。索引可能刚重建完，state.files 还没这条——
+// 再刷新一次、稍等重试，仍找不到才报错。
+async function openPathAfterState(filePath, base) {
+  if (state.files[filePath]) { openFile(filePath); return; }
+  await new Promise(r => setTimeout(r, 300));
+  await fetchState();
+  if (state.files[filePath]) { openFile(filePath); return; }
+  showToast({ kind: 'error', text: '打开失败', secondary: `未能在看板中定位到 ${base}`, duration: 4000 });
 }
 
 // ---------- 打开文件 ----------

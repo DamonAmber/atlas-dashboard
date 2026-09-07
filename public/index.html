@@ -189,6 +189,12 @@
     <div class="tree-head">
       <svg class="ico section-ico" width="12" height="12" aria-hidden="true"><use href="#i-layers"/></svg>
       <span class="section-title">全部文档</span>
+      <!-- 目录树视图切换：分组（虚拟分组，可拖拽/归档）↔ 目录（磁盘真实多级结构，只读镜像）。
+           用 data-view 而非 data-sort，避免被排序逻辑（els.segButtons）捕获。 -->
+      <div class="seg view-seg" role="radiogroup" aria-label="目录树视图">
+        <button class="seg-btn" type="button" data-view="groups" role="radio" aria-checked="true" title="按虚拟分组显示（可拖拽重排、归档、自定义子分组）">分组</button>
+        <button class="seg-btn" type="button" data-view="tree" role="radio" aria-checked="false" title="按磁盘真实目录层级显示（二级 / 三级子目录都展开）">目录</button>
+      </div>
       <button id="btn-collapse-all" class="tree-head-btn" type="button"
               title="全部折叠" aria-label="全部折叠">
         <svg class="ico" width="13" height="13" aria-hidden="true"><use id="collapse-all-ico" href="#i-collapse-all"/></svg>

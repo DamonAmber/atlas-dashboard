@@ -586,6 +586,19 @@ body.no-active-doc .tb-sep { display: none; }
 .tree-head-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tree-head-btn:disabled { opacity: 0.35; cursor: default; background: transparent; color: var(--text-faint); }
 
+/* 目录树视图切换（分组 / 目录）——「全部文档」标题行右侧的紧凑分段控件。
+ * 比排序那组更小更低调：它是"换一种看树的方式"，不是常动的操作。 */
+.view-seg { flex: none; }
+.view-seg .seg-btn {
+  height: 21px;
+  padding: 0 7px;
+  font-size: 11px;
+  letter-spacing: normal;
+  font-weight: var(--fw-normal);
+}
+.view-seg .seg-btn[aria-checked="true"] { font-weight: 600; }
+.view-seg .seg-btn[aria-checked="true"]::after { left: 7px; right: 7px; }
+
 /* ============================================================
  * 快捷区（收藏 / 最近 / 标签的共同外壳）
  * ------------------------------------------------------------
@@ -932,6 +945,21 @@ body.no-active-doc .tb-sep { display: none; }
  * 粗体不再表示"这行重要"，只是让整个侧栏看起来在喊。 */
 .file.unread.stale .file-name:not([contenteditable="true"]) { font-weight: var(--fw-normal); }
 .file.has-alias .file-name { font-style: italic; }
+/* 深层文件的中间目录提示（分组视图）：靠右、次要色、可截断。跟在文件名之后，
+ * 让平铺在同一分组里的多个同名文件（README / index …）一眼看出各自在哪个子目录。
+ * 和时间戳一样在 hover 时让位给操作按钮，避免右侧拥挤。 */
+.file-dir-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  margin-left: 6px;
+}
+.file:hover .file-dir-hint { display: none; }
 .file-mtime {
   font-size: var(--fs-xs);
   color: var(--text-faint);

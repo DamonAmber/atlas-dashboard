@@ -1945,9 +1945,17 @@ function revealInFileManager(filePath, cb) {
   cb(null);
 }
 
+// 路径落在扫描根内、或本身就是某个扫描根。reveal 一个目录（目录视图的分组头）时
+// 会命中"本身就是扫描根"这一支——isPathInScanRoots 只认严格在根内部的路径，根自身返回 false。
+function isPathInOrIsScanRoot(p) {
+  if (isPathInScanRoots(p)) return true;
+  const abs = path.resolve(p);
+  return getScanRoots().some(root => path.resolve(root) === abs);
+}
+
 app.post('/api/reveal', (req, res) => {
   const filePath = req.body && req.body.path;
-  if (!filePath || !isPathInScanRoots(filePath)) {
+  if (!filePath || !isPathInOrIsScanRoot(filePath)) {
     return res.status(400).json({ error: '路径非法' });
   }
   revealInFileManager(filePath, (err) => {
@@ -1991,6 +1999,43 @@ app.post('/api/reveal-folder', (req, res) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ ok: true, path: dir });
   });
+});
+
+// 「用 Atlas 打开这个文件」——桌面 App 从 Finder「打开方式」/双击 / 命令行拿到一个
+// 绝对路径后，问服务端"这个东西现在能不能在看板里打开、缺什么"。服务端只做判断，
+// 真正的加根 / 启用类型 / 打开都由前端在用户确认后走既有接口完成（见 app.js openExternalPath）。
+//
+// 返回的 status：
+//   ready         —— 文件已在某个扫描根内且类型已启用，前端直接 openFile(path)
+//   need-doctype  —— 文件在扫描根内，但它的类型没启用（docType 待前端确认后启用）
+//   need-root     —— 文件（或目录）不在任何扫描根内，建议把 dir 加为新的扫描根
+//   not-doc       —— 是文件但不是 Atlas 支持的文档类型
+//   not-found     —— 路径不存在
+app.post('/api/resolve-open', (req, res) => {
+  const raw = req.body && req.body.path;
+  if (!raw || typeof raw !== 'string') {
+    return res.status(400).json({ error: '缺少 path' });
+  }
+  const abs = path.resolve(raw);
+  let stat;
+  try { stat = fs.statSync(abs); }
+  catch { return res.json({ status: 'not-found', path: abs }); }
+
+  // 目录：作为扫描根打开整个目录
+  if (stat.isDirectory()) {
+    if (isPathInOrIsScanRoot(abs)) return res.json({ status: 'ready', kind: 'dir', path: abs });
+    return res.json({ status: 'need-root', kind: 'dir', dir: abs });
+  }
+
+  if (!isAnyDocPath(abs)) return res.json({ status: 'not-doc', path: abs });
+
+  const inRoot = isPathInScanRoots(abs);
+  const docType = docTypeOfPath(abs);
+  const enabled = getEnabledDocTypes().includes(docType);
+  if (inRoot && enabled) return res.json({ status: 'ready', path: abs, docType });
+  if (inRoot && !enabled) return res.json({ status: 'need-doctype', path: abs, docType });
+  // 不在任何扫描根：建议把它所在目录加为扫描根
+  return res.json({ status: 'need-root', path: abs, dir: path.dirname(abs), docType });
 });
 
 // 把 HTML 文件导出为 PDF——用本机 Chromium 系浏览器（Chrome / Edge / Brave / Arc / Chromium）

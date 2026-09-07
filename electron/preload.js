@@ -16,4 +16,15 @@ contextBridge.exposeInMainWorld('atlasDesktop', {
   },
   // 关闭当前窗口（多 Tab：无 Tab 可关时，⌘W 回退为关窗，符合原生预期）
   closeWindow: () => ipcRenderer.send('atlas:close-window'),
+  // 从 Finder「打开方式」/ 双击 / 命令行传入的文件路径（主进程 open-file / argv）。
+  // 前端据此在看板里定位并打开这个文件（必要时先把它所在目录加为扫描根）。
+  // 返回取消订阅函数。
+  onOpenPath: (cb) => {
+    const listener = (_e, p) => { try { cb(p); } catch {} };
+    ipcRenderer.on('atlas:open-path', listener);
+    return () => ipcRenderer.removeListener('atlas:open-path', listener);
+  },
+  // 冷启动兜底：前端初始化时主动来取一次"待打开文件"（可能在前端就绪前就到了）。
+  // 返回路径字符串或 null。
+  takePendingOpen: () => ipcRenderer.invoke('atlas:take-pending-open'),
 });
