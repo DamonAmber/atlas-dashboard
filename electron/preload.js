@@ -27,4 +27,19 @@ contextBridge.exposeInMainWorld('atlasDesktop', {
   // 冷启动兜底：前端初始化时主动来取一次"待打开文件"（可能在前端就绪前就到了）。
   // 返回路径字符串或 null。
   takePendingOpen: () => ipcRenderer.invoke('atlas:take-pending-open'),
+  // App bundle 的权威版本号（app.getVersion()）。前端设置里优先用它显示，
+  // 避免复用旧 server 时 /api/config 返回旧 pkg.version 造成"升级后仍显示旧版本"。
+  appVersion: () => ipcRenderer.invoke('atlas:app-version'),
+  // 桌面自动更新桥（electron-updater）：检查 / 查询状态 / 订阅状态推送 / 一键重启安装。
+  updates: {
+    getState: () => ipcRenderer.invoke('atlas:update-state'),
+    check: () => ipcRenderer.invoke('atlas:update-check'),
+    quitAndInstall: () => ipcRenderer.invoke('atlas:update-install'),
+    // 订阅主进程推送的更新状态（checking / downloading 进度 / downloaded / error）。返回取消订阅函数。
+    onStatus: (cb) => {
+      const listener = (_e, s) => { try { cb(s); } catch {} };
+      ipcRenderer.on('atlas:update-status', listener);
+      return () => ipcRenderer.removeListener('atlas:update-status', listener);
+    },
+  },
 });

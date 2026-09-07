@@ -49,13 +49,23 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      - name: Upload DMG as build artifact
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Atlas-mac-arm64-dmg
-          path: dist-app/Atlas-mac-arm64.dmg
+          name: Atlas-mac-arm64
+          path: |
+            dist-app/Atlas-mac-arm64.dmg
+            dist-app/Atlas-mac-arm64.zip
+            dist-app/latest-mac.yml
 
-      - name: Attach DMG to GitHub Release
+      # 关键：electron-updater 在 macOS 上靠 latest-mac.yml + zip 做自动更新（DMG 仅供手动下载安装）。
+      # 只传 DMG 会导致 App 里的自动更新 / 「检查更新」永远发现不了新版本，所以三者都要传。
+      - name: Attach DMG + update feed to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ inputs.tag }}" dist-app/Atlas-mac-arm64.dmg --clobber
+        run: |
+          gh release upload "${{ inputs.tag }}" \
+            dist-app/Atlas-mac-arm64.dmg \
+            dist-app/Atlas-mac-arm64.zip \
+            dist-app/latest-mac.yml \
+            --clobber

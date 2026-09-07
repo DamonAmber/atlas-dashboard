@@ -28,6 +28,24 @@ let serverInfo = null;      // { url, port, child, reused }
 let smokeTimer = null;
 let quitting = false;
 
+// 桌面自动更新的当前状态，供前端「检查更新」UI 查询（atlas:update-state）与订阅
+// （atlas:update-status 推送）。state: idle|checking|not-available|downloading|downloaded|error|unsupported
+let updateStatus = { state: 'idle', version: null, percent: 0, error: null };
+// 用户主动点了「检查更新」：走 in-app UI（设置里的“重启以更新”按钮），下载完不再弹原生对话框。
+// 后台定时检查到的更新才弹原生框（否则用户没打开设置就完全无感）。
+let manualUpdateCheck = false;
+
+function currentAppVersion() { try { return app.getVersion(); } catch { return null; } }
+
+// 合并并广播更新状态到所有窗口（前端 window.atlasDesktop.updates.onStatus 接收）
+function broadcastUpdateStatus(patch) {
+  updateStatus = { ...updateStatus, ...patch };
+  const payload = { ...updateStatus, current: currentAppVersion() };
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { w.webContents.send('atlas:update-status', payload); } catch {}
+  }
+}
+
 // ---- 「用 Atlas 打开这个文件」----
 // 来源两条：① macOS 从 Finder「打开方式」/ 双击 → app 'open-file' 事件；
 //          ② Windows / Linux 双击或命令行 → 文件路径落在 process.argv 里。
@@ -210,6 +228,7 @@ async function boot() {
     serverInfo = await serverManager.startServer({
       nodeBinary: process.execPath,
       asElectronNode: true,
+      appVersion: app.getVersion(),   // 复用旧 CLI 守护进程前用它校验版本，避免升级后仍加载旧 server
       onLog: (line) => process.stdout.write(`[atlas-server] ${line}`),
     });
     console.log(`Atlas 服务就绪 → ${serverInfo.url}${serverInfo.reused ? '（复用已运行实例）' : ''}`);
@@ -240,10 +259,30 @@ function setupAutoUpdate() {
     debug: () => {},
   };
 
-  autoUpdater.on('error', (err) => console.error('[updater] error:', err && err.message ? err.message : err));
-  autoUpdater.on('update-available', (info) => console.log('[updater] 有新版本:', info && info.version));
-  autoUpdater.on('update-not-available', () => console.log('[updater] 已是最新'));
+  autoUpdater.on('error', (err) => {
+    const msg = err && err.message ? err.message : String(err);
+    console.error('[updater] error:', msg);
+    broadcastUpdateStatus({ state: 'error', error: msg });
+    manualUpdateCheck = false;
+  });
+  autoUpdater.on('checking-for-update', () => broadcastUpdateStatus({ state: 'checking', error: null }));
+  autoUpdater.on('update-available', (info) => {
+    console.log('[updater] 有新版本:', info && info.version);
+    // autoDownload=true，随后进入下载；先把状态切到 downloading（0%）
+    broadcastUpdateStatus({ state: 'downloading', version: info && info.version, percent: 0, error: null });
+  });
+  autoUpdater.on('update-not-available', () => {
+    console.log('[updater] 已是最新');
+    broadcastUpdateStatus({ state: 'not-available', version: null, error: null });
+    manualUpdateCheck = false;
+  });
+  autoUpdater.on('download-progress', (p) => {
+    broadcastUpdateStatus({ state: 'downloading', percent: p && typeof p.percent === 'number' ? Math.round(p.percent) : 0 });
+  });
   autoUpdater.on('update-downloaded', async (info) => {
+    broadcastUpdateStatus({ state: 'downloaded', version: info && info.version, percent: 100, error: null });
+    // 用户主动检查触发的：交给 in-app UI（设置里“重启以更新”按钮），不弹原生框避免重复打扰。
+    if (manualUpdateCheck) { manualUpdateCheck = false; return; }
     const win = mainWindow || BrowserWindow.getAllWindows()[0] || undefined;
     const { response } = await dialog.showMessageBox(win, {
       type: 'info',
@@ -281,6 +320,43 @@ ipcMain.handle('atlas:take-pending-open', () => {
   const p = pendingOpenPath;
   pendingOpenPath = null;
   return p || null;
+});
+
+// ---- 桌面自动更新桥：前端设置里的「检查更新」按钮通过 preload 的 updates 调用 ----
+// App bundle 的权威版本号。前端优先用它显示，避免复用旧 server 时版本号错乱。
+ipcMain.handle('atlas:app-version', () => currentAppVersion());
+
+// 当前更新状态（打开设置时同步一次）。
+ipcMain.handle('atlas:update-state', () => ({ ...updateStatus, current: currentAppVersion() }));
+
+// 用户主动检查更新。开发 / 未打包环境没有 app-update.yml，直接返回 unsupported。
+ipcMain.handle('atlas:update-check', async () => {
+  if (!app.isPackaged) {
+    broadcastUpdateStatus({ state: 'unsupported', error: null });
+    return { state: 'unsupported', current: currentAppVersion() };
+  }
+  manualUpdateCheck = true;
+  broadcastUpdateStatus({ state: 'checking', error: null });
+  try {
+    // 有更新时（autoDownload=true）随后经事件进入 downloading → downloaded；
+    // 已是最新则经 update-not-available 事件置为 not-available。这里只负责触发。
+    const r = await autoUpdater.checkForUpdates();
+    return { ...updateStatus, current: currentAppVersion(), latest: r && r.updateInfo ? r.updateInfo.version : null };
+  } catch (e) {
+    const msg = e && e.message ? e.message : String(e);
+    manualUpdateCheck = false;
+    broadcastUpdateStatus({ state: 'error', error: msg });
+    return { state: 'error', error: msg, current: currentAppVersion() };
+  }
+});
+
+// 一键重启并安装已下载好的更新（Squirrel.Mac 替换 bundle 后重启，版本随即变为新版）。
+ipcMain.handle('atlas:update-install', () => {
+  if (updateStatus.state !== 'downloaded') return { ok: false, error: '还没有已下载完成的更新' };
+  quitting = true;
+  // 先让本次 IPC 有机会回执，再退出安装
+  setImmediate(() => { try { autoUpdater.quitAndInstall(); } catch (e) { console.error('[updater] quitAndInstall 失败:', e); } });
+  return { ok: true };
 });
 
 // macOS：从 Finder「打开方式」/ 双击文件启动或唤起 Atlas 时走 open-file 事件。

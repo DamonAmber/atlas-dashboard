@@ -543,6 +543,11 @@
             <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-folder"/></svg><span>归档</span>
           </button>
           <div class="settings-version" id="settings-version" title="当前版本"></div>
+          <!-- 桌面版：检查更新（electron-updater）。浏览器 / npm 版由 JS 保持隐藏。 -->
+          <div class="settings-update hidden" id="settings-update">
+            <button class="settings-update-btn" id="settings-update-btn" type="button" data-mode="check">检查更新</button>
+            <div class="settings-update-status" id="settings-update-status" aria-live="polite"></div>
+          </div>
         </nav>
         <div class="settings-content" id="settings-content">
       <section class="modal-section" data-pane="scan">

@@ -870,8 +870,27 @@ body.no-active-doc .tb-sep { display: none; }
   display: block !important;
   min-height: 0;
   overflow: hidden;
+  /* 动画期间把这棵子树的内部布局 / 绘制与外部隔离：逐帧改 height 时浏览器不必回头
+   * 重排子树内部成百上千行，深目录树掉帧显著减轻。只在 .animating 期间生效，
+   * 平时（无此类）不裁剪，键盘焦点环照常可见（overflow 也仅此期间裁剪）。 */
+  contain: layout paint;
+  will-change: height;
   transition: height var(--dur) var(--ease-out);
 }
+/* 大子树展开：放弃逐帧改 height 的布局动画（深目录树的掉帧根源——展开瞬间要对整棵
+ * 大子树做一次布局、随后 200ms 里下方大量节点每帧重排），改为一次性展开 + 合成器
+ * 代价恒定的淡入。opacity 不触发布局，无论子树多大都丝滑（分组丝滑正因子树小）。 */
+.folder-children.fade-in {
+  animation: folderFadeIn var(--dur-fast) var(--ease-out) both;
+}
+@keyframes folderFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+/* 目录视图（只读镜像、不挂 SortableJS）里给每个 .folder 加 layout containment：
+ * 展开 / 折叠某个目录时，下方成百上千个兄弟节点只需整体平移，无需深度重排。
+ * 分组视图刻意不加——拖拽重排依赖正常布局流，containment 会干扰命中判定。 */
+.tree.tree-view-mode .folder { contain: layout; }
 /* 展开时子项依次淡入并轻微上移，给折叠展开一点"空间连续性"。
  * 只 stagger 前 8 个，长分组尾部不再拖延迟；reduced-motion 下 --dur=0 自然失效。 */
 @keyframes treeItemIn {
@@ -890,6 +909,9 @@ body.no-active-doc .tb-sep { display: none; }
 .folder-children.is-opening > :nth-child(6) { animation-delay: 80ms; }
 .folder-children.is-opening > :nth-child(7) { animation-delay: 96ms; }
 .folder-children.is-opening > :nth-child(n+8) { animation-delay: 112ms; }
+/* 直接子项很多时，第 15 个起不再逐项入场：几百个子项同时跑 opacity/transform 会拖累
+ * 合成器。前 14 个的错峰已足够传达"展开"的空间连续性，其余直接呈现。 */
+.folder-children.is-opening > :nth-child(n+15) { animation: none; }
 
 /* 文件行。
  * flex-wrap 是为了 .file-snippet：搜索命中正文时它 flex-basis:100% 强制换行，
@@ -2557,6 +2579,22 @@ kbd {
   letter-spacing: 0.02em;
   word-break: break-word;
 }
+/* 桌面版「检查更新」控件（紧贴版本号下方） */
+.settings-nav .settings-update {
+  padding: 2px 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.settings-nav .settings-update.hidden { display: none; }
+.settings-nav .settings-update-btn { align-self: flex-start; font-size: 12px; }
+.settings-nav .settings-update-status {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  word-break: break-word;
+}
+.settings-nav .settings-update-status.is-error { color: var(--unread); }
 
 .modal-section {
   padding: 16px 18px;

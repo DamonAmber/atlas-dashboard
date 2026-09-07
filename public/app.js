@@ -1331,6 +1331,9 @@ function render() {
   if (isInlineEditing()) { renderSkippedDuringEdit = true; return; }
   renderSkippedDuringEdit = false;
   els.tree.innerHTML = '';
+  // 目录视图（只读、无拖拽）给树容器打标：CSS 据此对 .folder 加 layout containment，
+  // 让展开 / 折叠时下方兄弟节点只需整体平移、不必深度重排。分组视图不加（拖拽依赖正常布局）。
+  els.tree.classList.toggle('tree-view-mode', state.viewMode === 'tree');
   const filtering = hasActiveFilter();
   const nodes = currentTreeData();
   for (const node of nodes) {
@@ -2031,6 +2034,12 @@ function prefersReducedMotion() {
 // 不可见"（高度动画到 0 时子行仍有自己的包围盒，仅靠 overflow 不算隐藏）；
 // ③ collapse-all / 首屏走整树重建，分组一出生即 .collapsed，压根不进这个函数、
 // 也就没有"满屏分组一起展开"。动画只发生在用户单击某个分组头这一条路径。
+// 子树高度超过这个阈值就当作"很大"：此时逐帧改 height 会让下方大量节点每帧重排，
+// 且展开瞬间要对整棵大子树做一次布局——深目录树掉帧就出在这。大子树改走合成器代价
+// 恒定的淡入（展开）/ 直接切换（折叠），无论多少节点都丝滑；小 / 中子树保留原有
+// height 过渡（分组丝滑的那条路径）。阈值≈一屏高度，超出的部分本来也看不到动画。
+const LARGE_SUBTREE_PX = 900;
+
 function animateFolderChildren(folderEl, expand) {
   const childrenEl = folderEl.querySelector(':scope > .folder-children');
   // 没有子容器、或系统要求减少动效：直接切类（0ms 过渡不触发 transitionend，
@@ -2044,39 +2053,61 @@ function animateFolderChildren(folderEl, expand) {
 
   let done = false;
   let timer = 0;
-  const onEnd = (e) => {
-    if (e.target === childrenEl && e.propertyName === 'height') cleanup();
-  };
   function cleanup() {
     if (done) return;
     done = true;
-    childrenEl.removeEventListener('transitionend', onEnd);
+    childrenEl.removeEventListener('transitionend', onTransitionEnd);
+    childrenEl.removeEventListener('animationend', onAnimationEnd);
     clearTimeout(timer);
-    childrenEl.classList.remove('animating', 'is-opening');
+    childrenEl.classList.remove('animating', 'is-opening', 'fade-in');
     childrenEl.style.height = '';
+    childrenEl.style.willChange = '';
     childrenEl._collapseCleanup = null;
   }
+  const onTransitionEnd = (e) => {
+    if (e.target === childrenEl && e.propertyName === 'height') cleanup();
+  };
+  // 只认容器自身的 fade-in；子项 treeItemIn 冒泡上来的 animationend（target≠childrenEl）忽略
+  const onAnimationEnd = (e) => {
+    if (e.target === childrenEl) cleanup();
+  };
   childrenEl._collapseCleanup = cleanup;
 
   // 关键：.collapsed 类【同步】切好（点完立刻就在），不推迟到动画结束——否则
   // "点击后立即读 .collapsed" 的调用方（含 folder-toggle-with-jitter 测试）会读到旧值。
-  // 动画期间 .animating 的 display:block !important 盖过 .collapsed 的 display:none，
-  // 让折叠过程可见；结束后 cleanup 摘掉 .animating，.collapsed 的 display:none 才真正生效。
+  // 先加 .animating（display:block !important）让折叠中的子树可布局，才能量到真实高度。
   childrenEl.classList.add('animating');
+  const full = childrenEl.scrollHeight;
+
+  // ---- 大子树：合成器淡入（展开）/ 直接切换（折叠），不做逐帧 height 重排 ----
+  if (full > LARGE_SUBTREE_PX) {
+    if (expand) {
+      folderEl.classList.remove('collapsed');
+      childrenEl.classList.remove('animating');          // 不用 height 过渡容器，一次性展开
+      childrenEl.classList.add('fade-in');
+      childrenEl.addEventListener('animationend', onAnimationEnd);
+      timer = setTimeout(cleanup, 400);
+    } else {
+      folderEl.classList.add('collapsed');
+      childrenEl.classList.remove('animating');          // .collapsed 的 display:none 立即生效
+      cleanup();
+    }
+    return;
+  }
+
+  // ---- 小 / 中子树：原有 height 过渡（.animating 期间 display:block 盖过 .collapsed）----
+  childrenEl.style.willChange = 'height';
+  childrenEl.addEventListener('transitionend', onTransitionEnd);
   if (expand) {
     folderEl.classList.remove('collapsed');
     childrenEl.classList.add('is-opening');
-    const target = childrenEl.scrollHeight;
     childrenEl.style.height = '0px';
     void childrenEl.offsetHeight;                        // 强制回流，认账起点
-    childrenEl.addEventListener('transitionend', onEnd);
-    childrenEl.style.height = target + 'px';
+    childrenEl.style.height = full + 'px';
   } else {
     folderEl.classList.add('collapsed');                 // 同步进入折叠态（display 由 .animating 兜住）
-    const start = childrenEl.scrollHeight;               // .animating 保证此刻仍可见、量得到真实高度
-    childrenEl.style.height = start + 'px';
+    childrenEl.style.height = full + 'px';
     void childrenEl.offsetHeight;
-    childrenEl.addEventListener('transitionend', onEnd);
     childrenEl.style.height = '0px';
   }
   // 兜底：transitionend 可能因中断不触发，超时强制收尾（略大于 --dur 200ms）
@@ -6403,13 +6434,21 @@ els.tree.addEventListener('keydown', (e) => {
 async function openSettings() {
   const res = await fetch('/api/config');
   const cfg = await res.json();
-  // 版本号：桌面 App 额外标注"自动更新"，浏览器/npm 用户只显示版本
+  // 版本号：桌面 App 标注"桌面版"并显示 App bundle 的权威版本号（app.getVersion），
+  // 而不是 /api/config 的 pkg.version——后者在复用了旧 CLI 守护进程时会是旧值，
+  // 造成"升级后仍显示旧版本"。浏览器 / npm 用户仍用服务端返回的版本。
+  const isDesktop = !!(window.atlasDesktop && window.atlasDesktop.isDesktop);
   const verEl = document.getElementById('settings-version');
   if (verEl) {
-    const v = cfg.version ? `Atlas v${cfg.version}` : '';
-    verEl.textContent = (v && window.atlasDesktop && window.atlasDesktop.isDesktop)
-      ? `${v} · 桌面版（自动更新）` : v;
+    let ver = cfg.version || '';
+    if (isDesktop && window.atlasDesktop.appVersion) {
+      try { const av = await window.atlasDesktop.appVersion(); if (av) ver = av; } catch {}
+    }
+    const v = ver ? `Atlas v${ver}` : '';
+    verEl.textContent = (v && isDesktop) ? `${v} · 桌面版` : v;
   }
+  // 桌面版：挂载「检查更新」控件（检查 / 下载进度 / 一键重启安装）。浏览器 / npm 版保持隐藏。
+  if (isDesktop) setupDesktopUpdateUI();
   renderRootList(cfg.scanRoots);
   // 已归档 + 已分享：拉最新
   try {
@@ -7295,6 +7334,89 @@ async function checkForUpdate() {
       showUpdateUI(info.current, info.latest);
     }
   } catch {}
+}
+
+// ---------- 桌面版「检查更新」控件（electron-updater，仅桌面 App） ----------
+// 与上面的 npm banner 是两套机制：桌面版走 preload 暴露的 window.atlasDesktop.updates
+// （检查 → 后台下载 → 一键重启安装），npm 版走 /api/self-upgrade。设置弹窗里只对桌面版显示。
+let desktopUpdateBound = false;
+function setupDesktopUpdateUI() {
+  const wrap = document.getElementById('settings-update');
+  const btn = document.getElementById('settings-update-btn');
+  if (!wrap || !btn || !window.atlasDesktop || !window.atlasDesktop.updates) return;
+  wrap.classList.remove('hidden');
+
+  if (!desktopUpdateBound) {
+    desktopUpdateBound = true;
+    btn.addEventListener('click', async () => {
+      // 已下载完成 → 这个按钮是"重启以更新"
+      if (btn.dataset.mode === 'install') {
+        renderDesktopUpdateStatus({ state: 'installing' });
+        try { await window.atlasDesktop.updates.quitAndInstall(); } catch (e) {
+          renderDesktopUpdateStatus({ state: 'error', error: e && e.message });
+        }
+        return;
+      }
+      // 否则触发一次检查
+      renderDesktopUpdateStatus({ state: 'checking' });
+      try {
+        const r = await window.atlasDesktop.updates.check();
+        if (r) renderDesktopUpdateStatus(r);
+      } catch (e) {
+        renderDesktopUpdateStatus({ state: 'error', error: e && e.message });
+      }
+    });
+    // 订阅主进程推送（下载进度 / 完成 / 错误），进度实时反映在按钮与状态文字上
+    window.atlasDesktop.updates.onStatus((s) => renderDesktopUpdateStatus(s));
+  }
+  // 打开设置时同步一次当前状态（可能后台已检查到更新）
+  window.atlasDesktop.updates.getState().then((s) => { if (s) renderDesktopUpdateStatus(s); }).catch(() => {});
+}
+
+function renderDesktopUpdateStatus(s) {
+  const btn = document.getElementById('settings-update-btn');
+  const statusEl = document.getElementById('settings-update-status');
+  if (!btn || !statusEl) return;
+  const state = (s && s.state) || 'idle';
+  // 默认复位成"检查更新"，各状态下再覆盖
+  btn.dataset.mode = 'check';
+  btn.disabled = false;
+  btn.textContent = '检查更新';
+  statusEl.classList.remove('is-error');
+  switch (state) {
+    case 'checking':
+      btn.disabled = true; btn.textContent = '检查中…';
+      statusEl.textContent = '正在检查最新版本…';
+      break;
+    case 'downloading':
+      btn.disabled = true; btn.textContent = '下载中…';
+      statusEl.textContent = (s.version ? `正在下载 ${s.version}` : '正在下载新版本')
+        + (s.percent ? ` · ${s.percent}%` : '…');
+      break;
+    case 'downloaded':
+      btn.dataset.mode = 'install';
+      btn.textContent = '重启以更新';
+      statusEl.textContent = s.version
+        ? `${s.version} 已就绪，点击重启即可用上新版本`
+        : '新版本已就绪，点击重启安装';
+      break;
+    case 'installing':
+      btn.disabled = true; btn.textContent = '重启中…';
+      statusEl.textContent = '正在退出并安装…';
+      break;
+    case 'not-available':
+      statusEl.textContent = `已是最新版本${s.current ? `（v${s.current}）` : ''}`;
+      break;
+    case 'unsupported':
+      statusEl.textContent = '开发模式不支持自动更新';
+      break;
+    case 'error':
+      statusEl.classList.add('is-error');
+      statusEl.textContent = '检查失败：' + (s.error || '未知错误');
+      break;
+    default:
+      statusEl.textContent = '';
+  }
 }
 
 setInterval(() => { if (!document.hidden) fetchState(); }, 60_000);

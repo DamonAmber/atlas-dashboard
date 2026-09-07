@@ -77,6 +77,22 @@ function healthCheck(port, timeoutMs = 800) {
   });
 }
 
+// 读运行中实例的版本号（GET /api/config 的 version 字段）。桌面 App 据此判断是否该复用它：
+// 复用一个旧版本的 CLI 守护进程会让窗口加载旧页面、版本号显示错误、跑的还是旧代码。
+function fetchServerVersion(port, timeoutMs = 1000) {
+  return new Promise((resolve) => {
+    const req = http.get(`http://127.0.0.1:${port}/api/config`, (res) => {
+      let buf = '';
+      res.on('data', (d) => { buf += d; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(buf).version || null); } catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.setTimeout(timeoutMs, () => { req.destroy(); resolve(null); });
+  });
+}
+
 // 读 CLI 写的 pid 文件，进程还活着就返回它记录的端口，用于复用已运行实例。
 // 兼容旧版纯数字 pid 格式。
 function readRunningPort() {
@@ -105,13 +121,27 @@ async function waitForHealth(port, { attempts = 40, interval = 200 } = {}) {
  * @param {(line:string)=>void} [opts.onLog] server 的 stdout/stderr 回调
  * @returns {Promise<{url,port,child,reused}>}
  */
-async function startServer({ nodeBinary, asElectronNode = false, onLog } = {}) {
+async function startServer({ nodeBinary, asElectronNode = false, onLog, appVersion = null } = {}) {
   ensureConfig();
 
-  // 已有健康实例（多半是 CLI 的 `atlas start` 守护进程）→ 直接复用，不再起第二个
+  // 已有健康实例（多半是 CLI 的 `atlas start` 守护进程）→ 复用，避免两个 server 同时写 store /
+  // 重复挂监听。但仅当它与本 App 版本一致时才复用：否则（典型：用户先前 npm 装过旧版 CLI 且
+  // `atlas start` 守护进程还在后台跑）桌面 App 升级后会复用那个旧 server，导致窗口加载旧页面、
+  // 版本号显示旧值、跑的还是旧代码。此时改起 App 自带的 bundled server（自动挑新端口），
+  // 保证跑的、显示的都是这个 App 版本。传入 appVersion 才做校验；不传（如冒烟测试）沿用旧行为。
   const runningPort = readRunningPort();
   if (runningPort && await healthCheck(runningPort)) {
-    return { url: `http://127.0.0.1:${runningPort}`, port: runningPort, child: null, reused: true };
+    let reuse = true;
+    if (appVersion) {
+      const runningVersion = await fetchServerVersion(runningPort);
+      reuse = runningVersion != null && runningVersion === appVersion;
+      if (!reuse && onLog) {
+        onLog(`检测到运行中的 Atlas 版本 ${runningVersion || '未知'} 与本 App ${appVersion} 不一致，改用自带服务\n`);
+      }
+    }
+    if (reuse) {
+      return { url: `http://127.0.0.1:${runningPort}`, port: runningPort, child: null, reused: true };
+    }
   }
 
   const cfg = readConfig() || {};
