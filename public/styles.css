@@ -877,16 +877,6 @@ body.no-active-doc .tb-sep { display: none; }
   will-change: height;
   transition: height var(--dur) var(--ease-out);
 }
-/* 大子树展开：放弃逐帧改 height 的布局动画（深目录树的掉帧根源——展开瞬间要对整棵
- * 大子树做一次布局、随后 200ms 里下方大量节点每帧重排），改为一次性展开 + 合成器
- * 代价恒定的淡入。opacity 不触发布局，无论子树多大都丝滑（分组丝滑正因子树小）。 */
-.folder-children.fade-in {
-  animation: folderFadeIn var(--dur-fast) var(--ease-out) both;
-}
-@keyframes folderFadeIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
 /* 目录视图（只读镜像、不挂 SortableJS）里给每个 .folder 加 layout containment：
  * 展开 / 折叠某个目录时，下方成百上千个兄弟节点只需整体平移，无需深度重排。
  * 分组视图刻意不加——拖拽重排依赖正常布局流，containment 会干扰命中判定。 */

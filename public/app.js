@@ -2034,12 +2034,6 @@ function prefersReducedMotion() {
 // 不可见"（高度动画到 0 时子行仍有自己的包围盒，仅靠 overflow 不算隐藏）；
 // ③ collapse-all / 首屏走整树重建，分组一出生即 .collapsed，压根不进这个函数、
 // 也就没有"满屏分组一起展开"。动画只发生在用户单击某个分组头这一条路径。
-// 子树高度超过这个阈值就当作"很大"：此时逐帧改 height 会让下方大量节点每帧重排，
-// 且展开瞬间要对整棵大子树做一次布局——深目录树掉帧就出在这。大子树改走合成器代价
-// 恒定的淡入（展开）/ 直接切换（折叠），无论多少节点都丝滑；小 / 中子树保留原有
-// height 过渡（分组丝滑的那条路径）。阈值≈一屏高度，超出的部分本来也看不到动画。
-const LARGE_SUBTREE_PX = 900;
-
 function animateFolderChildren(folderEl, expand) {
   const childrenEl = folderEl.querySelector(':scope > .folder-children');
   // 没有子容器、或系统要求减少动效：直接切类（0ms 过渡不触发 transitionend，
@@ -2057,9 +2051,8 @@ function animateFolderChildren(folderEl, expand) {
     if (done) return;
     done = true;
     childrenEl.removeEventListener('transitionend', onTransitionEnd);
-    childrenEl.removeEventListener('animationend', onAnimationEnd);
     clearTimeout(timer);
-    childrenEl.classList.remove('animating', 'is-opening', 'fade-in');
+    childrenEl.classList.remove('animating', 'is-opening');
     childrenEl.style.height = '';
     childrenEl.style.willChange = '';
     childrenEl._collapseCleanup = null;
@@ -2067,37 +2060,18 @@ function animateFolderChildren(folderEl, expand) {
   const onTransitionEnd = (e) => {
     if (e.target === childrenEl && e.propertyName === 'height') cleanup();
   };
-  // 只认容器自身的 fade-in；子项 treeItemIn 冒泡上来的 animationend（target≠childrenEl）忽略
-  const onAnimationEnd = (e) => {
-    if (e.target === childrenEl) cleanup();
-  };
   childrenEl._collapseCleanup = cleanup;
 
-  // 关键：.collapsed 类【同步】切好（点完立刻就在），不推迟到动画结束——否则
-  // "点击后立即读 .collapsed" 的调用方（含 folder-toggle-with-jitter 测试）会读到旧值。
-  // 先加 .animating（display:block !important）让折叠中的子树可布局，才能量到真实高度。
+  // 展开 / 收起【统一】走高度滑动（展开时再叠加子项错峰淡入），两个方向、任意子树大小
+  // 表现一致——这才是"丝滑"该有的对称手感。过去为绕开性能给大子树留的「淡入(展开) /
+  // 瞬切(收起)」两条退化路径已删除：content-visibility 让逐帧布局只发生在视口内的行，
+  // 大子树的 height 过渡现在同样稳 60fps（见 styles.css 里 content-visibility 的说明）。
+  // 关键：.collapsed 类【同步】切好（点完立刻生效，键盘导航 / 抖动点击测试都依赖此）；
+  // 动画期间 .animating 的 display:block !important 盖过 .collapsed 的 display:none，让过程可见。
   childrenEl.classList.add('animating');
-  const full = childrenEl.scrollHeight;
-
-  // ---- 大子树：合成器淡入（展开）/ 直接切换（折叠），不做逐帧 height 重排 ----
-  if (full > LARGE_SUBTREE_PX) {
-    if (expand) {
-      folderEl.classList.remove('collapsed');
-      childrenEl.classList.remove('animating');          // 不用 height 过渡容器，一次性展开
-      childrenEl.classList.add('fade-in');
-      childrenEl.addEventListener('animationend', onAnimationEnd);
-      timer = setTimeout(cleanup, 400);
-    } else {
-      folderEl.classList.add('collapsed');
-      childrenEl.classList.remove('animating');          // .collapsed 的 display:none 立即生效
-      cleanup();
-    }
-    return;
-  }
-
-  // ---- 小 / 中子树：原有 height 过渡（.animating 期间 display:block 盖过 .collapsed）----
   childrenEl.style.willChange = 'height';
   childrenEl.addEventListener('transitionend', onTransitionEnd);
+  const full = childrenEl.scrollHeight;
   if (expand) {
     folderEl.classList.remove('collapsed');
     childrenEl.classList.add('is-opening');
