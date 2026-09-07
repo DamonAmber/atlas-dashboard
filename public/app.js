@@ -2034,6 +2034,10 @@ function prefersReducedMotion() {
 // 不可见"（高度动画到 0 时子行仍有自己的包围盒，仅靠 overflow 不算隐藏）；
 // ③ collapse-all / 首屏走整树重建，分组一出生即 .collapsed，压根不进这个函数、
 // 也就没有"满屏分组一起展开"。动画只发生在用户单击某个分组头这一条路径。
+// 子树高度超过这个阈值（约 1.5 屏）就即时展开 / 收起、不做高度动画：对几十屏高的子树做
+// height 过渡毫无意义，且在 content-visibility 下会"卡一会儿才跳开"（见 animateFolderChildren）。
+const ANIMATE_MAX_PX = 1200;
+
 function animateFolderChildren(folderEl, expand) {
   const childrenEl = folderEl.querySelector(':scope > .folder-children');
   // 没有子容器、或系统要求减少动效：直接切类（0ms 过渡不触发 transitionend，
@@ -2055,6 +2059,7 @@ function animateFolderChildren(folderEl, expand) {
     childrenEl.classList.remove('animating', 'is-opening');
     childrenEl.style.height = '';
     childrenEl.style.willChange = '';
+    childrenEl.style.contentVisibility = '';   // 复原动画期间临时关掉的 content-visibility
     childrenEl._collapseCleanup = null;
   }
   const onTransitionEnd = (e) => {
@@ -2062,16 +2067,30 @@ function animateFolderChildren(folderEl, expand) {
   };
   childrenEl._collapseCleanup = cleanup;
 
-  // 展开 / 收起【统一】走高度滑动（展开时再叠加子项错峰淡入），两个方向、任意子树大小
-  // 表现一致——这才是"丝滑"该有的对称手感。过去为绕开性能给大子树留的「淡入(展开) /
-  // 瞬切(收起)」两条退化路径已删除：content-visibility 让逐帧布局只发生在视口内的行，
-  // 大子树的 height 过渡现在同样稳 60fps（见 styles.css 里 content-visibility 的说明）。
-  // 关键：.collapsed 类【同步】切好（点完立刻生效，键盘导航 / 抖动点击测试都依赖此）；
-  // 动画期间 .animating 的 display:block !important 盖过 .collapsed 的 display:none，让过程可见。
+  // 先加 .animating（display:block !important）让折叠中的子树可布局，再用 content-visibility
+  // 下的廉价 scrollHeight 快速判断子树规模（估算即可，只用来分流）。
   childrenEl.classList.add('animating');
+  const estimate = childrenEl.scrollHeight;
+
+  // 大子树（> ~1.5 屏）：即时展开 / 收起，不做高度过渡。
+  // 原因有二：① 对几十屏高的子树做 height 动画毫无意义——视口一帧就填满、下方内容瞬间飞出；
+  // ② 目录视图的 .folder-children 挂了 content-visibility:auto，展开时元素从 display:none
+  //    变可见，过渡起点无法提交，height 过渡根本不触发，只能等 400ms 兜底 cleanup 才 height:auto
+  //    跳满——表现就是"点了之后卡一会儿才啪一下打开"。即时展开点击即开、零延迟，正是该有的手感。
+  if (estimate > ANIMATE_MAX_PX) {
+    folderEl.classList.toggle('collapsed', !expand);
+    childrenEl.classList.remove('animating');
+    cleanup();
+    return;
+  }
+
+  // 小 / 中子树：高度滑动（展开时叠加子项错峰淡入）。content-visibility:auto 会让
+  // display:none→可见的过渡起点无法提交（同上），故动画期间临时把【这一个】容器的 cv 关掉
+  // ——子树小、代价可忽略，nested 子容器仍保留 cv——让过渡正常跑，cleanup 里复原。
+  childrenEl.style.contentVisibility = 'visible';
   childrenEl.style.willChange = 'height';
   childrenEl.addEventListener('transitionend', onTransitionEnd);
-  const full = childrenEl.scrollHeight;
+  const full = childrenEl.scrollHeight;   // cv 已关，读到真实高度
   if (expand) {
     folderEl.classList.remove('collapsed');
     childrenEl.classList.add('is-opening');
