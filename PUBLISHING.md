@@ -199,7 +199,7 @@ done
 >   期望末行 `总计 10 项，失败 0 项`。**记得删掉 tgz**，否则会被 `git add -A` 带进 commit。
 > - `scroll-after-toggle.spec.js` 在 iframe 还没加载出内容时打印 `!! HTML 不够长，没法测试` 并跳过（也是 exit 0）。这是它长期的既有行为，不是本次改动引入的；判断是否回归的办法是 `git stash` 后对比同一行输出。
 
-当前 spec 清单（49 个）。除 `landing-demo`（`file://`）、`diff-algorithm`（纯函数单测）、
+当前 spec 清单（48 个）。除 `landing-demo`（`file://`）、`diff-algorithm`（纯函数单测）、
 `md-fence-infostring`（纯函数，不起服务）
 与 `fs-watcher`（直接对着临时目录测监听器，不起服务、不用浏览器）外，其余都通过
 `tests/helpers/isolated-atlas.js` 的 `startAtlas()` 起独立实例：临时 `ATLAS_HOME`
@@ -234,6 +234,7 @@ done
 > - `tree-view-and-open.spec.js` — 目录树双视图 + 用 Atlas 打开外部文件（0.25 新增）：造"扫描根 = work 的父目录"的嵌套树，分组视图平铺全部文件、深层文件（relPath 段数 > 2）带中间目录提示；切到目录视图后按真实层级展开（bind_domain / os_fusion_domain / sub）、两个同名 README 各自可见、目录节点是只读镜像（有「在访达中显示」、无重命名 / 删除）、目录视图不再显示中间目录提示、视图选择刷新后保持；`/api/resolve-open` 五种状态（ready / 目录 ready(dir) / need-doctype / need-root / not-doc / not-found）（17 项）
 > - `md-fence-infostring.spec.js` — 围栏 info string 与渲染健壮性（0.27.0 新增，纯函数 + 子进程，不起服务）：带空格 info string 的围栏（` ```ts type-equiv ` 等）被识别成代码块、块内 JSDoc「 * 」行不被当列表、语言只取第一个词；` ```mermaid ` / `~~~` / 无 lang / 真列表等原有行为不回归；用「子进程 + 超时」跑事故规模文档与极深嵌套引用 / 列表，必须在时限内渲染完而不是卡死 / OOM（回归成死循环时能超时报失败而非挂起）（14 项）
 > - `perf-and-limits.spec.js` — 性能 / 内存边界（0.27.0 新增）：后端文件大小闸门（超大 md 的 `render-md` 返回降级页而非 500 / 崩溃、`md-source` 413、正常文档不受影响、处理完超大文件后服务仍健康）；前端多 Tab 帧预算（打开 16 篇后已加载帧 ≤ `MAX_LIVE_FRAMES`、后台帧被 LRU 休眠释放内存、切回被休眠的 Tab 会重载并显示内容、全程无 JS 报错）（15 项）
+> - `changelog.spec.js` — 应用内更新日志 + 新功能引导（0.28.0 新增）：全新安装不弹（只记版本）/ 从旧版升级且含 feature 才自动弹「Atlas 更新了」引导 + 带使用说明 / 看过后重开不再弹 / 纯 bug 修复版本不主动弹但仍推进 seen / 设置里手动入口打开完整日志 / 完整日志按 feature·fix 分类标注、引导底部「查看完整更新日志」就地切换（用 computed display 查真实渲染防 CSS 覆盖漏检）（约 15 项）
 > - `modal-close.spec.js` — 每个弹窗的每条关闭路径：✕ 按钮（含精确点在图标 span 上）、遮罩、Esc、关闭后焦点归还、以及"点弹窗内部不会误关"（22 项）
 > - `misc-hardening.spec.js` — 杂项加固：编辑备份扩展名跟随源文件 / 请求体上限与可读错误 / `/raw` 路由不依赖 `app._router.stack`（扫描根运行时增删后序号重排仍正确）（26 项）
 > - `toast.spec.js` — 扫描根增删与反馈 toast（12 项，含隔离性断言）
@@ -672,6 +673,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.28.0** (2026-09-11) — 新功能：**应用内更新日志 + 新功能引导**（新增 `public/changelog.js` + `index.html` / `app.js` / `styles.css` + `docs/index.html`）。此前用户只能去官网 / GitHub 才知道 Atlas 更新了什么。现在：① 新建面向用户的结构化更新日志 `public/changelog.js`（客户端与 web 共用同一份、随包发布），每条改动分 `feature`（新功能）/ `fix`（修复）两类——它和 PUBLISHING.md 的「已发布版本」分工不同：那份给开发者、很技术，这份给用户、只说"对你有什么影响"。② 设置面板左栏底部加「更新日志」入口，打开列出全部历史版本，feature / fix 用不同标签区分，feature 带「怎么用」使用引导。③ **升级后首次打开的新功能引导**：从旧版升上来、且新版含 feature 时，首页稳定后自动弹一次「Atlas 更新了」（只讲本版新功能 + 引导），看过即记 `localStorage`（`atlas:changelogSeen`）不再弹；**纯 bug 修复版本不主动弹**（按需求：修复不打扰、只在更新日志里简要列出）；**全新安装静默不弹**（对第一次用的人谈不上"更新了"，也避免打扰、并且不干扰测试）。④ 复用既有 modal 栈（pushModal / popModal）与设计 token，引导弹窗与完整日志两种视觉都与 Atlas 一致。⑤ 同步 landing page 加「应用内更新日志」特性卡。⑥ **验证**：新增 `tests/changelog.spec.js`（全新不弹 / 升级弹 / 看过不再弹 / 纯 fix 不弹 / 手动入口 / 完整日志分类，且用 computed display 查真实渲染以防 CSS 覆盖漏检）；顺带修了 `.changelog-foot` 的 `display:flex` 被全局 `.hidden` 覆盖不掉的视觉 bug。全套 48 个 spec 全绿。
 
 - **0.27.0** (2026-09-10) — 修复一个会让整个服务崩溃的 P0，并系统性加固内存 / 性能（`public/vendor/markdown.js` + `server.js` + `lib/plain-render.js` + `public/app.js`）。① **打开某些 Markdown 白屏（渲染进程 OOM 崩溃）**：内置渲染器的围栏代码块正则只认单词 info string，遇到 ` ```ts type-equiv ` 这类"语言 + 空格 + 附加标注"（AI 生成的技术文档很常见）会把整行当普通文本 → 代码块内的 JSDoc「 * xxx」被误判成无序列表项 → `parseList` 对畸形嵌套递归爆炸、`String.replace` 被调用十几万次、堆内存冲到 4GB、渲染进程 OOM，表现就是打开该文档后整个 Atlas 白屏、服务连不上（一个 12KB 的文件即可触发）。修法：正则按 CommonMark 语义只取第一个词作语言、其余 info 一并吞掉；并给 `render` 加递归深度硬上限（`RENDER_MAX_DEPTH=24`，超深降级为纯文本），任何畸形输入都不再能拖垮进程。② **后端渲染链统一加文件大小闸门**：`render-md` / `md-source` / `edit-doc` / `save-edits` / `diff` / `export-pdf` 的 md 分支 / 分享 md 全部对齐 CSV·JSON·TXT 早有的 8MB 上限——此前 md/html 这条链完全没有体量闸门（与 plain 类型不对称），一个超大文件被整份读入渲染就能把内存顶爆；现在超限降级为说明页 / 拒绝。搜索索引 `getFileText` 加单文件 4MB 截断读取；`jsonValueHtml` 加递归深度上限防深层嵌套 JSON 栈溢出；`/api/events` 的 SSE 写入包 try/catch。③ **多 Tab 内存优化（帧预算 + LRU 休眠）**：过去每个打开过的文档常驻一个满配 iframe、永不释放，打开上百篇 = 上百份独立文档运行时（各自的 markdown / mermaid / katex），内存线性膨胀。现在同时最多保留 12 个已加载帧（`MAX_LIVE_FRAMES`），超出就休眠最久未激活的后台帧（导航到 `about:blank` 卸载文档释放内存、记下滚动位置），再切回时自动重载并复位滚动。常规使用（十几个 Tab）完全不触发、切换仍零重载；只有真堆到很多 Tab 时才回收。④ **文档内查找（⌘F）大文档不再卡死**：`highlightInIframe` 加命中上限 2000（超大文档配短 / 常见关键词会瞬间造出上万个 `<mark>` 冻住主线程，计数显示成「N+」），查找输入加 120ms 防抖。⑤ **验证**：新增 `tests/md-fence-infostring.spec.js`（围栏 info string + 畸形输入不 OOM）与 `tests/perf-and-limits.spec.js`（后端大小闸门 + 前端多 Tab 帧预算），全套 49 个 spec 全绿。npm 包与桌面 App 共用同一份 `server.js` / `public`，修复对两者同时生效。
 

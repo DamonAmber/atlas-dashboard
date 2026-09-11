@@ -94,6 +94,7 @@
       <symbol id="i-expand-all" viewBox="0 0 24 24"><path d="m7 6 5 5 5-5"/><path d="m7 13 5 5 5-5"/></symbol>
       <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v13"/><path d="m7 12 5 5 5-5"/><path d="M4 21h16"/></symbol>
       <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></symbol>
+      <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3.2l1.9 5.1 5.1 1.9-5.1 1.9L12 17.2l-1.9-5.1L5 10.2l5.1-1.9z"/><path d="M18.5 15.5l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7z"/></symbol>
     </defs>
   </svg>
 
@@ -543,6 +544,9 @@
             <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-folder"/></svg><span>归档</span>
           </button>
           <div class="settings-version" id="settings-version" title="当前版本"></div>
+          <button class="settings-changelog-btn" id="settings-changelog-btn" type="button" title="查看各版本更新了什么">
+            <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-sparkle"/></svg><span>更新日志</span>
+          </button>
           <!-- 桌面版：检查更新（electron-updater）。浏览器 / npm 版由 JS 保持隐藏。 -->
           <div class="settings-update hidden" id="settings-update">
             <button class="settings-update-btn" id="settings-update-btn" type="button" data-mode="check">检查更新</button>
@@ -784,12 +788,29 @@
     </div>
   </div>
 
+  <!-- 更新日志 / 新功能引导：内容由 app.js 从 window.ATLAS_CHANGELOG 渲染。
+       两种模式共用这个弹窗：whatsnew（升级后首次打开、只讲本版新功能 + 引导）/ full（全部历史版本）。 -->
+  <div class="modal hidden" id="changelog-modal">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel changelog-panel" role="dialog" aria-modal="true" aria-labelledby="changelog-title">
+      <header class="modal-header">
+        <h2 id="changelog-title">更新日志</h2>
+        <button class="modal-close" data-close aria-label="关闭更新日志"><svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-x"/></svg></button>
+      </header>
+      <div class="changelog-body" id="changelog-body"></div>
+      <footer class="changelog-foot hidden" id="changelog-foot">
+        <button class="changelog-all-btn" id="changelog-all-btn" type="button">查看完整更新日志</button>
+      </footer>
+    </div>
+  </div>
+
   <!-- Toast 通知容器：fixed 浮在右下角，aria-live=polite 不打断屏幕阅读器 -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
   <script src="/vendor/Sortable.min.js"></script>
   <script src="/vendor/qrcode.min.js"></script>
   <script src="/vendor/markdown.js"></script>
+  <script src="/changelog.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

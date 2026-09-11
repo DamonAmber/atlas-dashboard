@@ -4200,3 +4200,112 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
 
 /* 首页态：没有当前文档时整个「更多」入口收起（和其它文档工具按钮一致） */
 body.no-active-doc .tb-more { display: none; }
+
+/* ==================== 更新日志 / 新功能引导 ==================== */
+/* 设置面板左栏底部的「更新日志」入口（紧挨版本号） */
+.settings-changelog-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 6px 8px;
+  margin-top: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  text-align: left;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.settings-changelog-btn:hover { background: var(--bg-hover); color: var(--accent); }
+.settings-changelog-btn .ico { color: var(--accent); flex: none; }
+.settings-changelog-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* 弹窗 */
+.changelog-panel { width: min(560px, 92vw); }
+.changelog-body {
+  padding: 2px 20px 6px;
+  overflow-y: auto;
+  max-height: min(64vh, 560px);
+}
+.changelog-foot {
+  padding: 11px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: center;
+}
+/* .changelog-foot 的 display:flex 与全局 .hidden 同为单类选择器、且定义在后，
+   会盖掉 .hidden 的 display:none —— 必须显式让 .hidden 赢，否则完整日志模式下
+   底部那个「查看完整更新日志」按钮不会消失。 */
+.changelog-foot.hidden { display: none; }
+.changelog-all-btn {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  transition: background var(--dur-fast);
+}
+.changelog-all-btn:hover { background: var(--accent-soft); }
+
+/* 版本分组 */
+.cl-version { padding: 13px 0; border-bottom: 1px solid var(--border); }
+.cl-version:last-child { border-bottom: none; }
+.cl-version-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.cl-version-num { font-weight: var(--fw-semi); font-size: 13px; color: var(--text); }
+.cl-version-date { font-size: var(--fs-xs); color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
+/* 单条改动 */
+.cl-entry { display: flex; gap: 8px; padding: 7px 0; align-items: flex-start; }
+.cl-tag {
+  flex: none;
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: var(--fw-medium);
+  padding: 1px 7px;
+  border-radius: 999px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.cl-tag-feature { color: var(--accent); background: var(--accent-soft); }
+.cl-tag-fix { color: var(--text-dim); background: var(--bg-hover); }
+.cl-entry-body { flex: 1; min-width: 0; }
+.cl-entry-title { font-size: 13px; font-weight: var(--fw-medium); color: var(--text); }
+.cl-entry-desc { margin: 3px 0 0; font-size: var(--fs-xs); line-height: var(--lh-base); color: var(--text-dim); }
+/* 新功能的使用引导：淡主色底块，和普通描述区分开——这是"教你怎么用"的重点 */
+.cl-entry-guide {
+  margin: 7px 0 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+  color: var(--text-dim);
+  background: var(--accent-soft);
+  border-radius: var(--r-sm);
+  padding: 7px 9px;
+}
+.cl-guide-label {
+  display: inline-block;
+  margin-right: 6px;
+  font-weight: var(--fw-semi);
+  color: var(--accent);
+}
+.cl-empty { padding: 24px; text-align: center; color: var(--text-faint); font-size: var(--fs-xs); }
+
+/* What's New 引导头部 */
+.cl-whatsnew-head { display: flex; align-items: center; gap: 8px; padding: 12px 0 4px; }
+.cl-whatsnew-badge {
+  font-weight: var(--fw-semi);
+  font-size: 12px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 2px 10px;
+  border-radius: 999px;
+}
+.cl-whatsnew-sub { font-size: var(--fs-xs); color: var(--text-dim); }
+.cl-entry.cl-whatsnew { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.cl-entry.cl-whatsnew:last-child { border-bottom: none; }

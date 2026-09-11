@@ -5963,6 +5963,131 @@ function closeShortcuts() {
   root.classList.add('hidden');
   if (shortcutsEntry) { popModal(shortcutsEntry); shortcutsEntry = null; }
 }
+
+// ==================== 更新日志 / 新功能引导 ====================
+// 数据来自 window.ATLAS_CHANGELOG（public/changelog.js，随版本发布，客户端与 web 共用）。
+// 两种展示共用一个弹窗：
+//   whatsnew —— 升级后首次打开自动弹，只讲本版新功能（feature）+ 使用引导；纯 bug 修复版本不弹。
+//   full     —— 用户在设置里手动点「更新日志」，列出全部历史版本的所有改动。
+const CHANGELOG_SEEN_KEY = 'atlas:changelogSeen';   // 记已给用户看过引导的最新版本号
+let changelogEntry = null;
+
+function changelogData() {
+  return Array.isArray(window.ATLAS_CHANGELOG) ? window.ATLAS_CHANGELOG : [];
+}
+function clTypeLabel(type) { return type === 'feature' ? '新功能' : '修复'; }
+
+// 一条改动。full 模式带「新功能 / 修复」标签；feature 带使用引导。
+function clEntryHtml(e, opts = {}) {
+  const isFeat = e.type === 'feature';
+  const tag = opts.hideTag ? '' :
+    `<span class="cl-tag cl-tag-${isFeat ? 'feature' : 'fix'}">${clTypeLabel(e.type)}</span>`;
+  const guide = (isFeat && e.guide)
+    ? `<p class="cl-entry-guide"><span class="cl-guide-label">怎么用</span>${escapeHtml(e.guide)}</p>`
+    : '';
+  return `
+    <div class="cl-entry cl-${isFeat ? 'feature' : 'fix'}">
+      ${tag}
+      <div class="cl-entry-body">
+        <div class="cl-entry-title">${escapeHtml(e.title || '')}</div>
+        ${e.desc ? `<p class="cl-entry-desc">${escapeHtml(e.desc)}</p>` : ''}
+        ${guide}
+      </div>
+    </div>`;
+}
+
+function renderChangelogFull() {
+  const body = document.getElementById('changelog-body');
+  if (!body) return;
+  const data = changelogData();
+  if (!data.length) { body.innerHTML = '<p class="cl-empty">暂无更新记录。</p>'; return; }
+  body.innerHTML = data.map(v => `
+    <section class="cl-version">
+      <div class="cl-version-head">
+        <span class="cl-version-num">v${escapeHtml(v.version)}</span>
+        ${v.date ? `<span class="cl-version-date">${escapeHtml(v.date)}</span>` : ''}
+      </div>
+      ${(v.entries || []).map(e => clEntryHtml(e)).join('')}
+    </section>`).join('');
+}
+
+// 只渲染某版本的新功能（feature）+ 引导，用于升级后的主动提示。
+function renderWhatsNew(v) {
+  const body = document.getElementById('changelog-body');
+  if (!body) return;
+  const feats = (v.entries || []).filter(e => e.type === 'feature');
+  body.innerHTML =
+    `<div class="cl-whatsnew-head"><span class="cl-whatsnew-badge">v${escapeHtml(v.version)}</span>`
+    + '<span class="cl-whatsnew-sub">带来了这些新功能</span></div>'
+    + feats.map(e => clEntryHtml(e, { hideTag: true })).join('');
+}
+
+function openChangelog(mode) {
+  const root = document.getElementById('changelog-modal');
+  if (!root || changelogEntry) return;
+  const titleEl = document.getElementById('changelog-title');
+  const foot = document.getElementById('changelog-foot');
+  const data = changelogData();
+  if (mode === 'whatsnew' && data.length) {
+    if (titleEl) titleEl.textContent = 'Atlas 更新了';
+    renderWhatsNew(data[0]);
+    if (foot) foot.classList.remove('hidden');   // 引导底部给「看完整更新日志」入口
+  } else {
+    if (titleEl) titleEl.textContent = '更新日志';
+    renderChangelogFull();
+    if (foot) foot.classList.add('hidden');
+  }
+  root.classList.remove('hidden');
+  changelogEntry = pushModal({ panel: root.querySelector('.modal-panel'), close: closeChangelog });
+}
+
+function closeChangelog() {
+  const root = document.getElementById('changelog-modal');
+  if (!root) return;
+  root.classList.add('hidden');
+  if (changelogEntry) { popModal(changelogEntry); changelogEntry = null; }
+}
+
+// 升级后首次打开：最新版本有 feature 且还没给这个版本弹过引导 → 弹一次。纯 fix 版本不弹。
+// 只对「从旧版本升上来」的用户弹：全新安装（没有任何 seen 记录）不该被弹窗打扰
+//   —— 对第一次用的人来说谈不上"更新了"，而且会干扰"干净启动"的预期。
+// 全新用户直接把当前版本记为 seen（静默），从下一个带 feature 的版本起才开始弹。
+// 无论弹没弹，都把 seen 推进到当前版本——纯 fix 版本升级也算"已处理"，
+// 不会累积到下次 feature 版本时补弹一堆历史。
+function maybeShowWhatsNew() {
+  const data = changelogData();
+  if (!data.length) return;
+  const latest = data[0];
+  let seen = '';
+  try { seen = localStorage.getItem(CHANGELOG_SEEN_KEY) || ''; } catch {}
+  if (seen === latest.version) return;              // 这个版本的引导已经给过
+  const isUpgrade = !!seen && seen !== latest.version;   // 有旧记录 = 从旧版升上来
+  const hasFeature = (latest.entries || []).some(e => e.type === 'feature');
+  if (isUpgrade && hasFeature) openChangelog('whatsnew');
+  try { localStorage.setItem(CHANGELOG_SEEN_KEY, latest.version); } catch {}
+}
+
+(() => {
+  const root = document.getElementById('changelog-modal');
+  if (root) {
+    root.addEventListener('click', (e) => {
+      if (isCloseTarget(e.target)) closeChangelog();
+    });
+  }
+  const openBtn = document.getElementById('settings-changelog-btn');
+  if (openBtn) openBtn.addEventListener('click', () => openChangelog('full'));
+  // 引导弹窗底部「查看完整更新日志」：不关弹窗，直接把内容从 whatsnew 切到 full
+  const allBtn = document.getElementById('changelog-all-btn');
+  if (allBtn) allBtn.addEventListener('click', () => {
+    const titleEl = document.getElementById('changelog-title');
+    const foot = document.getElementById('changelog-foot');
+    if (titleEl) titleEl.textContent = '更新日志';
+    renderChangelogFull();
+    if (foot) foot.classList.add('hidden');
+    const b = document.getElementById('changelog-body');
+    if (b) b.scrollTop = 0;
+  });
+})();
 (() => {
   const root = document.getElementById('shortcuts-modal');
   if (root) {
@@ -7499,6 +7624,8 @@ connectSSE();
 checkForUpdate();
 // 长期开着的页面也定期复查（兜底，server SSE 推送是主路径）
 setInterval(checkForUpdate, 60 * 60 * 1000);
+// 升级后首次打开：本版有新功能就主动弹一次引导（延迟到首页渲染稳定后，避免和首屏抢）
+setTimeout(maybeShowWhatsNew, 800);
 
 // 把 SSE 'update' channel 接进 banner
 window.__handleUpdateSSE = (data) => {
