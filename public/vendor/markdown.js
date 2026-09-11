@@ -322,10 +322,20 @@
   }
 
   // ---------- 块级渲染 ----------
+  // 递归深度硬上限：引用块 / 列表项的嵌套会递归调用 render。正常文档嵌套
+  // 至多个位数层，一旦深到失控，多半是输入畸形或解析退化（历史上就出过一次：
+  // 带空格 info string 的围栏没被识别 → 内部内容被当嵌套列表 → 递归吃光内存、
+  // 整个服务 OOM 崩溃、文档打开白屏）。与其让进程被拖垮，不如在这里止损：
+  // 把超深的这一段原样当预格式化文本吐出，保证渲染永远返回、进程活着。
+  var RENDER_MAX_DEPTH = 24;
+  var renderDepth = 0;
   // opts.annotateRaw：给顶层块标注原始源码（只有最外层这一次调用生效，
   // 引用块 / 列表项的递归调用不标注——脏块跟踪的粒度就是顶层块）
   function render(src, opts) {
     src = String(src == null ? '' : src).replace(/\r\n?/g, '\n');
+    if (renderDepth >= RENDER_MAX_DEPTH) return '<pre>' + escapeHtml(src) + '</pre>';
+    renderDepth++;
+    try {
     var annotate = !!(opts && opts.annotateRaw);
     // lineOffset：本次 render 的输入在整篇源码里的起始偏移。
     // front matter 被 renderBody 剥掉后，正文的行号要整体后移，否则
@@ -359,7 +369,14 @@
       blockStart = i;
 
       // 围栏代码块
-      var fence = line.match(/^\s*(```+|~~~+)\s*([^\s`~]*)\s*$/);
+      // info string 按 CommonMark 语义：反引号后到行尾都是 info，语言只取第一个词，
+      // 其余（如 ```ts type-equiv、```js {highlight}）是附加标注，一并吞掉。
+      // 旧正则 `([^\s`~]*)\s*$` 只认单词 info string，遇到带空格的 info（AI 生成的
+      // 文档很常见）会把整行当普通文本 → 围栏内的 JSDoc「 * xxx」被误判成列表项 →
+      // parseList 对畸形嵌套递归爆炸 → 渲染进程 OOM 崩溃、打开文档白屏。见回归测试
+      // tests/md-fence-infostring.spec.js。`` ` `` 围栏的 info 不含反引号（CommonMark 规定），
+      // 用 [^`]*$ 收尾既符合规范又避免把后续行内代码误吞。
+      var fence = line.match(/^\s*(```+|~~~+)\s*([^\s`~]*)[^`]*$/);
       if (fence) {
         var marker = fence[1][0];
         var minlen = fence[1].length;
@@ -504,6 +521,7 @@
     }
 
     return out.join('\n');
+    } finally { renderDepth--; }
   }
 
   // 整篇文档的渲染入口：front matter + 正文。

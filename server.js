@@ -225,8 +225,22 @@ function pushRecent(store, filePath) {
 
 function saveStore(store) {
   const tmp = STORE_PATH + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf8');
-  fs.renameSync(tmp, STORE_PATH);
+  // store 只是元数据（已读状态 / 收藏 / 标签 / 虚拟分组），原子写失败绝不能拖垮
+  // 整个服务：历史上就出过一次——saveStore 在文件监听回调里跑，tmp 被并发清理后
+  // renameSync 抛 ENOENT，未捕获异常直接 crash server，之后打开任何文档都白屏。
+  // 这里兜底：原子写失败就退化为直写，最坏丢一次保存，也绝不抛出。
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf8');
+    fs.renameSync(tmp, STORE_PATH);
+  } catch (e) {
+    console.warn('  ! store 原子写失败，改直写:', e && (e.code || e.message));
+    try {
+      fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2), 'utf8');
+    } catch (e2) {
+      console.warn('  ! store 直写也失败（跳过本次保存）:', e2 && (e2.code || e2.message));
+    }
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (_) { /* 清理失败无所谓 */ }
+  }
 }
 
 // ---------- 文件索引（内存常驻，由文件监听增量维护）----------
@@ -884,6 +898,8 @@ app.use('/raw', (req, res, next) => {
 // 英文正文摘要看起来像坏了（"README" 显示成 "readme"）。
 // 代价是内存翻倍，但 LRU 上限 500 个文件，可接受。
 const contentCache = new Map();
+// 搜索索引单文件读取上限：超过只索引前这么多字节（见 getFileText）。
+const MAX_SEARCH_BYTES = 4 * 1024 * 1024;
 
 // 文件集合发生结构性变化（配置改动）后调用：丢弃派生缓存 + 让文件索引重建
 function invalidateIndex() {
@@ -898,7 +914,23 @@ async function getFileText(filePath, mtime) {
     return cached;
   }
   try {
-    const raw = await fsp.readFile(filePath, 'utf8');
+    // 单文件字节上限：搜索会遍历所有可见文件、逐个读全文进 contentCache（还存
+    // text+lower 两份）。一个几十 MB 的文件足以把内存顶上去。超限只读前
+    // MAX_SEARCH_BYTES 做索引——正文搜索命中通常在文档前部，截断代价可接受。
+    let raw;
+    const st = await fsp.stat(filePath).catch(() => null);
+    if (st && st.size > MAX_SEARCH_BYTES) {
+      const fh = await fsp.open(filePath, 'r');
+      try {
+        const buf = Buffer.alloc(MAX_SEARCH_BYTES);
+        const { bytesRead } = await fh.read(buf, 0, MAX_SEARCH_BYTES, 0);
+        raw = buf.subarray(0, bytesRead).toString('utf8');
+      } finally {
+        await fh.close();
+      }
+    } else {
+      raw = await fsp.readFile(filePath, 'utf8');
+    }
     const kind = docTypeOfPath(filePath);
     let text;
     if (kind === 'md' || kind === 'csv' || kind === 'json' || kind === 'txt') {
@@ -1363,6 +1395,16 @@ app.get('/share/:token/*', async (req, res) => {
   // Markdown 文件：渲染成完整 HTML 页面再返回，让局域网访客看到预览样式而不是 md 原文
   if (isMarkdownPath(resolved.abs)) {
     try {
+      // 大小闸门：分享给局域网访客的 md 同样走 renderPage，超大文件会拖垮服务。
+      const stat = fs.statSync(resolved.abs);
+      if (stat.size > plainRender.MAX_BYTES) {
+        res.set('Cache-Control', 'no-store');
+        return res.type('html').send(plainRender.renderPage({
+          kind: 'txt',
+          title: path.basename(resolved.abs),
+          text: `这个 Markdown 文件有 ${fmtBytes(stat.size)}，超过了 ${fmtBytes(plainRender.MAX_BYTES)} 的预览上限。`,
+        }));
+      }
       const raw = await fsp.readFile(resolved.abs, 'utf8');
       const html = markdown.renderPage(raw, { title: path.basename(resolved.abs) });
       res.set('Cache-Control', 'no-store');
@@ -1596,6 +1638,16 @@ app.get('/api/diff', async (req, res) => {
     });
   }
   try {
+    // 大小闸门：diff 要把当前文件整份读入 + Myers 逐行对齐（trace 最坏 O(D²) 内存）。
+    // 底本已被 8MB 快照上限保护，当前文件也对齐同一上限，超限就不做逐行对比。
+    const curStat = await fsp.stat(filePath);
+    if (curStat.size > plainRender.MAX_BYTES) {
+      return res.json({
+        hasBaseline: false,
+        reason: 'too-large',
+        message: `文件有 ${fmtBytes(curStat.size)}，超过了 ${fmtBytes(plainRender.MAX_BYTES)}，不做逐行对比。`,
+      });
+    }
     // 读 Buffer 再解码：hash 必须和 versionStore.snapshot 那边算的一致
     // （它是对原始字节做 sha1），先转成字符串再编码回去遇到 BOM / 非法字节会对不上
     const curBuf = await fsp.readFile(filePath);
@@ -2080,6 +2132,12 @@ app.post('/api/export-pdf', async (req, res) => {
   try {
     if (isMd) {
       send({ phase: 'launching', message: '正在渲染 Markdown…' });
+      // 大小闸门：与 plain 分支（下方）对齐，md 渲染整份读入 + 递归解析，超限不导出。
+      const mdStat = await fsp.stat(filePath);
+      if (mdStat.size > plainRender.MAX_BYTES) {
+        send({ phase: 'error', reason: 'too-large', message: `文件超过 ${fmtBytes(plainRender.MAX_BYTES)}，不支持导出` });
+        return res.end();
+      }
       const raw = await fsp.readFile(filePath, 'utf8');
       const html = markdown.renderPage(raw, {
         title: path.basename(filePath),
@@ -2166,6 +2224,11 @@ app.post('/api/export-pdf-html', async (req, res) => {
   let tempDir = null;
   try {
     if (isMd) {
+      // 大小闸门：同 /api/export-pdf 的 md 分支，超限不导出。
+      const mdStat = await fsp.stat(filePath);
+      if (mdStat.size > plainRender.MAX_BYTES) {
+        return res.status(413).json({ ok: false, reason: 'too-large', message: `文件超过 ${fmtBytes(plainRender.MAX_BYTES)}，不支持导出` });
+      }
       const raw = await fsp.readFile(filePath, 'utf8');
       const html = markdown.renderPage(raw, {
         title: path.basename(filePath),
@@ -2217,6 +2280,12 @@ app.get('/api/edit-doc', async (req, res) => {
     return res.status(404).type('text/plain').send('文件不存在');
   }
   try {
+    // 大小闸门：编辑要 parse5 建全量 DOM + 注入标注，超大 HTML 会把内存拖垮。
+    const stat = await fsp.stat(filePath);
+    if (stat.size > plainRender.MAX_BYTES) {
+      return res.status(413).type('text/plain')
+        .send(`文件有 ${fmtBytes(stat.size)}，超过了 ${fmtBytes(plainRender.MAX_BYTES)} 的编辑上限。`);
+    }
     const raw = await fsp.readFile(filePath, 'utf8');
     // base href：让相对资源仍按 /raw/<idx>/<dir>/ 解析
     const fileUrl = buildFileUrl(filePath);
@@ -2258,6 +2327,11 @@ app.post('/api/save-edits', async (req, res) => {
   }
 
   try {
+    // 大小闸门：保存要重新 parse5 全量解析原文档，超大 HTML 拖垮内存。
+    const bigStat = await fsp.stat(filePath);
+    if (bigStat.size > plainRender.MAX_BYTES) {
+      return res.status(413).json({ error: 'too-large', message: `文件有 ${fmtBytes(bigStat.size)}，超过了 ${fmtBytes(plainRender.MAX_BYTES)} 的编辑上限。` });
+    }
     const raw = await fsp.readFile(filePath, 'utf8');
     const currentHash = editable.sha1(raw);
     if (body.baseHash && body.baseHash !== currentHash) {
@@ -2338,14 +2412,27 @@ app.get('/api/render-md', async (req, res) => {
     return res.status(404).type('text/plain').send('文件不存在');
   }
   try {
-    const raw = await fsp.readFile(filePath, 'utf8');
-    // base href 指向该 md 所在目录的 /raw/ 前缀：预览页 URL 是
-    // /api/render-md?path=...，没有 base 的话文档里 `![](./img/a.png)`
-    // 会被解析成 /api/img/a.png → 404，md 里的本地图片全部裂开
     // theme=light|dark：用户在设置里把主题钉死时，预览页要一起钉，
     // 否则 iframe 内仍按系统配色渲染，出现「外壳浅色 + 预览深色」的割裂
     const theme = req.query.theme === 'light' || req.query.theme === 'dark'
       ? req.query.theme : undefined;
+    // 大小闸门：md 渲染要读全文 + 递归解析 + HTML 转义放大，超大文件会把渲染进程
+    // 拖垮（历史上的 OOM 崩溃就发生在这条链）。与 CSV/JSON/TXT 的预览上限对齐，
+    // 超限就降级成一个说明页，不去真渲染。
+    const stat = await fsp.stat(filePath);
+    if (stat.size > plainRender.MAX_BYTES) {
+      return res.set('Cache-Control', 'no-store').type('html').send(plainRender.renderPage({
+        kind: 'txt',
+        title: path.basename(filePath),
+        text: `这个 Markdown 文件有 ${fmtBytes(stat.size)}，超过了 ${fmtBytes(plainRender.MAX_BYTES)} 的预览上限。\n`
+          + '为避免拖垮服务，Atlas 不在浏览器里渲染这么大的文档。请用「在访达中显示」打开原文件。',
+        theme,
+      }));
+    }
+    const raw = await fsp.readFile(filePath, 'utf8');
+    // base href 指向该 md 所在目录的 /raw/ 前缀：预览页 URL 是
+    // /api/render-md?path=...，没有 base 的话文档里 `![](./img/a.png)`
+    // 会被解析成 /api/img/a.png → 404，md 里的本地图片全部裂开
     const html = markdown.renderPage(raw, {
       title: path.basename(filePath),
       baseHref: mdBaseHref(filePath),
@@ -2436,6 +2523,15 @@ app.get('/api/md-source', async (req, res) => {
     return res.status(404).json({ error: '文件不存在' });
   }
   try {
+    // 大小闸门：编辑器要把全文塞进 textarea + 每次输入整篇重渲染，
+    // 超大文件会把编辑页拖垮。超限直接拒绝，让用户用专业编辑器改。
+    const stat = await fsp.stat(filePath);
+    if (stat.size > plainRender.MAX_BYTES) {
+      return res.status(413).json({
+        error: 'too-large',
+        message: `文件有 ${fmtBytes(stat.size)}，超过了 ${fmtBytes(plainRender.MAX_BYTES)} 的编辑上限。请用专业编辑器打开。`,
+      });
+    }
     const raw = await fsp.readFile(filePath, 'utf8');
     res.set('Cache-Control', 'no-store');
     res.json({ content: raw, hash: editable.sha1(raw) });
@@ -2733,8 +2829,10 @@ app.get('/api/events', (req, res) => {
   res.flushHeaders?.();
   res.write(': connected\n\n');
 
+  // 连接异常关闭的窗口内 res.write 可能抛错（对端已断、socket 已销毁）。
+  // 包一层，别让一次写失败冒泡成未捕获异常拖垮进程（export-pdf / self-upgrade 的 send 同理）。
   const send = (payload) => {
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch {}
   };
   const onFs = (e) => send({ channel: 'fs', ...e });
   const onUpdate = (e) => send({ channel: 'update', ...e });

@@ -192,7 +192,8 @@ done
 >   期望末行 `总计 10 项，失败 0 项`。**记得删掉 tgz**，否则会被 `git add -A` 带进 commit。
 > - `scroll-after-toggle.spec.js` 在 iframe 还没加载出内容时打印 `!! HTML 不够长，没法测试` 并跳过（也是 exit 0）。这是它长期的既有行为，不是本次改动引入的；判断是否回归的办法是 `git stash` 后对比同一行输出。
 
-当前 spec 清单（47 个）。除 `landing-demo`（`file://`）、`diff-algorithm`（纯函数单测）
+当前 spec 清单（49 个）。除 `landing-demo`（`file://`）、`diff-algorithm`（纯函数单测）、
+`md-fence-infostring`（纯函数，不起服务）
 与 `fs-watcher`（直接对着临时目录测监听器，不起服务、不用浏览器）外，其余都通过
 `tests/helpers/isolated-atlas.js` 的 `startAtlas()` 起独立实例：临时 `ATLAS_HOME`
 （自带 config/store）+ 临时扫描根 + 临时 fixture + 随机端口，结束即删。
@@ -224,6 +225,8 @@ done
 > - `multi-tab.spec.js` — 多 Tab 文档浏览（0.22 新增）：打开多篇 → 标签栏出现、每篇一枚常驻帧、只有活动帧可见且独占 `id="preview"` / 已开文件再点只切回不重复开 / **切走再切回滚动位置保留**（帧不重载）/ 键盘 Ctrl+Tab 前后切、⌘数字跳转 / 关非活动标签不换视图、关活动标签切到邻居、关到最后一个回首页 / **刷新后恢复标签与活动项**（localStorage）/ 全程无 JS 报错（32 项）
 > - `find-in-page.spec.js` — 文档内查找 & 就地退出搜索（0.22 新增）：⌘K 正文命中打开文档后，顶栏命中条的 ✕ 就地清高亮且不弹回首页 / Esc 两级（先清文档内高亮、仍停在文档，再按一次才回首页）/ ⌘F 查找栏 open→输入即高亮+显示 n/m+Enter 跳转+Esc 关闭清高亮、查找打开时顶栏命中条让位（21 项）
 > - `tree-view-and-open.spec.js` — 目录树双视图 + 用 Atlas 打开外部文件（0.25 新增）：造"扫描根 = work 的父目录"的嵌套树，分组视图平铺全部文件、深层文件（relPath 段数 > 2）带中间目录提示；切到目录视图后按真实层级展开（bind_domain / os_fusion_domain / sub）、两个同名 README 各自可见、目录节点是只读镜像（有「在访达中显示」、无重命名 / 删除）、目录视图不再显示中间目录提示、视图选择刷新后保持；`/api/resolve-open` 五种状态（ready / 目录 ready(dir) / need-doctype / need-root / not-doc / not-found）（17 项）
+> - `md-fence-infostring.spec.js` — 围栏 info string 与渲染健壮性（0.27.0 新增，纯函数 + 子进程，不起服务）：带空格 info string 的围栏（` ```ts type-equiv ` 等）被识别成代码块、块内 JSDoc「 * 」行不被当列表、语言只取第一个词；` ```mermaid ` / `~~~` / 无 lang / 真列表等原有行为不回归；用「子进程 + 超时」跑事故规模文档与极深嵌套引用 / 列表，必须在时限内渲染完而不是卡死 / OOM（回归成死循环时能超时报失败而非挂起）（14 项）
+> - `perf-and-limits.spec.js` — 性能 / 内存边界（0.27.0 新增）：后端文件大小闸门（超大 md 的 `render-md` 返回降级页而非 500 / 崩溃、`md-source` 413、正常文档不受影响、处理完超大文件后服务仍健康）；前端多 Tab 帧预算（打开 16 篇后已加载帧 ≤ `MAX_LIVE_FRAMES`、后台帧被 LRU 休眠释放内存、切回被休眠的 Tab 会重载并显示内容、全程无 JS 报错）（15 项）
 > - `modal-close.spec.js` — 每个弹窗的每条关闭路径：✕ 按钮（含精确点在图标 span 上）、遮罩、Esc、关闭后焦点归还、以及"点弹窗内部不会误关"（22 项）
 > - `misc-hardening.spec.js` — 杂项加固：编辑备份扩展名跟随源文件 / 请求体上限与可读错误 / `/raw` 路由不依赖 `app._router.stack`（扫描根运行时增删后序号重排仍正确）（26 项）
 > - `toast.spec.js` — 扫描根增删与反馈 toast（12 项，含隔离性断言）
@@ -658,6 +661,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.27.0** (2026-09-10) — 修复一个会让整个服务崩溃的 P0，并系统性加固内存 / 性能（`public/vendor/markdown.js` + `server.js` + `lib/plain-render.js` + `public/app.js`）。① **打开某些 Markdown 白屏（渲染进程 OOM 崩溃）**：内置渲染器的围栏代码块正则只认单词 info string，遇到 ` ```ts type-equiv ` 这类"语言 + 空格 + 附加标注"（AI 生成的技术文档很常见）会把整行当普通文本 → 代码块内的 JSDoc「 * xxx」被误判成无序列表项 → `parseList` 对畸形嵌套递归爆炸、`String.replace` 被调用十几万次、堆内存冲到 4GB、渲染进程 OOM，表现就是打开该文档后整个 Atlas 白屏、服务连不上（一个 12KB 的文件即可触发）。修法：正则按 CommonMark 语义只取第一个词作语言、其余 info 一并吞掉；并给 `render` 加递归深度硬上限（`RENDER_MAX_DEPTH=24`，超深降级为纯文本），任何畸形输入都不再能拖垮进程。② **后端渲染链统一加文件大小闸门**：`render-md` / `md-source` / `edit-doc` / `save-edits` / `diff` / `export-pdf` 的 md 分支 / 分享 md 全部对齐 CSV·JSON·TXT 早有的 8MB 上限——此前 md/html 这条链完全没有体量闸门（与 plain 类型不对称），一个超大文件被整份读入渲染就能把内存顶爆；现在超限降级为说明页 / 拒绝。搜索索引 `getFileText` 加单文件 4MB 截断读取；`jsonValueHtml` 加递归深度上限防深层嵌套 JSON 栈溢出；`/api/events` 的 SSE 写入包 try/catch。③ **多 Tab 内存优化（帧预算 + LRU 休眠）**：过去每个打开过的文档常驻一个满配 iframe、永不释放，打开上百篇 = 上百份独立文档运行时（各自的 markdown / mermaid / katex），内存线性膨胀。现在同时最多保留 12 个已加载帧（`MAX_LIVE_FRAMES`），超出就休眠最久未激活的后台帧（导航到 `about:blank` 卸载文档释放内存、记下滚动位置），再切回时自动重载并复位滚动。常规使用（十几个 Tab）完全不触发、切换仍零重载；只有真堆到很多 Tab 时才回收。④ **文档内查找（⌘F）大文档不再卡死**：`highlightInIframe` 加命中上限 2000（超大文档配短 / 常见关键词会瞬间造出上万个 `<mark>` 冻住主线程，计数显示成「N+」），查找输入加 120ms 防抖。⑤ **验证**：新增 `tests/md-fence-infostring.spec.js`（围栏 info string + 畸形输入不 OOM）与 `tests/perf-and-limits.spec.js`（后端大小闸门 + 前端多 Tab 帧预算），全套 49 个 spec 全绿。npm 包与桌面 App 共用同一份 `server.js` / `public`，修复对两者同时生效。
 
 - **0.26.2** (2026-09-07) — 修复 0.26.1 引入的**「目录」视图展开"点了要等一会儿才打开"**（纯前端 `public/app.js`）。0.26.1 加 `content-visibility` 根治了掉帧，却带出一个新问题：展开一个大目录时，容器高度**在 0 停住约 400ms、然后一下子跳到全高**——不是渐变，是"死等一下再啪一下打开"。用能捕捉"点击→内容真正出现"耗时的探针（普通帧率探针测不到静止再跳）在 3000 文件的大树上定位到根因：`content-visibility: auto` 挂在被动画的 `.folder-children` 上时，展开会让元素从 `display:none` 变可见，**height 过渡的起点无法提交、过渡根本不触发**，只能等 400ms 兜底定时器 `cleanup()` 时 `height:auto` 跳满——那 400ms 就是"等待"。① **修复**：`animateFolderChildren` 按子树规模分流——**大子树（> ~1.5 屏，`ANIMATE_MAX_PX=1200`）即时展开/收起**（对几十屏高的子树做 height 动画本就无意义：视口一帧就填满、下方内容瞬间飞出；即时开点击即现、零延迟）；**小/中子树走高度滑动**，动画期间临时把这一个容器的 `content-visibility` 关掉（子树小、代价可忽略，nested 子容器仍保留 cv），让过渡正常触发，`cleanup` 复原。实测：大子树展开 `firstContentMs` 从 ~400ms 降到 **~3ms（点击即开）**；小子树高度平滑爬升 0→560（~200ms 完成），收起同样平滑。② **验证**：`node --check` 通过；完整 `npm test`（35 spec）全绿。`content-visibility`（0.26.1）与桌面自动更新（0.26.0）均不受影响。
 

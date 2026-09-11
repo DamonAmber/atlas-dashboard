@@ -2616,13 +2616,65 @@ function createPreviewFrame() {
   return ifr;
 }
 
-// 懒加载：把 Tab 的帧导航到它的文档。只在首次激活时调用。
+// 后台帧预算：同时最多保留这么多个"已加载"的帧。超出后把最久未激活的后台帧
+// 休眠掉（卸载文档、只留空 iframe），把它占的内存（文档 DOM + 各自的 mermaid /
+// katex / markdown 运行时）还给系统。再切回时按懒加载路径重载并恢复滚动位置。
+// 设得足够大：常规使用（十几个 tab）完全不触发休眠，切来切去帧不重载、状态全留住；
+// 只有真堆到很多 tab 时才回收，避免"100 个 tab = 100 份常驻文档运行时"把内存吃爆。
+const MAX_LIVE_FRAMES = 12;
+
+// 读某个帧当前的滚动百分比（跨域 / 未就绪时返回 null）。
+function frameScrollPct(frame) {
+  try {
+    const w = frame.contentWindow;
+    const doc = w.document;
+    const root = doc.scrollingElement || doc.documentElement;
+    const spacer = doc.querySelector('.md-tail-space');
+    const spacerH = spacer ? spacer.offsetHeight : 0;
+    const realMax = Math.max(0, (root.scrollHeight - root.clientHeight) - spacerH);
+    return realMax > 0 ? (root.scrollTop || 0) / realMax : 0;
+  } catch { return null; }
+}
+
+// 休眠一个后台帧：记下滚动位置，把 iframe 导航到 about:blank 释放其文档与运行时。
+function sleepFrame(tab) {
+  if (!tab || !tab.loaded) return;
+  tab.sleptScrollPct = frameScrollPct(tab.frame);
+  try { tab.frame.src = 'about:blank'; } catch {}
+  tab.frame.classList.remove('loading');
+  tab.loaded = false;
+}
+
+// 保持"已加载帧数 ≤ MAX_LIVE_FRAMES"：超出时休眠最久未激活的后台帧。
+// 当前活动帧、正在编辑的帧永不休眠。
+function enforceFrameBudget() {
+  const liveCount = state.tabs.reduce((n, t) => n + (t.loaded ? 1 : 0), 0);
+  if (liveCount <= MAX_LIVE_FRAMES) return;
+  const candidates = state.tabs.filter(t =>
+    t.loaded &&
+    t.id !== state.activeTabId &&
+    !(editState.active && editState.path === t.path)
+  ).sort((a, b) => (a.lastActiveAt || 0) - (b.lastActiveAt || 0));   // 最久未用在前
+  let over = liveCount - MAX_LIVE_FRAMES;
+  for (const t of candidates) {
+    if (over <= 0) break;
+    sleepFrame(t);
+    over--;
+  }
+}
+
+// 懒加载：把 Tab 的帧导航到它的文档。首次激活、以及从休眠中唤醒时调用。
 function ensureFrameLoaded(tab) {
   if (!tab || tab.loaded) return;
   const file = state.files[tab.path];
   if (!file) return;
   els.preview = tab.frame;
   applyPreviewSandboxTo(tab.frame, file);
+  // 从休眠中唤醒：重载后按休眠前的滚动百分比复位（由 onPreviewFrameLoad 兑现）
+  if (tab.sleptScrollPct != null) {
+    pendingPreviewScrollPct = tab.sleptScrollPct;
+    tab.sleptScrollPct = null;
+  }
   tab.frame.classList.add('loading');
   tab.frame.src = previewUrlFor(file);
   tab.loaded = true;
@@ -2679,6 +2731,7 @@ function openInTab(path) {
 function activateTab(id) {
   const tab = state.tabs.find(t => t.id === id);
   if (!tab) return;
+  tab.lastActiveAt = Date.now();   // LRU：记激活时间，帧预算超限时优先休眠最久未用的
   if (id === state.activeTabId) {
     // 已是活动 Tab：只保证已加载 + UI 就位（重复点同一文件不该退出其编辑态），
     // 并兑现可能的 ⌘K 正文命中高亮（重开当前文档时）
@@ -2718,6 +2771,7 @@ function activateTab(id) {
   if (wasLoaded) updateIframeHighlight();
   renderTabs();
   persistTabs();
+  enforceFrameBudget();   // 激活后若已加载帧数超预算，休眠最久未用的后台帧
 }
 
 // 用户触发的 Tab 切换（点标签 / 快捷键）：切走带脏改动的编辑先确认。
@@ -5137,6 +5191,7 @@ function injectHighlightStyle(doc) {
 
 let highlightMatches = [];
 let highlightCurrentIdx = -1;
+let highlightTruncated = false;   // 命中数达到 MAX_HIGHLIGHTS 上限被截断（计数显示成「N+」）
 
 function highlightInIframe(query) {
   const doc = (() => {
@@ -5147,6 +5202,7 @@ function highlightInIframe(query) {
   clearIframeHighlight(doc);
   highlightMatches = [];
   highlightCurrentIdx = -1;
+  highlightTruncated = false;
   updateMatchBadge(0, 0);
 
   if (!query) return;
@@ -5199,7 +5255,13 @@ function highlightInIframe(query) {
   const todo = [];
   while (walker.nextNode()) todo.push(walker.currentNode);
 
+  // 命中数硬上限：超大文档配上短 / 常见关键词，一次高亮能瞬间造出上万个 <mark>
+  // DOM 节点、把主线程冻住几秒。命中太多时本就没法逐个跳，2000 处足够定位；
+  // 到达上限就停止建标记（badge 会显示成「2000+」）。
+  const MAX_HIGHLIGHTS = 2000;
+  let hlTruncated = false;
   for (const node of todo) {
+    if (highlightMatches.length >= MAX_HIGHLIGHTS) { hlTruncated = true; break; }
     const text = node.nodeValue;
     const ranges = findRanges(text.toLowerCase());
     if (!ranges.length) continue;
@@ -5213,10 +5275,13 @@ function highlightInIframe(query) {
       frag.appendChild(mark);
       highlightMatches.push(mark);
       last = e;
+      if (highlightMatches.length >= MAX_HIGHLIGHTS) { hlTruncated = true; break; }
     }
     if (last < text.length) frag.appendChild(doc.createTextNode(text.slice(last)));
     if (node.parentNode) node.parentNode.replaceChild(frag, node);
+    if (hlTruncated) break;
   }
+  highlightTruncated = hlTruncated;
 
   if (highlightMatches.length > 0) {
     highlightCurrentIdx = 0;
@@ -5252,7 +5317,7 @@ function updateMatchBadge(total, currentIdx) {
     return;
   }
   badge.classList.remove('hidden');
-  badge.querySelector('.match-text').textContent = `${currentIdx + 1} / ${total}`;
+  badge.querySelector('.match-text').textContent = `${currentIdx + 1} / ${total}${highlightTruncated ? '+' : ''}`;
 }
 
 // 就地清除文档内的搜索高亮 / 命中导航（不离开文档）。
@@ -5274,7 +5339,7 @@ let findSandboxHinted = false;
 
 function setFindCount(total, currentIdx) {
   if (!els.findCount) return;
-  els.findCount.textContent = total > 0 ? `${currentIdx + 1}/${total}` : '0/0';
+  els.findCount.textContent = total > 0 ? `${currentIdx + 1}/${total}${highlightTruncated ? '+' : ''}` : '0/0';
   els.findCount.classList.toggle('none', total === 0 && !!(els.findInput && els.findInput.value));
 }
 
@@ -5366,7 +5431,12 @@ if (els.matchClose) els.matchClose.addEventListener('click', clearIframeSearch);
 
 // ---- 文档内查找栏（⌘F）的事件接线 ----
 if (els.findInput) {
-  els.findInput.addEventListener('input', runFind);
+  // 输入防抖：连续打字时不每个键都重扫全文重建高亮（大文档上一次高亮就可能几十毫秒）。
+  let findDebounce = null;
+  els.findInput.addEventListener('input', () => {
+    if (findDebounce) clearTimeout(findDebounce);
+    findDebounce = setTimeout(runFind, 120);
+  });
   els.findInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); gotoMatch(e.shiftKey ? -1 : 1); }
     else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFind(); }
