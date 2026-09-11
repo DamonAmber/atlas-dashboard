@@ -97,6 +97,13 @@ git push
 npm install -g atlas-dashboard@latest
 atlas --version   # 应显示新版本号
 atlas restart     # 让本机服务也用新版
+
+# 12. 清理构建产物（出了 DMG 才有这步）：dist-app/ 里的 DMG / zip 已经传到 Release，
+#     本地留着纯占地方（500MB+）；更要命的是 dist-app/mac-arm64/Atlas.app 会被
+#     Spotlight 当成第二个「Atlas」索引进来 —— 用户搜应用时看到两个、不知道点哪个
+#     （真实用户反馈）。dist-app/ 已在 .gitignore、内容全部可由 npm run app:build 重建，
+#     发完必删，别留给用户。
+rm -rf dist-app
 ```
 
 发完之后**必看**：[验证发版成功](#验证发版成功) 章节确认 4 项绿。
@@ -514,6 +521,10 @@ gh release upload "v$NEW_VERSION" dist-app/latest-mac.yml --clobber
 gh release view "v$NEW_VERSION" --json isDraft,assets --jq '{draft:.isDraft, assets:[.assets[]|"\(.name) \(.size) \(.state)"]}'
 # 三件齐了 → 转正（此前它一直是草稿、不抢 latest）
 gh release edit "v$NEW_VERSION" --draft=false --latest
+
+# 转正后清理本地构建产物：DMG / zip 已在 Release，dist-app/ 本地不再需要（500MB+），
+# 且 dist-app/mac-arm64/Atlas.app 会被 Spotlight 索引成第二个「Atlas」（见 TL;DR 第 12 步）。
+rm -rf dist-app
 ```
 
 > ⚠️ **草稿一定要转正**：`release.yml` 现在刻意把 Release 建成草稿来避免"空 Release 抢 latest → 下载 404"。
