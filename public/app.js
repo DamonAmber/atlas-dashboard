@@ -3546,6 +3546,84 @@ function enterEditMode() {
 // ==================== Markdown 编辑：源码 + 实时预览 ====================
 let mdRenderScheduled = false;
 
+// ==================== 预览区表格：拖动整行重排 ====================
+// #md-preview 整体 contenteditable，单元格文字本就能直接改（改完走脏块序列化回源码）。
+// 这里补上"拖动整行重排"：给每行注入一个 contenteditable=false 的抓手格
+// （data-md-grip，序列化时被 markdown.js 跳过），Sortable 只认这个抓手做 handle——
+// 从单元格文字上按下是编辑、从抓手上按下才是拖拽，两者不打架。拖完把整张表标脏、
+// 反解析回源码。列拖动更复杂（要同步表头 / 对齐 / 每行同列），这一版先只做拖行。
+let mdTableSortables = [];
+const MD_ROW_GRIP_SVG = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">'
+  + '<circle cx="6" cy="4" r="1.2"/><circle cx="10" cy="4" r="1.2"/>'
+  + '<circle cx="6" cy="8" r="1.2"/><circle cx="10" cy="8" r="1.2"/>'
+  + '<circle cx="6" cy="12" r="1.2"/><circle cx="10" cy="12" r="1.2"/></svg>';
+
+function teardownMdPreviewTables() {
+  for (const s of mdTableSortables) { try { s.destroy(); } catch (_) {} }
+  mdTableSortables = [];
+}
+
+// 反解析预览区回源码 textarea（拖行等 DOM 操作用；input 编辑走块作用域里的 scheduleMdSerialize）。
+function serializeMdPreviewToSource() {
+  if (!window.AtlasMarkdown || !window.AtlasMarkdown.htmlToMarkdown) return;
+  els.mdSource.value = window.AtlasMarkdown.htmlToMarkdown(els.mdPreview);
+  scheduleMdDraftSave();
+}
+
+// 给一张表的每行注入行首抓手格（幂等）。thead 放一个对齐用的空抓手表头。
+function injectMdRowGrips(table) {
+  const headRows = table.tHead ? table.tHead.rows : [];
+  for (const tr of headRows) {
+    if (tr.querySelector('.md-row-grip')) continue;
+    const th = document.createElement('th');
+    th.className = 'md-row-grip md-row-grip-head';
+    th.setAttribute('contenteditable', 'false');
+    th.setAttribute('data-md-grip', '1');
+    th.setAttribute('aria-hidden', 'true');
+    tr.insertBefore(th, tr.firstChild);
+  }
+  const body = table.tBodies && table.tBodies[0];
+  const bodyRows = body ? body.rows : [];
+  for (const tr of bodyRows) {
+    if (tr.querySelector('.md-row-grip')) continue;
+    const td = document.createElement('td');
+    td.className = 'md-row-grip';
+    td.setAttribute('contenteditable', 'false');
+    td.setAttribute('data-md-grip', '1');
+    td.title = '拖动重排行';
+    td.innerHTML = MD_ROW_GRIP_SVG;
+    tr.insertBefore(td, tr.firstChild);
+  }
+}
+
+// 编辑态下给预览区每张表挂"拖行"能力。renderMdPreview 每次重渲染都会重置 DOM，
+// 所以先 teardown 再重建。
+function setupMdPreviewTables() {
+  teardownMdPreviewTables();
+  if (!(editState.active && editState.kind === 'md')) return;
+  if (!els.mdPreview || typeof window.Sortable === 'undefined') return;
+  els.mdPreview.querySelectorAll('table').forEach((table) => {
+    const body = table.tBodies && table.tBodies[0];
+    if (!body || body.rows.length === 0) return;
+    injectMdRowGrips(table);
+    const s = window.Sortable.create(body, {
+      draggable: 'tr',
+      handle: '.md-row-grip',
+      animation: 150,
+      forceFallback: true,                 // 与侧栏 / HTML 编辑一致：统一 mouse 路径，更稳可测
+      ghostClass: 'md-row-ghost',
+      onEnd: () => {
+        // 拖行是纯 DOM 操作、不触发 input，必须手动标脏——否则序列化会走 data-md-raw
+        // 原样吐回旧顺序（拖了个寂寞）。
+        table.setAttribute('data-md-dirty', '1');
+        markDirty();
+        serializeMdPreviewToSource();
+      },
+    });
+    mdTableSortables.push(s);
+  });
+}
+
 function renderMdPreview() {
   if (!els.mdPreview || !window.AtlasMarkdown) return;
   // annotateRaw：给每个顶层块记上原始 Markdown 源码。用户在预览里改动时
@@ -3553,6 +3631,7 @@ function renderMdPreview() {
   // 表格对齐、段落软换行这些渲染器无法完整往返的东西一起改掉。
   els.mdPreview.innerHTML = window.AtlasMarkdown.renderBody(els.mdSource.value, { annotateRaw: true });
   rebuildMdBlockMap();     // innerHTML 换了，块 → 源码行的映射要重建
+  setupMdPreviewTables();  // 重挂表格拖行（旧 Sortable 随 innerHTML 一起没了，重建）
   scheduleMdOutline();
   scheduleRichEnhance();   // 图表 / 公式：单独一档更慢的节流（见下）
   // 重渲染会抹掉标记，按当前光标位置立刻补回来，避免高亮闪断
@@ -4715,6 +4794,7 @@ function exitEditMode({ restore } = { restore: true }) {
   for (const s of editState.sortables) {
     try { s.destroy(); } catch {}
   }
+  teardownMdPreviewTables();   // 预览区表格拖行的 Sortable 单独管理，一并销毁
   const wasMd = editState.kind === 'md';
   const rawUrl = editState.rawUrl;
   editState.active = false;

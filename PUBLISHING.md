@@ -199,7 +199,7 @@ done
 >   期望末行 `总计 10 项，失败 0 项`。**记得删掉 tgz**，否则会被 `git add -A` 带进 commit。
 > - `scroll-after-toggle.spec.js` 在 iframe 还没加载出内容时打印 `!! HTML 不够长，没法测试` 并跳过（也是 exit 0）。这是它长期的既有行为，不是本次改动引入的；判断是否回归的办法是 `git stash` 后对比同一行输出。
 
-当前 spec 清单（48 个）。除 `landing-demo`（`file://`）、`diff-algorithm`（纯函数单测）、
+当前 spec 清单（49 个）。除 `landing-demo`（`file://`）、`diff-algorithm`（纯函数单测）、
 `md-fence-infostring`（纯函数，不起服务）
 与 `fs-watcher`（直接对着临时目录测监听器，不起服务、不用浏览器）外，其余都通过
 `tests/helpers/isolated-atlas.js` 的 `startAtlas()` 起独立实例：临时 `ATLAS_HOME`
@@ -235,6 +235,7 @@ done
 > - `md-fence-infostring.spec.js` — 围栏 info string 与渲染健壮性（0.27.0 新增，纯函数 + 子进程，不起服务）：带空格 info string 的围栏（` ```ts type-equiv ` 等）被识别成代码块、块内 JSDoc「 * 」行不被当列表、语言只取第一个词；` ```mermaid ` / `~~~` / 无 lang / 真列表等原有行为不回归；用「子进程 + 超时」跑事故规模文档与极深嵌套引用 / 列表，必须在时限内渲染完而不是卡死 / OOM（回归成死循环时能超时报失败而非挂起）（14 项）
 > - `perf-and-limits.spec.js` — 性能 / 内存边界（0.27.0 新增）：后端文件大小闸门（超大 md 的 `render-md` 返回降级页而非 500 / 崩溃、`md-source` 413、正常文档不受影响、处理完超大文件后服务仍健康）；前端多 Tab 帧预算（打开 16 篇后已加载帧 ≤ `MAX_LIVE_FRAMES`、后台帧被 LRU 休眠释放内存、切回被休眠的 Tab 会重载并显示内容、全程无 JS 报错）（15 项）
 > - `changelog.spec.js` — 应用内更新日志 + 新功能引导（0.28.0 新增）：全新安装不弹（只记版本）/ 从旧版升级且含 feature 才自动弹「Atlas 更新了」引导 + 带使用说明 / 看过后重开不再弹 / 纯 bug 修复版本不主动弹但仍推进 seen / 设置里手动入口打开完整日志 / 完整日志按 feature·fix 分类标注、引导底部「查看完整更新日志」就地切换（用 computed display 查真实渲染防 CSS 覆盖漏检）（约 15 项）
+> - `md-table-edit.spec.js` — Markdown 编辑：预览区表格所见即所得（0.29.0 新增）：编辑态每行有拖拽抓手 + 表头对齐占位、抓手不写进源码 / 直接改单元格文字同步回源码且表头与列数保持 / 单元格里的竖线 `|` 被转义成 `\|` 不错位 / 拖动整行重排后源码数据行顺序随之改变、表头与对齐行不动 / 全程无 JS 报错（12 项）
 > - `modal-close.spec.js` — 每个弹窗的每条关闭路径：✕ 按钮（含精确点在图标 span 上）、遮罩、Esc、关闭后焦点归还、以及"点弹窗内部不会误关"（22 项）
 > - `misc-hardening.spec.js` — 杂项加固：编辑备份扩展名跟随源文件 / 请求体上限与可读错误 / `/raw` 路由不依赖 `app._router.stack`（扫描根运行时增删后序号重排仍正确）（26 项）
 > - `toast.spec.js` — 扫描根增删与反馈 toast（12 项，含隔离性断言）
@@ -673,6 +674,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+- **0.29.0** (2026-09-11) — 新功能：**在预览里直接编辑 Markdown 表格** + 设置面板排版修整（`public/app.js` + `public/vendor/markdown.js` + `public/styles.css` + `index.html` + `docs/index.html`）。① **表格所见即所得编辑**：Markdown 编辑分栏右侧预览里，表格单元格本就能点进去改字（继承 #md-preview 的 contenteditable），这一版补上「拖动整行重排」——给每行注入一个 `contenteditable=false` 的抓手格（`data-md-grip`），对 tbody 挂 SortableJS（`handle` 限定抓手：从单元格文字上按下仍是编辑、从抓手按下才拖拽，两者不打架），拖完把整张表标脏、`htmlToMarkdown` 反解析回源码；抓手 Sortable 跟随 `renderMdPreview` 重建、`exitEditMode` 销毁，`serializeTable` 序列化时跳过抓手格。② **修表格往返隐患**：单元格文本里的竖线 `|` 现在转义成 `\|`、换行压成空格，否则用户在单元格里打一个 `|` 会凭空多切一列、整张表错位。③ **设置面板左栏底部排版**：0.28.0 加的「更新日志」入口被通用 `.modal button` 样式套了描边、和「检查更新」堆成两个方块很乱；改为把这两个入口排除出通用按钮样式、统一成「小图标 + 文字、hover 底色、无边框」的低调链接，版本号加分隔线并弱化、文字对齐。④ 同步 landing page「Markdown 分栏编辑器」卡片。⑤ **验证**：新增 `tests/md-table-edit.spec.js`（抓手就位 / 改单元格同步 / `|` 转义 / 拖行重排往返 / 无 JS 报错）；md-render-and-roundtrip、md-editor-ux、md-sync-highlight、preview-live-edit、rich-render 回归全绿。全套 49 个 spec 全绿。
 
 - **0.28.0** (2026-09-11) — 新功能：**应用内更新日志 + 新功能引导**（新增 `public/changelog.js` + `index.html` / `app.js` / `styles.css` + `docs/index.html`）。此前用户只能去官网 / GitHub 才知道 Atlas 更新了什么。现在：① 新建面向用户的结构化更新日志 `public/changelog.js`（客户端与 web 共用同一份、随包发布），每条改动分 `feature`（新功能）/ `fix`（修复）两类——它和 PUBLISHING.md 的「已发布版本」分工不同：那份给开发者、很技术，这份给用户、只说"对你有什么影响"。② 设置面板左栏底部加「更新日志」入口，打开列出全部历史版本，feature / fix 用不同标签区分，feature 带「怎么用」使用引导。③ **升级后首次打开的新功能引导**：从旧版升上来、且新版含 feature 时，首页稳定后自动弹一次「Atlas 更新了」（只讲本版新功能 + 引导），看过即记 `localStorage`（`atlas:changelogSeen`）不再弹；**纯 bug 修复版本不主动弹**（按需求：修复不打扰、只在更新日志里简要列出）；**全新安装静默不弹**（对第一次用的人谈不上"更新了"，也避免打扰、并且不干扰测试）。④ 复用既有 modal 栈（pushModal / popModal）与设计 token，引导弹窗与完整日志两种视觉都与 Atlas 一致。⑤ 同步 landing page 加「应用内更新日志」特性卡。⑥ **验证**：新增 `tests/changelog.spec.js`（全新不弹 / 升级弹 / 看过不再弹 / 纯 fix 不弹 / 手动入口 / 完整日志分类，且用 computed display 查真实渲染以防 CSS 覆盖漏检）；顺带修了 `.changelog-foot` 的 `display:flex` 被全局 `.hidden` 覆盖不掉的视觉 bug。全套 48 个 spec 全绿。
 

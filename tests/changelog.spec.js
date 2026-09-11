@@ -57,11 +57,12 @@ function check(name, actual, expected) {
       footVisible: !document.getElementById('changelog-foot').classList.contains('hidden'),
       seen: localStorage.getItem('atlas:changelogSeen'),
       latest: window.ATLAS_CHANGELOG[0].version,
+      featTitle: (window.ATLAS_CHANGELOG[0].entries.find(e => e.type === 'feature') || {}).title || '',
     };
   });
   check('自动弹出「更新了」引导', wn.open, true);
   check('标题是引导语气而非「更新日志」', /更新了/.test(wn.title), true);
-  check('引导带本版新功能标题', wn.body.includes('应用内更新日志'), true);
+  check('引导带本版新功能标题', !!wn.featTitle && wn.body.includes(wn.featTitle), true);
   check('引导带「怎么用」使用说明', wn.body.includes('怎么用'), true);
   check('引导底部有「查看完整更新日志」入口', wn.footVisible, true);
   check('已把当前版本记为已看过', wn.seen, wn.latest);
@@ -103,7 +104,7 @@ function check(name, actual, expected) {
     body: (document.getElementById('changelog-body') || {}).innerText || '',
   }));
   check('手动入口打开的是完整日志', manual.title, '更新日志');
-  check('手动日志含最新版本 0.28.0', manual.body.includes('0.28.0'), true);
+  check('手动日志含最新版本', manual.body.includes(wn.latest), true);
   await page.keyboard.press('Escape');   // 关掉，避免影响下一个用例的弹窗检测
   await page.waitForTimeout(200);
 

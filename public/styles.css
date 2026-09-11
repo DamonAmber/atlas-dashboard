@@ -355,7 +355,7 @@ body.resizing iframe { pointer-events: none; }
  * 快速打开的结果行。它们本身是 ghost / 列表行，被这条规则套上边框和填充后
  * 会变成一格格的方块（快速打开列表里最明显：每一行都被画成一个按钮）。
  * 用 :where() 包住是为了不抬高整条选择器的优先级。 */
-.modal button:not(:where(.modal-close, .settings-nav-item, .quickopen-item)) {
+.modal button:not(:where(.modal-close, .settings-nav-item, .quickopen-item, .settings-changelog-btn, .settings-update-btn)) {
   height: var(--h-ctl);
   min-width: var(--h-ctl);
   padding: 0 10px;
@@ -373,13 +373,13 @@ body.resizing iframe { pointer-events: none; }
   justify-content: center;
   gap: 5px;
 }
-.modal button:not(:where(.modal-close, .settings-nav-item, .quickopen-item)):hover:not(:disabled) {
+.modal button:not(:where(.modal-close, .settings-nav-item, .quickopen-item, .settings-changelog-btn, .settings-update-btn)):hover:not(:disabled) {
   background: var(--bg-hover);
   border-color: var(--text-faint);
 }
 .actions button:active:not(:disabled),
 .main-actions > button:active:not(:disabled),
-.modal button:not(:where(.modal-close, .settings-nav-item, .quickopen-item)):active:not(:disabled),
+.modal button:not(:where(.modal-close, .settings-nav-item, .quickopen-item, .settings-changelog-btn, .settings-update-btn)):active:not(:disabled),
 .toggle-sidebar:active { transform: scale(0.95); }
 .main-actions > button:disabled { opacity: 0.32; cursor: not-allowed; }
 .actions button:disabled { opacity: 0.32; cursor: not-allowed; }
@@ -2570,27 +2570,64 @@ kbd {
 .settings-nav .settings-nav-item.is-on .ico { color: var(--accent); }
 .settings-content { overflow-y: auto; min-height: 0; }
 .settings-nav .settings-version {
+  /* 左栏底部信息区起点：一条上分隔线把它和上面的分区项分开，版本号本身弱化。 */
   margin-top: auto;
-  padding: 12px 10px 4px;
+  padding: 10px 10px 3px;
+  border-top: 1px solid var(--border);
   font-size: 11px;
   line-height: 1.5;
   color: var(--text-faint);
   letter-spacing: 0.02em;
   word-break: break-word;
 }
-/* 桌面版「检查更新」控件（紧贴版本号下方） */
+/* 版本号下方的低调操作：更新日志（所有版本）+ 检查更新（仅桌面版）。
+   统一成"小图标 + 文字、hover 才有底色、无边框"的轻量入口，
+   而不是两个描边方块按钮堆在一起（那样和版本 / 状态文字挤成一团很乱）。 */
+.settings-nav .settings-changelog-btn,
+.settings-nav .settings-update-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: auto;
+  min-width: 0;
+  margin: 0;
+  padding: 5px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.settings-nav .settings-changelog-btn:hover,
+.settings-nav .settings-update-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+.settings-nav .settings-changelog-btn .ico { color: var(--accent); flex: none; }
+/* 「检查更新」没有前置图标（它的文字会被状态更新用 textContent 重写，放不住图标），
+   用左缩进让它的文字和「更新日志」（图标之后）的文字左对齐：10 基 + 13 图标 + 6 间隔。 */
+.settings-nav .settings-update-btn { padding-left: 29px; }
+.settings-nav .settings-changelog-btn:focus-visible,
+.settings-nav .settings-update-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* 桌面版「检查更新」控件容器（紧贴更新日志下方） */
 .settings-nav .settings-update {
-  padding: 2px 10px 12px;
+  padding: 0 0 10px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 1px;
 }
 .settings-nav .settings-update.hidden { display: none; }
-.settings-nav .settings-update-btn { align-self: flex-start; font-size: 12px; }
 .settings-nav .settings-update-status {
+  padding: 1px 10px 0;
   font-size: 11px;
   line-height: 1.5;
-  color: var(--text-dim);
+  color: var(--text-faint);
   word-break: break-word;
 }
 .settings-nav .settings-update-status.is-error { color: var(--unread); }
@@ -4202,27 +4239,8 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
 body.no-active-doc .tb-more { display: none; }
 
 /* ==================== 更新日志 / 新功能引导 ==================== */
-/* 设置面板左栏底部的「更新日志」入口（紧挨版本号） */
-.settings-changelog-btn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  width: 100%;
-  padding: 6px 8px;
-  margin-top: 2px;
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  font-family: inherit;
-  font-size: var(--fs-xs);
-  text-align: left;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  transition: background var(--dur-fast), color var(--dur-fast);
-}
-.settings-changelog-btn:hover { background: var(--bg-hover); color: var(--accent); }
-.settings-changelog-btn .ico { color: var(--accent); flex: none; }
-.settings-changelog-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* 「更新日志」入口按钮的样式与「检查更新」统一定义在 .settings-nav 区（见上方
+   .settings-changelog-btn / .settings-update-btn 合并规则），这里不再单独定义。 */
 
 /* 弹窗 */
 .changelog-panel { width: min(560px, 92vw); }
@@ -4309,3 +4327,25 @@ body.no-active-doc .tb-more { display: none; }
 .cl-whatsnew-sub { font-size: var(--fs-xs); color: var(--text-dim); }
 .cl-entry.cl-whatsnew { padding: 10px 0; border-bottom: 1px solid var(--border); }
 .cl-entry.cl-whatsnew:last-child { border-bottom: none; }
+
+/* ==================== 预览区表格：拖行抓手 ==================== */
+/* 只在 md 编辑分栏的可编辑预览里出现（setupMdPreviewTables 注入），
+   是每行最左的一个窄格：图标提示"这行能拖"，从它按下才触发 Sortable 拖拽。 */
+#md-preview table .md-row-grip {
+  width: 22px;
+  padding: 0 !important;
+  text-align: center;
+  vertical-align: middle;
+  color: var(--text-faint);
+  cursor: grab;
+  user-select: none;
+  background: var(--bg-elev-2);
+}
+#md-preview table .md-row-grip:hover { color: var(--accent); background: var(--accent-soft); }
+#md-preview table .md-row-grip:active { cursor: grabbing; }
+#md-preview table .md-row-grip svg { fill: currentColor; display: block; margin: 0 auto; }
+/* 表头那一格只是占位对齐，不可拖、不高亮 */
+#md-preview table .md-row-grip-head { cursor: default; }
+#md-preview table .md-row-grip-head:hover { color: var(--text-faint); background: var(--bg-elev-2); }
+/* 拖拽中的行残影 */
+.md-row-ghost { opacity: 0.5; background: var(--accent-soft) !important; }

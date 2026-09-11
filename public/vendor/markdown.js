@@ -896,16 +896,27 @@
     return '---';
   }
 
+  // 拖拽抓手单元格（编辑器在预览里注入的 data-md-grip 列）不是文档内容，序列化时跳过。
+  function isGripCell(c) {
+    return !!(c && c.getAttribute && c.getAttribute('data-md-grip') != null);
+  }
+  // 单元格文本：转义竖线（否则单元格里打一个 | 会凭空多切出一列、整张表错位）、
+  // 把换行压成空格（表格一行就是一行，单元格里不能有真换行）。
+  function cellText(c) {
+    return serializeInlineChildren(c).trim().replace(/\|/g, '\\|').replace(/\s*\n+\s*/g, ' ');
+  }
   function serializeTable(tbl) {
-    var headCells = Array.prototype.slice.call(tbl.querySelectorAll('thead th, thead td'));
-    var head = headCells.map(function (c) { return serializeInlineChildren(c).trim(); });
+    var headCells = Array.prototype.slice.call(tbl.querySelectorAll('thead th, thead td'))
+      .filter(function (c) { return !isGripCell(c); });
+    var head = headCells.map(cellText);
     if (!head.length) return joinBlocks(serializeBlocksList(tbl));
     var rows = [];
     rows.push('| ' + head.join(' | ') + ' |');
     rows.push('| ' + headCells.map(cellAlignBar).join(' | ') + ' |');
     Array.prototype.forEach.call(tbl.querySelectorAll('tbody tr'), function (tr) {
-      var cells = Array.prototype.map.call(tr.children,
-        function (c) { return serializeInlineChildren(c).trim(); });
+      var cells = Array.prototype.slice.call(tr.children)
+        .filter(function (c) { return !isGripCell(c); })
+        .map(cellText);
       rows.push('| ' + cells.join(' | ') + ' |');
     });
     return rows.join('\n');
