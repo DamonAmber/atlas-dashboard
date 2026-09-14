@@ -864,6 +864,10 @@
   }
   var BLOCK_TAGS = /^(P|DIV|H[1-6]|UL|OL|LI|BLOCKQUOTE|PRE|HR|TABLE|THEAD|TBODY|TR)$/;
 
+  // 列表项里放不进一行的块级内容（表格 / 代码块 / 引用）——inline 化会彻底毁掉
+  // 结构（表格被拍成一行文本）。这类必须当独立块序列化，缩进对齐到列表项内容后
+  // 再单独成段。P / 其余内联仍按 inline 处理（松散列表折成紧凑，与原行为一致）。
+  var LIST_ITEM_BLOCK_TAGS = /^(TABLE|PRE|BLOCKQUOTE)$/;
   function serializeList(listEl, indent, ordered) {
     var lines = [];
     var idx = 1;
@@ -872,13 +876,29 @@
       var marker = ordered ? (idx++ + '. ') : '- ';
       var inlineParts = [], nested = [];
       Array.prototype.forEach.call(li.childNodes, function (n) {
-        if (n.nodeType === 1 && (n.tagName === 'UL' || n.tagName === 'OL')) nested.push(n);
-        else inlineParts.push(n);
+        if (n.nodeType === 1 && (n.tagName === 'UL' || n.tagName === 'OL')) {
+          nested.push({ kind: 'list', node: n });
+        } else if (n.nodeType === 1 && LIST_ITEM_BLOCK_TAGS.test(n.tagName)) {
+          nested.push({ kind: 'block', node: n });
+        } else {
+          inlineParts.push(n);
+        }
       });
       var text = inlineParts.map(serializeNodeInline).join('').trim();
       lines.push(indent + marker + text);
-      nested.forEach(function (nl) {
-        lines.push(serializeList(nl, indent + '  ', nl.tagName === 'OL'));
+      var childIndent = indent + '  ';   // 对齐到 marker 之后的内容列
+      nested.forEach(function (item) {
+        if (item.kind === 'list') {
+          lines.push(serializeList(item.node, childIndent, item.node.tagName === 'OL'));
+          return;
+        }
+        // 块级内容：源码里前面要有一个空行，且整体缩进到内容列，才算列表项的一部分
+        var block = serializeBlock(item.node, childIndent);
+        var indented = block.split('\n').map(function (l) {
+          return l ? childIndent + l : l;
+        }).join('\n');
+        lines.push('');
+        lines.push(indented);
       });
     });
     return lines.join('\n');

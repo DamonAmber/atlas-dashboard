@@ -3570,6 +3570,23 @@ function serializeMdPreviewToSource() {
   scheduleMdDraftSave();
 }
 
+// 把脏标记打到 el 所在的「顶层块」上——即携带 data-md-raw 的最近祖先。
+// 反解析（serializeBlock）的脏跟踪粒度是顶层块：未标脏的块直接吐回渲染时
+// 记下的原始源码。拖行改的是 DOM，若表格嵌在引用块 / 列表项里，只标 <table>、
+// 外层块没标脏 → 外层原样吐回旧源码，拖了个寂寞。所以要冒泡到顶层块。
+function markMdRawBlockDirty(el) {
+  let node = el;
+  while (node && node !== els.mdPreview) {
+    if (node.hasAttribute && node.hasAttribute('data-md-raw')) {
+      node.setAttribute('data-md-dirty', '1');
+      return;
+    }
+    node = node.parentElement;
+  }
+  // 兜底：没找到带 raw 的祖先（顶层表格未被注解等罕见情况），至少标自己。
+  if (el && el.setAttribute) el.setAttribute('data-md-dirty', '1');
+}
+
 // 给一张表的每行注入行首抓手格（幂等）。thead 放一个对齐用的空抓手表头。
 function injectMdRowGrips(table) {
   const headRows = table.tHead ? table.tHead.rows : [];
@@ -3614,8 +3631,10 @@ function setupMdPreviewTables() {
       ghostClass: 'md-row-ghost',
       onEnd: () => {
         // 拖行是纯 DOM 操作、不触发 input，必须手动标脏——否则序列化会走 data-md-raw
-        // 原样吐回旧顺序（拖了个寂寞）。
-        table.setAttribute('data-md-dirty', '1');
+        // 原样吐回旧顺序（拖了个寂寞）。脏标记要打到携带 data-md-raw 的顶层块上：
+        // 表格可能嵌在引用块 / 列表项里，只标 <table> 的话外层块仍被判为「未改动」，
+        // serializeBlock 会原样吐回旧源码，右侧行序变了、左侧却不同步（保存即回退）。
+        markMdRawBlockDirty(table);
         markDirty();
         serializeMdPreviewToSource();
       },

@@ -43,12 +43,17 @@ function check(name, actual, expected) {
   check('全新安装静默记下当前版本', fresh.seen, fresh.latest);
 
   // ① 从旧版升级：seen 是更早版本 + 最新版有 feature → 自动弹引导
+  //   用受控注入的 changelog 验证，不依赖「真实最新版恰好是 feature」——纯 bug 修复
+  //   版本发布时真实 [0] 是 fix（按设计不弹），若在此读真实数据本用例会误红。
+  //   测完在下一步恢复真实 changelog，供完整日志 / 手动入口用例读取真实历史。
   console.log('\n[升级后 · 新功能引导]');
-  await page.evaluate(() => localStorage.setItem('atlas:changelogSeen', '0.20.0'));
-  await page.reload();
-  await page.waitForSelector('.file');
-  await page.waitForSelector('#changelog-modal:not(.hidden)', { timeout: 4000 }).catch(() => {});
   const wn = await page.evaluate(() => {
+    window.__origChangelog = window.ATLAS_CHANGELOG;
+    localStorage.setItem('atlas:changelogSeen', '0.20.0');
+    window.ATLAS_CHANGELOG = [{ version: '9.9.9', date: '2099-01-01', entries: [
+      { type: 'feature', title: '受控测试新功能', desc: '用于验证升级引导。', guide: '这样用：点开就能看到。' },
+    ] }];
+    maybeShowWhatsNew();
     const m = document.getElementById('changelog-modal');
     return {
       open: m && !m.classList.contains('hidden'),
@@ -67,8 +72,9 @@ function check(name, actual, expected) {
   check('引导底部有「查看完整更新日志」入口', wn.footVisible, true);
   check('已把当前版本记为已看过', wn.seen, wn.latest);
 
-  // ④ 引导底部「查看完整更新日志」→ 就地切到完整列表
+  // ④ 引导底部「查看完整更新日志」→ 就地切到完整列表（先恢复真实 changelog 再切）
   console.log('\n[切到完整日志]');
+  await page.evaluate(() => { window.ATLAS_CHANGELOG = window.__origChangelog; });
   await page.click('#changelog-all-btn');
   await page.waitForTimeout(200);
   const full = await page.evaluate(() => ({
@@ -102,9 +108,10 @@ function check(name, actual, expected) {
   const manual = await page.evaluate(() => ({
     title: (document.getElementById('changelog-title') || {}).textContent || '',
     body: (document.getElementById('changelog-body') || {}).innerText || '',
+    latest: window.ATLAS_CHANGELOG[0].version,   // 真实最新版（此时已恢复真实 changelog）
   }));
   check('手动入口打开的是完整日志', manual.title, '更新日志');
-  check('手动日志含最新版本', manual.body.includes(wn.latest), true);
+  check('手动日志含最新版本', manual.body.includes(manual.latest), true);
   await page.keyboard.press('Escape');   // 关掉，避免影响下一个用例的弹窗检测
   await page.waitForTimeout(200);
 
