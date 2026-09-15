@@ -1034,6 +1034,19 @@
     return String(html == null ? '' : html).replace(/<[^>]+>/g, '');
   }
 
+  // escapeHtml 的逆操作：把渲染后 HTML 里的实体解回纯文本。
+  // extractHeadings 拿到的 inner 是已经 escapeHtml 过的片段，stripTags 只去标签、
+  // 不解码实体，若直接当作纯文本再交给 escapeHtml（TOC 项要再转义一次），就会
+  // 双重转义——目录里把 " 显示成 &quot;、& 显示成 &amp;。这里只解 escapeHtml
+  // 会产出的那 5 个实体，与它严格互逆：原文里字面的 &lt; 会被 escapeHtml 写成
+  // &amp;lt;，单次从左到右替换先吃掉 &amp; → &，剩下的 lt; 无前导 & 不再匹配，
+  // 于是原样保留成 &lt;，不会被误解码。
+  function decodeEntities(s) {
+    return String(s == null ? '' : s).replace(/&(amp|lt|gt|quot|#39);/g, function (m, e) {
+      return { amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" }[e];
+    });
+  }
+
   // 生成锚点 slug：保留字母数字、中日韩、连字符；重复时追加序号去重
   function slugify(text, used) {
     var base = stripTags(text).trim().toLowerCase()
@@ -1054,7 +1067,9 @@
     var used = {};
     var items = [];
     var out = String(html).replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, function (m, lvl, inner) {
-      var text = stripTags(inner).trim();
+      // inner 是已渲染（已转义）的 HTML；去标签后还要解码实体，才能得到干净的
+      // 纯文本标题——否则 slug 会混入 quot/amp 等残字，TOC 里又会被二次转义。
+      var text = decodeEntities(stripTags(inner)).trim();
       if (!text) return m;
       var id = slugify(text, used);
       items.push({ level: +lvl, id: id, text: text });
