@@ -228,9 +228,33 @@
   }
 
   // ---------- 表格 ----------
+  // 按列切分表格一行。竖线是列分隔符，但单元格里 `\|` 表示字面竖线（GFM 规范），
+  // 不能当分隔符——否则一格写了 `a \| b` 会凭空多切出一列、整张表往右错位，还会把
+  // 加粗之类的行内标记从中间截断。而且序列化侧 cellText 正是把 `|` 转义成 `\|`
+  // 写回的，解析不认它，往返（改一个字再存回）就对不上。
+  // 手动扫描而不用后行断言 (?<!\\)：本文件刻意回避 lookbehind 以兼容老浏览器，
+  // 手写状态机也顺带把 `\\|`（转义反斜杠 + 真分隔符）这种边界处理对。
   function splitRow(line) {
-    var s = line.trim().replace(/^\|/, '').replace(/\|$/, '');
-    return s.split('|');
+    var s = line.trim().replace(/^\|/, '');
+    var cells = [];
+    var buf = '';
+    for (var i = 0; i < s.length; i++) {
+      var ch = s[i];
+      if (ch === '\\' && i + 1 < s.length) {
+        var nx = s[i + 1];
+        // `\|` → 字面竖线；`\\` 及其它转义序列原样保留，交给 inline 继续处理。
+        // 原样保留时连反斜杠一起吃掉两个字符，这样紧随其后的 `|` 仍算分隔符。
+        buf += (nx === '|') ? '|' : (ch + nx);
+        i++;
+        continue;
+      }
+      if (ch === '|') { cells.push(buf); buf = ''; continue; }
+      buf += ch;
+    }
+    cells.push(buf);
+    // 行尾的边框竖线会造出一个空的尾列，去掉它（等价于旧代码的 replace(/\|$/, '')）。
+    if (cells.length > 1 && /^\s*$/.test(cells[cells.length - 1])) cells.pop();
+    return cells;
   }
   function alignAttr(a) { return a ? ' style="text-align:' + a + '"' : ''; }
 
