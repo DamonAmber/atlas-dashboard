@@ -266,6 +266,17 @@ const fileIndex = new Map();     // absPath → 文件记录
 let indexSignature = null;       // 影响扫描结果的配置快照
 let indexBuilding = null;        // 构建中的 Promise（并发请求共用一次扫描）
 
+// 索引总文件数硬上限：扫描根被指到极大目录（整块磁盘 / 巨型 monorepo）时，
+// fileIndex 与前端 state.files 会随文件数线性膨胀，再优雅的渲染也扛不住。到达上限
+// 就停止收录并在 UI 明示——宁可只看前 N 篇，也不让内存 / 首屏被拖垮。这是"用户
+// 不可避免会加超大扫描根"时最后的兜底护栏。可用 ATLAS_MAX_INDEX_FILES 覆盖
+//（给"我知道我在做什么"的用户一条路，测试也据此用小上限验证截断行为）。
+const MAX_INDEX_FILES = (() => {
+  const n = parseInt(process.env.ATLAS_MAX_INDEX_FILES, 10);
+  return Number.isFinite(n) && n > 0 ? n : 50000;
+})();
+let indexTruncated = false;      // 上次构建 / 增量维护是否因撞上限而截断了收录
+
 // 只有这些配置会改变"磁盘上哪些文件属于索引"。docTypes 不在其中：它只影响读取过滤
 function currentIndexSignature() {
   return JSON.stringify([getScanRoots(), [...getIgnoreSet()].sort(), getMaxDepth()]);
@@ -301,6 +312,11 @@ async function indexUpsert(absPath) {
   if (!isAnyDocPath(absPath)) return null;
   const owner = ownerRoot(absPath);
   if (!owner) return null;
+  // 已到上限且是全新文件：不再收录（更新已在索引里的文件不受影响）。
+  if (fileIndex.size >= MAX_INDEX_FILES && !fileIndex.has(absPath)) {
+    indexTruncated = true;
+    return null;
+  }
   try {
     const stat = await fsp.stat(absPath);
     const rec = makeRecord(absPath, owner.root, owner.rootIndex, stat);
@@ -313,7 +329,7 @@ async function indexUpsert(absPath) {
 }
 function indexRemove(absPath) {
   fileIndex.delete(absPath);
-  contentCache.delete(absPath);
+  cacheDelete(absPath);
 }
 
 async function buildIndex() {
@@ -321,8 +337,10 @@ async function buildIndex() {
   const maxDepth = getMaxDepth();
   const roots = getScanRoots();
   const next = new Map();
+  indexTruncated = false;   // 本次重建重新判定
   for (let i = 0; i < roots.length; i++) {
     if (!fs.existsSync(roots[i])) continue;
+    if (next.size >= MAX_INDEX_FILES) { indexTruncated = true; break; }
     await walk(roots[i], roots[i], i, 0, next, ignore, maxDepth);
   }
   fileIndex.clear();
@@ -356,6 +374,7 @@ function invalidateFileIndex() {
 
 async function walk(currentDir, scanRoot, rootIndex, depth, out, ignore, maxDepth) {
   if (depth > maxDepth) return;
+  if (out.size >= MAX_INDEX_FILES) { indexTruncated = true; return; }   // 撞上限：停止收录
   let entries;
   try {
     entries = await fsp.readdir(currentDir, { withFileTypes: true });
@@ -363,6 +382,7 @@ async function walk(currentDir, scanRoot, rootIndex, depth, out, ignore, maxDept
     return;
   }
   for (const entry of entries) {
+    if (out.size >= MAX_INDEX_FILES) { indexTruncated = true; return; }
     if (entry.name.startsWith('.')) continue;
     if (ignore.has(entry.name)) continue;
     const full = path.join(currentDir, entry.name);
@@ -896,14 +916,61 @@ app.use('/raw', (req, res, next) => {
 //   lower = 同一份的小写副本（给 indexOf 匹配用）
 // 为什么两份都留：原来只存小写，snippet 也就只能是小写的，
 // 英文正文摘要看起来像坏了（"README" 显示成 "readme"）。
-// 代价是内存翻倍，但 LRU 上限 500 个文件，可接受。
+// 全文搜索的正文缓存。每条 { mtime, text, lower, usedAt, bytes }，text/lower
+// 两份都是 UTF-16 字符串（UTF-8 源文件在内存里会膨胀近一倍）。
+//
+// 过去只按"条数 500"淘汰，且淘汰写在 /api/search 循环【之后】——侧栏搜索不带
+// limit 时会先把【全部可见文件】读进缓存、循环跑完才裁剪。扫 ~/Documents 这种
+// 几千篇的目录，峰值 = N×(text+lower)，UTF-16 膨胀后能顶到数 GB，是服务进程
+// 内存被吃爆的主因。现在改成【按累计字节数】的硬预算：每次写入后立即 trim，
+// 无论一次搜索遍历多少文件，常驻正文永远 ≤ MAX_CACHE_BYTES（加当前处理的一个）。
 const contentCache = new Map();
+let contentCacheBytes = 0;                    // text+lower 的累计字节估算
 // 搜索索引单文件读取上限：超过只索引前这么多字节（见 getFileText）。
 const MAX_SEARCH_BYTES = 4 * 1024 * 1024;
+// 正文缓存总内存预算：超出即按最久未用淘汰，回落到 80% 才停（避免频繁 trim）。
+// 64MB 让连续搜索仍能命中热缓存，又把峰值从"随文件数无上限"压成一个常数。
+const MAX_CACHE_BYTES = 64 * 1024 * 1024;
+
+// UTF-16 每字符 2 字节。text 与 lower 各算一份（偏保守，宁可少缓存不超预算）。
+function entryBytes(entry) {
+  return ((entry.text ? entry.text.length : 0) + (entry.lower ? entry.lower.length : 0)) * 2;
+}
+// 统一写入：覆盖旧条目时先减去旧的字节数，维护 contentCacheBytes。
+function cacheSet(filePath, entry) {
+  const prev = contentCache.get(filePath);
+  if (prev) contentCacheBytes -= prev.bytes || 0;
+  entry.bytes = entryBytes(entry);
+  contentCacheBytes += entry.bytes;
+  contentCache.set(filePath, entry);
+}
+// 统一删除：维护 contentCacheBytes。
+function cacheDelete(filePath) {
+  const prev = contentCache.get(filePath);
+  if (!prev) return;
+  contentCacheBytes -= prev.bytes || 0;
+  contentCache.delete(filePath);
+}
+function cacheClear() {
+  contentCache.clear();
+  contentCacheBytes = 0;
+}
+// 超预算时按最久未访问（usedAt 小）淘汰，直到回落到 80% 预算内。刚写入 / 刚命中
+// 的条目 usedAt 最新、排在最后，不会被本次 trim 误删——一次搜索边读边淘汰安全。
+function trimContentCache() {
+  if (contentCacheBytes <= MAX_CACHE_BYTES) return;
+  const target = MAX_CACHE_BYTES * 0.8;
+  const byAge = [...contentCache.entries()].sort((a, b) => (a[1].usedAt || 0) - (b[1].usedAt || 0));
+  for (const [k, v] of byAge) {
+    if (contentCacheBytes <= target) break;
+    contentCacheBytes -= v.bytes || 0;
+    contentCache.delete(k);
+  }
+}
 
 // 文件集合发生结构性变化（配置改动）后调用：丢弃派生缓存 + 让文件索引重建
 function invalidateIndex() {
-  contentCache.clear();
+  cacheClear();
   invalidateFileIndex();
 }
 // 返回 { text, lower }：text 保留原始大小写，lower 用于匹配
@@ -957,7 +1024,10 @@ async function getFileText(filePath, mtime) {
     let lower = text.toLowerCase();
     if (lower.length !== text.length) text = lower;
     const entry = { mtime, text, lower, usedAt: Date.now() };
-    contentCache.set(filePath, entry);
+    cacheSet(filePath, entry);
+    // 立即按字节预算 trim：侧栏搜索会连续读很多文件，边读边淘汰才能压住峰值
+    // （刚写入的这条 usedAt 最新，不会被淘汰）。
+    trimContentCache();
     return entry;
   } catch {
     return { text: '', lower: '' };
@@ -1042,12 +1112,8 @@ app.get('/api/search', async (req, res) => {
       const count = countOccurrences(lower, terms[0]);
       matches.push({ path: f.path, snippet, count });
     }
-    // GC：缓存大于 500 个文件时按最久未访问淘汰一半
-    // （原来按 mtime 排序淘汰，等于优先丢掉最稳定、最该留着的老文件）
-    if (contentCache.size > 500) {
-      const all = [...contentCache.entries()].sort((a, b) => (a[1].usedAt || 0) - (b[1].usedAt || 0));
-      for (let i = 0; i < all.length / 2; i++) contentCache.delete(all[i][0]);
-    }
+    // 缓存淘汰已在 getFileText 里按字节预算即时完成（trimContentCache），
+    // 不再需要循环结束后的批量裁剪。
     res.json({ matches, terms, truncated });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1166,6 +1232,10 @@ app.get('/api/state', async (_req, res) => {
       // 已被用户显式信任的 HTML（其余在沙箱里预览）
       trusted: Object.keys(store.trusted || {}).filter(p => allPaths.has(p)),
       trustAllHtml: !!config.trustAllHtml,
+      // 索引护栏状态：撞到 MAX_INDEX_FILES 上限后停止收录，前端据此明示"部分文档未纳入"
+      indexTruncated,
+      indexCount: fileIndex.size,
+      maxIndexFiles: MAX_INDEX_FILES,
     });
   } catch (e) {
     console.error(e);
@@ -2709,6 +2779,46 @@ app.post('/api/self-upgrade', (req, res) => {
   req.on('close', () => {
     // 不重置 _upgradeInFlight——npm 还在跑
   });
+});
+
+// 估算某个候选扫描根下的文档数量——添加扫描根前给"这目录很大"的提示用。
+// 有条数上限（CAP）与时间预算（DEADLINE）双重刹车：保证快速返回，绝不会对着整块
+// 磁盘干跑。口径与真实索引一致（isAnyDocPath 数全部文档类型、复用 ignore / maxDepth）。
+app.get('/api/estimate-scan', async (req, res) => {
+  const raw = req.query.path;
+  if (!raw || typeof raw !== 'string' || !raw.trim()) {
+    return res.status(400).json({ error: '缺少 path' });
+  }
+  const dir = path.resolve(userPaths.expand(raw));
+  let stat;
+  try { stat = await fsp.stat(dir); } catch { return res.status(404).json({ error: '路径不存在' }); }
+  if (!stat.isDirectory()) return res.status(400).json({ error: '不是目录' });
+
+  const ignore = getIgnoreSet();
+  const maxDepth = getMaxDepth();
+  const CAP = 20000;                     // 数到这就足够判定"很大"了，不必数完
+  const DEADLINE = Date.now() + 1500;    // 最多跑 1.5s
+  let count = 0;
+  let capped = false;
+  let timedOut = false;
+
+  async function walkEst(cur, depth) {
+    if (count >= CAP) { capped = true; return; }
+    if (Date.now() > DEADLINE) { timedOut = true; return; }
+    if (depth > maxDepth) return;
+    let entries;
+    try { entries = await fsp.readdir(cur, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (count >= CAP) { capped = true; return; }
+      if (Date.now() > DEADLINE) { timedOut = true; return; }
+      if (e.name.startsWith('.')) continue;
+      if (ignore.has(e.name)) continue;
+      if (e.isDirectory()) await walkEst(path.join(cur, e.name), depth + 1);
+      else if (e.isFile() && isAnyDocPath(e.name)) count++;
+    }
+  }
+  await walkEst(dir, 0);
+  res.json({ count, capped, timedOut, maxIndexFiles: MAX_INDEX_FILES });
 });
 
 // 目录浏览：让用户在 Dashboard 里图形化选择扫描根，不用手输绝对路径。

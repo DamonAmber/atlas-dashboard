@@ -1458,6 +1458,7 @@ body.no-active-doc .tb-sep { display: none; }
   font-variant-numeric: tabular-nums;
 }
 .footer-stats .stat-unread { color: var(--unread); font-weight: 600; }
+.footer-stats .stat-warn { color: var(--warn); font-weight: 600; cursor: help; }
 .footer-kbd { flex: none; opacity: .8; }
 
 /* main：margin-left 跟随 sidebar */

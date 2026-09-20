@@ -772,19 +772,48 @@ els.btnToggleSidebar.addEventListener('click', () => toggleSidebar());
 
 // ---------- 工具 ----------
 // ---------- 侧栏统计 ----------
+// 数当前视图数据模型里"会显示出来"的文件数（底栏「命中 / 总数」计数用）。
+// 折叠分组懒渲染后不能再数 DOM。用缓存的 state.dirTree / state.tree，不重建；
+// nodeMatches 与 render() 的筛选口径完全一致（含未读 / 标签 / 搜索三类）。
+function countVisibleTreeFiles() {
+  const roots = state.viewMode === 'tree' ? (state.dirTree || []) : (state.tree || []);
+  let n = 0;
+  const walk = (nodes) => {
+    for (const node of nodes) {
+      if (node.type === 'file') {
+        if (nodeMatches(node)) n++;
+      } else if (node.type === 'folder' && Array.isArray(node.children)) {
+        walk(node.children);
+      }
+    }
+  };
+  walk(roots);
+  return n;
+}
+
 // 底栏一行说清三件事：一共扫到多少篇、其中多少未读、当前树里正显示多少篇。
 // 原来这行挤在 brand 下面（brand-sub），320px 侧栏里总是被截成「804 个文档 · 377 未…」。
 function updateStats() {
   const total = Object.keys(state.files).length;
   const unread = Object.values(state.files).filter(f => f.unread).length;
   if (els.stats) {
-    els.stats.innerHTML = `${total} 篇文档`
+    let html = `${total} 篇文档`
       + (unread > 0 ? ` · <span class="stat-unread">${unread} 未读</span>` : ' · 全部已读');
-    els.stats.title = `共 ${total} 篇文档，其中 ${unread} 篇未读`;
+    // 撞到收录上限：常驻一个警示标记，hover 说清原因与建议
+    if (state.indexTruncated) {
+      const cap = (state.maxIndexFiles || 0).toLocaleString();
+      html += ` · <span class="stat-warn" title="文档数量已达收录上限 ${cap} 篇，超出的未纳入。建议收窄扫描根或在设置里增加忽略项。">⚠ 已达上限</span>`;
+    }
+    els.stats.innerHTML = html;
+    els.stats.title = state.indexTruncated
+      ? `已达收录上限：只纳入了约前 ${total.toLocaleString()} 篇（上限 ${(state.maxIndexFiles || 0).toLocaleString()}）。建议收窄扫描根或增加忽略项。`
+      : `共 ${total} 篇文档，其中 ${unread} 篇未读`;
   }
   if (els.treeCount) {
-    const shown = els.tree ? els.tree.querySelectorAll('.file').length : 0;
-    // 有筛选时显示「命中 / 全部」，让人知道自己正看着一个子集
+    // 从数据模型算"当前树里显示多少篇"，不能再数 DOM 里的 .file——折叠分组懒渲染后
+    // 它们的文件行根本不在 DOM 里，数 DOM 会严重少算、把未筛选也显示成 "N/总数"。
+    // 未筛选时显示的就是全部；筛选时数据模型里通过筛选的文件数即命中数。
+    const shown = hasActiveFilter() ? countVisibleTreeFiles() : total;
     els.treeCount.textContent = shown === total ? String(total) : `${shown}/${total}`;
     els.treeCount.title = shown === total
       ? `${total} 篇文档`
@@ -1043,6 +1072,20 @@ let stateRetryDelay = 1000;
 let stateFailed = false;
 let stateInFlight = null;
 
+// /api/state 响应体的轻量签名。/api/state 被 60s 定时轮询 + 每个文件事件(SSE)
+// 频繁触发，但多数时候数据一字未变，却仍会 innerHTML='' 重建整棵树 —— 大扫描根
+// (上万文件)下每次重建同步创建数千 DOM 节点 + 数万监听器，是持续掉帧的来源。
+// 用完整响应体做签名：逐字节相同 ⇒ 渲染结果必然相同(不存在"漏了某个字段"的风险)，
+// 直接跳过整树重渲染。数据真变了签名就不同，照常重建。
+let lastStateSig = null;
+let indexTruncationNotified = false;   // 收录上限提示本会话只弹一次
+function stateSignature(text) {
+  // djb2：对几百 KB 文本足够快，碰撞最坏也只是多重建一次，无正确性影响
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  return text.length + ':' + h;
+}
+
 async function fetchState() {
   if (stateRetryTimer) { clearTimeout(stateRetryTimer); stateRetryTimer = null; }
   setSaveStatus('loading');
@@ -1066,7 +1109,8 @@ async function fetchState() {
   try {
     const res = await fetch('/api/state', { signal: ctrl.signal });
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
+    const bodyText = await res.text();
+    const data = JSON.parse(bodyText);
     stateRetryDelay = 1000;
     stateFailed = false;
     // 两种情况下不能拿服务端的树覆盖内存，其余字段照常更新：
@@ -1091,7 +1135,27 @@ async function fetchState() {
     state.archivedProjects = Array.isArray(data.archivedProjects) ? data.archivedProjects : [];
     state.trusted = new Set(Array.isArray(data.trusted) ? data.trusted : []);
     state.trustAllHtml = !!data.trustAllHtml;
+    // 索引护栏：撞到收录上限时，底栏常驻一个「已达上限」标记（见 updateStats），
+    // 本会话首次出现再额外弹一次 toast 说清原因与建议。
+    state.indexTruncated = !!data.indexTruncated;
+    state.indexCount = data.indexCount || 0;
+    state.maxIndexFiles = data.maxIndexFiles || 0;
+    if (state.indexTruncated && !indexTruncationNotified) {
+      indexTruncationNotified = true;
+      showToast({
+        kind: 'info',
+        text: '文档数量已达收录上限',
+        secondary: `已收录约 ${state.indexCount.toLocaleString()} 篇，超出的暂未纳入。建议把扫描根收窄到更具体的目录，或在设置里增加"忽略的目录名"。`,
+        duration: 6500,
+      });
+    }
     setSaveStatus('idle');
+    // 响应体与上次逐字节相同 → 树/首页/侧栏渲染结果必然一致，跳过整树重建。
+    // filter/search/collapsed 的变化走各自的代码路径（会各自 render），不经过
+    // 这里；fetchState 本身不改动这些状态，所以数据不变时跳过是安全的。
+    const sig = stateSignature(bodyText);
+    const unchanged = sig === lastStateSig;
+    lastStateSig = sig;
     // 这次扫描后消失的文档（被归档 / 磁盘上被删 / 改了扫描类型）：把对应的 Tab 关掉。
     // 不做的话那个 Tab 的帧会一直挂着一篇已经不在看板里的文档，点刷新 / 分享 / 导出
     // 全是 404，而侧栏里已经找不到它了。若关掉的是活动 Tab，pruneDeadTabs 会自动
@@ -1099,13 +1163,17 @@ async function fetchState() {
     pruneDeadTabs();
     // 首次拿到文件列表后，恢复上次打开的 Tab（只此一次）
     restoreTabs();
-    renderTagBar();
-    render();
-    renderRecent();
-    renderFavorites();
-    updateStats();
-    renderHome();
-    updateFavButton();
+    // 数据无变化则跳过所有重渲染（大树下这是持续掉帧的主因）。首次(lastStateSig
+    // 曾为 null，unchanged=false)与每次真实变化都照常重建。
+    if (!unchanged) {
+      renderTagBar();
+      render();
+      renderRecent();
+      renderFavorites();
+      updateStats();
+      renderHome();
+      updateFavButton();
+    }
     // 对比面板开着的时候，如果当前文件在磁盘上又被改了，自动刷新差异
     if (diffState.open && diffState.path) {
       const f = state.files[diffState.path];
@@ -1117,6 +1185,10 @@ async function fetchState() {
     console.error(e);
     setSaveStatus('error');
     stateFailed = true;
+    // 作废渲染签名：错误态下 stats 被改成了"加载超时…"，并未正常渲染。若不作废，
+    // 重试成功时数据可能与失败前一致(unchanged=true)从而跳过重渲染，stats 会停在
+    // 错误文案上。置空后，恢复后的第一次成功必然重渲染，把 UI 拉回正常态。
+    lastStateSig = null;
     const aborted = e && e.name === 'AbortError';
     els.stats.textContent = aborted
       ? `加载超时，${Math.round(stateRetryDelay / 1000)}s 后重试…`
@@ -1712,6 +1784,18 @@ function renderNode(node) {
   return document.createDocumentFragment();
 }
 
+// 把一个 folder 的子节点（经筛选 + 排序）渲染进给定容器。renderFolder 的正常渲染
+// 与 ensureFolderChildrenRendered 的懒展开都走这里，保证两条路径的筛选/排序口径一致。
+function fillFolderChildren(childrenEl, folder) {
+  const visibleChildren = sortChildren(folder.children.filter(c => {
+    if (!hasActiveFilter()) return true;
+    return nodeMatches(c);
+  }), state.sortMode);
+  for (const c of visibleChildren) {
+    childrenEl.appendChild(renderNode(c));
+  }
+}
+
 function renderFolder(folder) {
   // 筛选生效时强制展开：能活到这一步的分组本身就是"含命中项"的，
   // 再让用户手动一个个点开是反直觉的 —— 折叠着的分组里的命中结果直接看不见，
@@ -1727,10 +1811,6 @@ function renderFolder(folder) {
   folderEl.dataset.folderId = folder.id;
 
   const counts = countDescendants(folder);
-  const visibleChildren = sortChildren(folder.children.filter(c => {
-    if (!hasActiveFilter()) return true;
-    return nodeMatches(c);
-  }), state.sortMode);
 
   const header = document.createElement('div');
   header.className = 'folder-header';
@@ -1754,8 +1834,16 @@ function renderFolder(folder) {
   const childrenEl = document.createElement('div');
   childrenEl.className = 'folder-children';
   childrenEl.dataset.folderId = folder.id;
-  for (const c of visibleChildren) {
-    childrenEl.appendChild(renderNode(c));
+  // 折叠且非筛选态：懒渲染——只留空容器并标 data-lazy，展开时(toggleFolder /
+  // hover-expand)才真正填充子节点。大扫描根的常态是绝大多数分组折叠着，这样每次
+  // 整树重建只创建"展开部分"的 DOM，而不是把成千上万个文件行全铺进来——那正是大树
+  // 卡顿与高 DOM 内存的直接来源。筛选时 isCollapsed 被强制为 false（见上方），
+  // 走正常渲染以便看到命中项；拖拽读回树时对 data-lazy 的分组直接用数据模型的
+  // 原样子节点（见 readContainer），绝不会因为"没渲染"而丢掉分组内的文件。
+  if (isCollapsed) {
+    childrenEl.dataset.lazy = '1';
+  } else {
+    fillFolderChildren(childrenEl, folder);
   }
   folderEl.appendChild(childrenEl);
 
@@ -2113,8 +2201,41 @@ function toggleFolder(id) {
   else state.collapsed.add(id);
   saveCollapsed();
   const el = els.tree.querySelector(`.folder[data-folder-id="${id}"]`);
-  if (el) animateFolderChildren(el, willExpand);
+  if (el) {
+    // 懒渲染的分组第一次展开时，先把子节点真正建出来，animateFolderChildren 才能
+    // 量到真实高度、Sortable 也才有东西可挂。
+    if (willExpand) {
+      const rendered = ensureFolderChildrenRendered(el);
+      // 新渲染出的子容器（含子分组的空容器）需要挂上 Sortable 才能作为拖放目标。
+      // 这是用户点击展开（非拖拽途中），initSortables 全量重建是安全的；目录视图
+      // 只读、render 已 destroySortables，不挂。
+      if (rendered && state.viewMode !== 'tree') initSortables();
+    }
+    animateFolderChildren(el, willExpand);
+  }
   updateCollapseAllBtn();
+}
+
+// 在当前视图的数据源里按 id 找 folder 节点（分组视图 = state.tree，目录视图 = state.dirTree）。
+function findFolderNode(id) {
+  const roots = state.viewMode === 'tree' ? (state.dirTree || []) : (state.tree || []);
+  return findFolderById(roots, id);
+}
+
+// 懒渲染兑现：若该 folder 的子容器还是 data-lazy 空壳，就用数据模型把子节点填出来。
+// 展开的三条路径（toggleFolder / hover-to-expand / 打开文件定位）都先过这里。
+// 返回是否真的渲染了（已渲染过则返回 false）。
+function ensureFolderChildrenRendered(folderEl) {
+  if (!folderEl) return false;
+  const childrenEl = folderEl.querySelector(':scope > .folder-children');
+  if (!childrenEl || childrenEl.dataset.lazy !== '1') return false;
+  const folder = findFolderNode(folderEl.dataset.folderId);
+  delete childrenEl.dataset.lazy;
+  if (folder) fillFolderChildren(childrenEl, folder);
+  // 当前文档若正好在这个刚展开的分组里，重标一次高亮 / 祖先路径引导线
+  // （全量渲染时它在懒容器里没被建出来，markSidebarActive 当时找不到它）。
+  markSidebarActive(state.activeFilePath);
+  return true;
 }
 
 // 树里所有分组的 id（含子分组）
@@ -2530,6 +2651,10 @@ document.addEventListener('mousemove', (e) => {
       if (state.collapsed.has(folderId)) {
         state.collapsed.delete(folderId);
         saveCollapsed();
+        // 先兑现懒渲染再显示：这样展开后立刻能看到子节点。此处发生在拖拽途中，
+        // 不调 initSortables（会 destroy 掉正在拖的实例）；而这个分组自己的子容器
+        // 在全量渲染时就已挂过 Sortable（当时是空的 data-lazy 容器），拖入它照样生效。
+        ensureFolderChildrenRendered(folderEl);
         folderEl.classList.remove('collapsed');
         updateCollapseAllBtn();
       }
@@ -2552,12 +2677,21 @@ function readContainer(containerEl) {
       const id = child.dataset.folderId;
       const original = findFolderById(state.tree, id);
       const childrenEl = child.querySelector('.folder-children');
+      // 折叠懒渲染的分组：子节点从没建进 DOM（data-lazy 空壳），绝不能读空 DOM——那会
+      // 把分组里的文件全丢掉、拖一次就写坏 store.json。它是折叠的、用户碰不到里面的
+      // 内容，子树与数据模型里的原样完全一致，直接取原节点的 children。
+      let children;
+      if (childrenEl && childrenEl.dataset.lazy === '1') {
+        children = original && Array.isArray(original.children) ? original.children : [];
+      } else {
+        children = childrenEl ? readContainer(childrenEl) : [];
+      }
       const node = {
         id,
         type: 'folder',
         name: original ? original.name : child.querySelector('.folder-name').textContent.trim(),
         collapsed: state.collapsed.has(id),
-        children: childrenEl ? readContainer(childrenEl) : [],
+        children,
       };
       // autoFor 必须原样带回去：它是服务端做自动归类时的身份键
       // （见 server.js 的 autoFolderKey）。这里漏掉的话，一次拖拽就会把它从
@@ -2619,9 +2753,17 @@ function createPreviewFrame() {
 // 后台帧预算：同时最多保留这么多个"已加载"的帧。超出后把最久未激活的后台帧
 // 休眠掉（卸载文档、只留空 iframe），把它占的内存（文档 DOM + 各自的 mermaid /
 // katex / markdown 运行时）还给系统。再切回时按懒加载路径重载并恢复滚动位置。
-// 设得足够大：常规使用（十几个 tab）完全不触发休眠，切来切去帧不重载、状态全留住；
-// 只有真堆到很多 tab 时才回收，避免"100 个 tab = 100 份常驻文档运行时"把内存吃爆。
-const MAX_LIVE_FRAMES = 12;
+//
+// 取 8：每个已加载帧是独立文档，含图表 / 公式的那几篇各自带一份 mermaid(3.5MB)
+// + katex 运行时并实例化大量 SVG 节点，12 份并存时渲染进程内存可达数 GB（活动
+// 监视器里看到的高占用主要来自这里）。8 个对常规使用（来回切几篇）依旧不重载、
+// 状态全留住，又把"重量级运行时"的并存上限显著压低。
+const MAX_LIVE_FRAMES = 8;
+
+// 打开的 Tab 总数上限。每个 Tab 即便休眠也占一个空 iframe + 标签栏 DOM，无上限地
+// 开会随使用缓慢堆积。超过就自动关掉最久未激活的（非当前、非编辑中）Tab。设得足够
+// 宽（远大于常规使用量），只在极端堆叠时兜底，正常使用完全感知不到。
+const MAX_OPEN_TABS = 24;
 
 // 读某个帧当前的滚动百分比（跨域 / 未就绪时返回 null）。
 function frameScrollPct(frame) {
@@ -2660,6 +2802,22 @@ function enforceFrameBudget() {
     if (over <= 0) break;
     sleepFrame(t);
     over--;
+  }
+}
+
+// 保持"打开的 Tab 总数 ≤ MAX_OPEN_TABS"：超出时关掉最久未激活的后台 Tab。
+// 当前活动 Tab、正在编辑的 Tab 永不自动关。只在用户新开 Tab（openInTab）时触发，
+// 会话恢复（restoreTabs 一次性还原上次开的那些）不受影响。
+function enforceTabBudget() {
+  if (state.tabs.length <= MAX_OPEN_TABS) return;
+  const closable = state.tabs
+    .filter(t => t.id !== state.activeTabId && !(editState.active && editState.path === t.path))
+    .sort((a, b) => (a.lastActiveAt || 0) - (b.lastActiveAt || 0));   // 最久未用在前
+  let over = state.tabs.length - MAX_OPEN_TABS;
+  for (const t of closable) {
+    if (over <= 0) break;
+    const idx = state.tabs.findIndex(x => x.id === t.id);
+    if (idx >= 0) { removeTab(idx); over--; }
   }
 }
 
@@ -2724,6 +2882,7 @@ function openInTab(path) {
     state.tabs.push(tab);
   }
   activateTab(tab.id);
+  enforceTabBudget();   // 打开新 Tab 后若超过总数上限，关掉最久未用的后台 Tab
 }
 
 // 激活某 Tab：显隐帧、切 els.preview、同步 activeFilePath、更新联动 UI。
@@ -7151,6 +7310,31 @@ function renderRootList(roots) {
   });
 }
 
+// 添加扫描根前的体量护栏：估算目录下的文档数，很大就先确认。估算失败 / 目录不大
+// 都直接放行（返回 true），不打扰正常操作。阈值 5000：远低于索引硬上限，够早地
+// 拦住"手滑把整块磁盘 / home 加进来"。
+const WARN_SCAN_FILES = 5000;
+async function confirmLargeScanRoot(dir) {
+  let est = null;
+  try {
+    const r = await fetch('/api/estimate-scan?path=' + encodeURIComponent(dir));
+    if (r.ok) est = await r.json();
+  } catch {}
+  if (!est || typeof est.count !== 'number') return true;   // 估算不出来就不拦
+  const big = est.capped || est.count >= WARN_SCAN_FILES;
+  if (!big) return true;
+  const approx = est.capped ? `超过 ${est.count.toLocaleString()}` : `约 ${est.count.toLocaleString()}`;
+  const cap = (est.maxIndexFiles || 50000).toLocaleString();
+  return await showConfirm({
+    title: '这个目录很大',
+    body: `「${dir}」下${approx} 篇可扫描文档。\n\n`
+      + `扫描和监听这么大的目录会更慢、更占内存，且 Atlas 最多收录 ${cap} 篇，超出的不会纳入。\n\n`
+      + `建议收窄到更具体的子目录，或在设置里补充"忽略的目录名"。仍要添加吗？`,
+    confirmText: '仍要添加',
+    danger: true,
+  });
+}
+
 els.rootAddBtn.addEventListener('click', async () => {
   const v = els.rootInput.value.trim();
   if (!v) return;
@@ -7161,6 +7345,7 @@ els.rootAddBtn.addEventListener('click', async () => {
     els.rootInput.value = '';
     return;
   }
+  if (!(await confirmLargeScanRoot(v))) return;
   const next = [...cfg.scanRoots, v];
   const ok = await updateConfig({ scanRoots: next });
   if (ok) {

@@ -353,7 +353,9 @@ const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
     localStorage.setItem('atlas:collapsed', JSON.stringify(ids));
   });
   await page.reload();
-  await page.waitForSelector('.tree .file', { state: 'attached' });
+  // 折叠分组懒渲染后，全部折叠时 DOM 里一个 .file 都没有（正是省内存的效果）——
+  // 就绪信号改等 .folder（分组头始终渲染），不能再等 .file
+  await page.waitForSelector('.tree .folder', { state: 'attached' });
   await page.waitForTimeout(900);
 
   const vis = () => page.evaluate(() => ({
