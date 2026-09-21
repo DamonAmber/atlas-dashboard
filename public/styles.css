@@ -874,7 +874,9 @@ body.no-active-doc .tb-sep { display: none; }
    * 重排子树内部成百上千行，深目录树掉帧显著减轻。只在 .animating 期间生效，
    * 平时（无此类）不裁剪，键盘焦点环照常可见（overflow 也仅此期间裁剪）。 */
   contain: layout paint;
-  will-change: height;
+  /* 刻意不设 will-change: height —— height 不是可合成属性，动画每帧都要走布局，
+   * will-change 帮不上忙，只会把这个容器提成 GPU 合成层、白占一份光栅内存（大子树上
+   * 这份浪费不小）。JS 侧同样不再设置（见 animateFolderChildren）。 */
   transition: height var(--dur) var(--ease-out);
 }
 /* 目录视图（只读镜像、不挂 SortableJS）里给每个 .folder 加 layout containment：
@@ -887,7 +889,16 @@ body.no-active-doc .tb-sep { display: none; }
  * contain-intrinsic-size 占位、跳过渲染——等于原生的列表虚拟化。实测展开大目录的同步
  * 阻塞从 ~85ms 降到 <1ms、0 掉帧，滚动也更轻。--h-row=28px 作为文件行高度估值，
  * auto 关键字会在首次渲染后记住真实高度、自我校正，滚动条不跳。
- * 只作用于目录视图：分组视图要拖拽重排，content-visibility 会影响命中判定，故不加。 */
+ * 只作用于目录视图：分组视图要拖拽重排，content-visibility 会影响命中判定，故不加。
+ *
+ * 【实测记录】曾试过把 cv 也加到分组视图来治展开卡顿，结论是不可行，别再试：
+ *   ① 没有收益 —— 400 子项分组、8 次配对采样，同步阻塞 2/8 占优、整体 -5%，在噪声内。
+ *      因为展开的主导成本是 JS 侧建 DOM（约占 75~80%），不是 CSS 能省掉的布局/绘制。
+ *   ② 有害 —— cv 让 .folder-children 的 scrollHeight 只报 contain-intrinsic-size 占位值
+ *      （400 子项实测只报 40px），于是 animateFolderChildren 里"大子树走即时展开"的
+ *      分流判断（estimate > ANIMATE_MAX_PX）被绕过，几百行的分组改去跑 height 过渡，
+ *      而过渡起点又提交不了，只能等 400ms 兜底超时才跳开 —— 就是「点了之后卡一会儿
+ *      才啪一下打开」。目录视图本来就默认全展开、极少走这条分流，所以只在那边成立。 */
 .tree.tree-view-mode .folder-children { content-visibility: auto; contain-intrinsic-size: auto 40px; }
 .tree.tree-view-mode .file { content-visibility: auto; contain-intrinsic-size: auto 28px; }
 /* 展开时子项依次淡入并轻微上移，给折叠展开一点"空间连续性"。
