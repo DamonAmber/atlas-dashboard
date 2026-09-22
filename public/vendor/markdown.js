@@ -156,8 +156,127 @@
       + (display ? 'div' : 'span') + '>';
   }
 
+  // 可被反斜杠转义的字符：CommonMark 规定为全部 ASCII 标点，其它字符前的反斜杠
+  // 是字面反斜杠（`\d` 还是 `\d`），所以这里必须逐个列出而不能写成 `\\(.)`。
+  var ESCAPABLE_RE = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g;
+
+  // ---------- 强调（* _ 的分隔符匹配）----------
+  // 判断「分隔符能不能开 / 能不能闭」要看它左右相邻字符是空白、标点还是普通字，
+  // 而中文正文里紧贴强调的往往是全角标点（`…确认：**` 的 `：`）。只认 ASCII 标点
+  // 的话这类结尾判不成 right-flanking，整段加粗就会漏出一对字面 `**`。
+  // 这里按 Unicode 标点的常用区段近似（不用 \p{P}：那是 ES2018 语法，
+  // 本文件要兼容老浏览器）。全角空格 U+3000 归 \s，所以标点区段从 U+3001 起。
+  var PUNCT_RE = new RegExp('[!-\\/:-@\\[-`{-~'
+    + '\\u00a1\\u00a7\\u00ab\\u00b6\\u00b7\\u00bb\\u00bf'
+    + '\\u2010-\\u2027\\u2030-\\u205e\\u2e00-\\u2e7f'
+    + '\\u3001-\\u3020\\u3030\\u303d\\ufe10-\\ufe19\\ufe30-\\ufe6f'
+    + '\\uff01-\\uff0f\\uff1a-\\uff20\\uff3b-\\uff40\\uff5b-\\uff65]');
+
+  // 一串 * / _ 能不能开、能不能闭，取决于紧邻的左右字符是空白、标点还是普通字。
+  // 渲染（要不要配成强调）和反向序列化（要不要加反斜杠拦住它被配成强调）共用这一份：
+  // 两边判断不一致，就会出现「渲染成字面星号、回写却不转义」这类往返漏洞。
+  // before / after 为空串表示行首 / 行尾，按空白处理。
+  function delimFlags(ch, before, after) {
+    var wsB = before === '' || /\s/.test(before);
+    var wsA = after === '' || /\s/.test(after);
+    var pB = !wsB && PUNCT_RE.test(before);
+    var pA = !wsA && PUNCT_RE.test(after);
+    var left = !wsA && (!pA || wsB || pB);     // left-flanking：能贴住右边的内容
+    var right = !wsB && (!pB || wsA || pA);    // right-flanking：能贴住左边的内容
+    // `_` 比 `*` 严：词内的下划线不成强调，否则 snake_case_name 会变斜体
+    var open = ch === '*' ? left : (left && (!right || pB));
+    var close = ch === '*' ? right : (right && (!left || pA));
+    return { open: open, close: close, both: open && close };
+  }
+
+  // 用分隔符栈而不是正则：嵌套的加粗（`**外 **内** 外**`）靠非贪婪正则是解不出来的
+  // ——它会把第一个 `**` 和第二个 `**` 配成一对，于是前半句加粗、后面留一串裸 `**`
+  // 给读者看。这里照 CommonMark 的 flanking 规则从左往右找 closer、再往左回溯最近
+  // 的 opener，因此 `**a **b** c**` 会正确地嵌套成 strong 套 strong。
+  function emphasis(src) {
+    var s = String(src == null ? '' : src);
+    if (s.indexOf('*') < 0 && s.indexOf('_') < 0) return s;
+
+    // ① 切 token：HTML 标签整块跳过（此前几步已生成 <a> / <img>，标签属性里的
+    //    下划线不是强调标记）。标签边界对 flanking 判定按空白处理，这样
+    //    `[_斜体_](u)` 的下划线仍能成对，而不会被当成 intraword 的 snake_case。
+    var toks = [], buf = '', i = 0, n = s.length;
+    var flush = function () { if (buf) { toks.push({ t: 's', v: buf }); buf = ''; } };
+    while (i < n) {
+      var ch = s.charAt(i);
+      if (ch === '<') {
+        var gt = s.indexOf('>', i);
+        // 字面 '<' 只可能来自本渲染器生成的标签：用户写的已被 escapeHtml 变成 &lt;
+        if (gt > i) { flush(); toks.push({ t: 's', v: s.slice(i, gt + 1) }); i = gt + 1; continue; }
+      }
+      if (ch === '*' || ch === '_') {
+        var j = i;
+        while (j < n && s.charAt(j) === ch) j++;
+        flush();
+        var before = i > 0 ? s.charAt(i - 1) : '';
+        var after = j < n ? s.charAt(j) : '';
+        if (before === '>') before = ' ';
+        if (after === '<') after = ' ';
+        var f = delimFlags(ch, before, after);
+        toks.push({ t: 'd', ch: ch, n: j - i, orig: j - i, open: f.open, close: f.close, both: f.both });
+        i = j;
+        continue;
+      }
+      buf += ch;
+      i++;
+    }
+    flush();
+
+    // ② 从左往右找 closer，往左回溯最近可用的 opener
+    var ci = 0;
+    while (ci < toks.length) {
+      var closer = toks[ci];
+      if (!(closer.t === 'd' && closer.close && closer.n > 0)) { ci++; continue; }
+      var oi = ci - 1, opener = null;
+      while (oi >= 0) {
+        var cand = toks[oi];
+        if (cand.t === 'd' && cand.ch === closer.ch && cand.open && cand.n > 0) {
+          // CommonMark 的 "rule of 3"：一端既能开又能闭时，长度和被 3 整除的组合
+          // 不许配对（除非两端长度各自都被 3 整除）。少了这条，`*a**b*` 会配错。
+          var blocked = (cand.both || closer.both)
+            && (cand.orig + closer.orig) % 3 === 0
+            && !(cand.orig % 3 === 0 && closer.orig % 3 === 0);
+          if (!blocked) { opener = cand; break; }
+        }
+        oi--;
+      }
+      // 配不上的 closer 留在原地当字面字符，它也可能反过来给后文当 opener
+      if (!opener) { ci++; continue; }
+
+      var use = (opener.n >= 2 && closer.n >= 2) ? 2 : 1;
+      var node = { t: 'node', tag: use === 2 ? 'strong' : 'em', kids: toks.slice(oi + 1, ci) };
+      opener.n -= use;
+      closer.n -= use;
+      var head = toks.slice(0, oi + 1);
+      var tail = toks.slice(ci);
+      if (closer.n === 0) tail = tail.slice(1);   // 用尽的分隔符不再输出
+      if (opener.n === 0) head = head.slice(0, head.length - 1);
+      toks = head.concat([node], tail);
+      // 还有剩余的 closer 仍在 head.length + 1 处，下一轮继续拿它配对
+      ci = head.length + 1;
+    }
+
+    return emphasisOut(toks);
+  }
+  function emphasisOut(list) {
+    var r = '';
+    for (var k = 0; k < list.length; k++) {
+      var t = list[k];
+      if (t.t === 'node') r += '<' + t.tag + '>' + emphasisOut(t.kids) + '</' + t.tag + '>';
+      else if (t.t === 'd') r += new Array(t.n + 1).join(t.ch);
+      else r += t.v;
+    }
+    return r;
+  }
+
   // ---------- 行内渲染 ----------
   function inline(text) {
+    var escapes = [];
     // 1) 先保护行内代码 `code`，避免其内部的 * _ [ ] 被当成标记
     var codes = [];
     text = String(text == null ? '' : text).replace(/`([^`]+?)`/g, function (m, code) {
@@ -185,6 +304,17 @@
     // 它出现在句子里，强行断行排版会更难看。行首独占的 $$ 早已被块级规则接走。
     text = text.replace(/\$\$([^\n]+?)\$\$/g, function (m, tex) { return holdMath(tex, false); });
     text = text.replace(/\$(\S(?:[^$\n]*?[^\s$])?)\$(?!\d)/g, function (m, tex) { return holdMath(tex, false); });
+
+    // 1.8) 反斜杠转义 `\*` `\_` `\[` …（CommonMark：反斜杠 + ASCII 标点 = 那个字面字符）。
+    // 必须排在图片 / 链接 / 强调之前，否则 `\*` 会原样留下一个反斜杠给读者看，
+    // `\[不是链接\]` 也会被当成链接。排在代码与公式保护之后：`` `\*` `` 和
+    // `$\{x\}$` 里的反斜杠是内容而不是转义。
+    // 被转义掉的字符存进 escapes 里，等所有标记规则跑完再还原成字面字符 ——
+    // 中途放回去的话，`\*` 又会重新参与强调匹配。
+    text = text.replace(ESCAPABLE_RE, function (m, ch) {
+      escapes.push(escapeHtml(ch));
+      return '\u0000E' + (escapes.length - 1) + '\u0000';
+    });
 
     // 2) 转义（此后 < > & " ' 已安全；* _ ` [ ] ( ) 保留用于标记匹配）
     text = escapeHtml(text);
@@ -214,16 +344,15 @@
     });
 
     // 6) 强调
-    text = text.replace(/\*\*([^\s*][\s\S]*?)\*\*/g, '<strong>$1</strong>');
-    text = text.replace(/__([^\s_][\s\S]*?)__/g, '<strong>$1</strong>');
-    text = text.replace(/(^|[^*])\*([^\s*][\s\S]*?)\*/g, '$1<em>$2</em>');
-    text = text.replace(/(^|[^\w_])_([^\s_][\s\S]*?)_/g, '$1<em>$2</em>');
+    text = emphasis(text);
     text = text.replace(/~~([\s\S]+?)~~/g, '<del>$1</del>');
 
     // 7) 还原行内数学与行内代码（数学先还原：它的 HTML 里不含占位符，顺序无害，
     //    但放在代码之前能保证两类占位符都不会被对方的正则误伤）
     text = text.replace(/\u0000M(\d+)\u0000/g, function (m, i) { return maths[+i]; });
     text = text.replace(/\u0000C(\d+)\u0000/g, function (m, i) { return codes[+i]; });
+    // 反斜杠转义最后还原：此前所有标记规则都跑完了，放回去的 * _ [ 只会被当字面字符。
+    text = text.replace(/\u0000E(\d+)\u0000/g, function (m, i) { return escapes[+i]; });
     return text;
   }
 
@@ -857,12 +986,78 @@
   ].join('\n');
 
   // ---------- HTML → Markdown（反向序列化，仅浏览器端所见即所得编辑用）----------
+
+  // 文本节点里的字面字符要加反斜杠，否则回写的源码会把它们当标记重新解析：
+  // 原文 `\* OH10W` 渲染成字面 `* OH10W`，回写时不转义，这一段就真的变成了列表项；
+  // 一段正文里出现两个 `` ` `` 也会凭空配出一段行内代码。
+  //
+  // 但绝不能一律转义 —— 这个工具看的是 AI 刚写的技术文档，满地都是 `dr_device_active_d`
+  // 这种表名，`snake\_case` 会把 diff 撑满、还改变读者看到的源码。所以：
+  //   · * / _ 只转「有可能配成强调」的：串在文本首尾时最保守地转（隔壁可能正好是
+  //     另一个标记），串在中间时按渲染侧同一套 flanking 规则判 —— `2 * 3` 的孤立
+  //     星号、`snake_case` 的词内下划线都不可能配对，原样留着。
+  //   · `[` 只在后面接得上 `](` 时转 —— 中文文档里 `[1]` `[注]` 当序号用得太多。
+  //   · 反斜杠、反引号、`~~` 罕见于正文，保守全转。
+  function escapeInlineText(s) {
+    var text = String(s == null ? '' : s);
+    var out = '';
+    for (var i = 0; i < text.length; i++) {
+      var ch = text.charAt(i);
+      if (ch === '\\' || ch === '`') { out += '\\' + ch; continue; }
+      if (ch === '~' && text.charAt(i + 1) === '~') { out += '\\~\\~'; i++; continue; }
+      if (ch === '[') {
+        // 往前扫到配对的 `]`，看它后面是不是紧跟 `(` —— 只有这形状才会变成链接
+        var k = i + 1;
+        while (k < text.length && text.charAt(k) !== ']' && text.charAt(k) !== '\n') k++;
+        out += (text.charAt(k) === ']' && text.charAt(k + 1) === '(') ? '\\[' : '[';
+        continue;
+      }
+      if (ch === '*' || ch === '_') {
+        var j = i;
+        while (j < text.length && text.charAt(j) === ch) j++;
+        var atEdge = i === 0 || j === text.length;
+        var f = delimFlags(ch, i > 0 ? text.charAt(i - 1) : '', j < text.length ? text.charAt(j) : '');
+        // 文本节点边界外面是别的内联元素（回写后紧贴着 ** 之类的标记字符），
+        // 看不到真正的相邻字符，这时不猜，直接转义。
+        out += (atEdge || f.open || f.close)
+          ? new Array(j - i + 1).join('\\' + ch)
+          : text.slice(i, j);
+        i = j - 1;
+        continue;
+      }
+      out += ch;
+    }
+    return out;
+  }
+
+  // 行首撞上块级语法的，也要转义。和上面那条是两回事：`- ` `# ` `> ` `1. ` 只有出现
+  // 在行首才有意义，行内的它们完全无害，所以不能塞进 escapeInlineText 一起处理。
+  // 逐行来：段落里的软换行（<br>）同样会让下一行的行首参与块级解析，一个 `---`
+  // 软换行还会把上一行悄悄变成 setext 标题。
+  function escapeBlockLines(text) {
+    return String(text == null ? '' : text).split('\n').map(function (line) {
+      // setext 下划线 / 分割线：整行只有 - = _ * 时才成立
+      var m = /^(\s*)(-{2,}|=+|_{3,}|\*{3,})(\s*)$/.exec(line);
+      if (m) return m[1] + '\\' + m[2] + m[3];
+      return line
+        .replace(/^(\s*)([-+*])(\s|$)/, '$1\\$2$3')             // 无序列表
+        .replace(/^(\s*)(\d{1,9})([.)](?:\s|$))/, '$1$2\\$3')   // 有序列表
+        .replace(/^(\s*)(#{1,6})(\s|$)/, '$1\\$2$3')            // ATX 标题
+        .replace(/^(\s*)>/, '$1\\>');                            // 引用
+    }).join('\n');
+  }
+
   // 只处理本渲染器会产出的标签集合 + contentEditable 常见的 div/br。
   function serializeNodeInline(n) {
     if (!n) return '';
-    if (n.nodeType === 3) return (n.nodeValue || '').replace(/\s+/g, ' ');
+    if (n.nodeType === 3) return escapeInlineText((n.nodeValue || '').replace(/\s+/g, ' '));
     if (n.nodeType !== 1) return '';
     var tag = n.tagName;
+    // 公式：渲染成 <span class="md-math"> 包一层降级用的 <code>$…$</code>，
+    // 不在这里拦住就会顺着 CODE 分支被写回成行内代码 —— 用户在段落里改一个字，
+    // 整条公式就变成了 `$a_1$` 这样的代码，且不可逆。TeX 源码在 data-md-tex 里。
+    var tex = n.getAttribute && n.getAttribute('data-md-tex');
+    if (tex != null) return '$' + tex + '$';
     var inner = function () {
       return Array.prototype.map.call(n.childNodes, serializeNodeInline).join('');
     };
@@ -908,7 +1103,8 @@
           inlineParts.push(n);
         }
       });
-      var text = inlineParts.map(serializeNodeInline).join('').trim();
+      // 列表项内容也要防行首标记：`- - x` 在 Markdown 里是嵌套列表，不是一行文本
+      var text = escapeBlockLines(inlineParts.map(serializeNodeInline).join('').trim());
       lines.push(indent + marker + text);
       var childIndent = indent + '  ';   // 对齐到 marker 之后的内容列
       nested.forEach(function (item) {
@@ -976,6 +1172,10 @@
         return raw.replace(/[\s]+$/, '');
       }
     }
+    // 独占一段的公式：同理，不认它就会被当普通 DIV 拍成 `$$…$$` 的行内代码。
+    // 原文可能写的是 `\[…\]`，这里统一回写成 `$$…$$`（两者等价，且只在该块被编辑时发生）。
+    var blockTex = el.getAttribute && el.getAttribute('data-md-tex');
+    if (blockTex != null) return '$$\n' + blockTex + '\n$$';
     var tag = el.tagName;
     if (/^H[1-6]$/.test(tag)) return '#'.repeat(+tag[1]) + ' ' + serializeInlineChildren(el).trim();
     if (tag === 'HR') return '---';
@@ -1004,7 +1204,7 @@
       return inner.split('\n').map(function (l) { return l ? '> ' + l : '>'; }).join('\n');
     }
     // P / DIV / 其它：当作一个段落
-    return serializeInlineChildren(el).trim();
+    return escapeBlockLines(serializeInlineChildren(el).trim());
   }
 
   // 返回 [{ text, gap }]，gap = 该块之前原本有几个空行（未知时为 null）
@@ -1013,7 +1213,7 @@
     var inlineBuf = [];
     var flush = function () {
       if (!inlineBuf.length) return;
-      var text = inlineBuf.map(serializeNodeInline).join('').trim();
+      var text = escapeBlockLines(inlineBuf.map(serializeNodeInline).join('').trim());
       if (text) blocks.push({ text: text, gap: null });
       inlineBuf = [];
     };
