@@ -34,7 +34,8 @@
       --accent:    #5b9cff;
       --accent-2:  #a07dff;
       --accent-3:  #34d2c0;
-      --unread:    #ff5b6b;
+      --unread:    #8d8df0;   /* 与产品一致：未读用品牌强调色（蓝紫），红色只表示错误 */
+      --danger:    #ff5b6b;
       --ok:        #4ade80;
 
       /* Type */
@@ -345,7 +346,7 @@
       flex: none;
     }
     .pain .card .ico svg { width: 12px; height: 12px; }
-    .pain .before .ico { background: rgba(255,91,107,0.14); color: var(--unread); }
+    .pain .before .ico { background: rgba(255,91,107,0.14); color: var(--danger); }
     .pain .after  .ico { background: rgba(91,156,255,0.14); color: var(--accent); }
     .pain .card ul {
       margin: 0; padding: 0; list-style: none;
@@ -467,13 +468,13 @@
     }
     .mockup .dot.unread {
       background: var(--unread);
-      box-shadow: 0 0 0 0 rgba(255,91,107,0.5);
+      box-shadow: 0 0 0 0 rgba(141,141,240,0.5);
       animation: dot-pulse 2.4s var(--ease-out) infinite;
     }
     @keyframes dot-pulse {
-      0%   { box-shadow: 0 0 0 0 rgba(255,91,107,0.45); }
-      70%  { box-shadow: 0 0 0 5px rgba(255,91,107,0); }
-      100% { box-shadow: 0 0 0 0 rgba(255,91,107,0); }
+      0%   { box-shadow: 0 0 0 0 rgba(141,141,240,0.45); }
+      70%  { box-shadow: 0 0 0 5px rgba(141,141,240,0); }
+      100% { box-shadow: 0 0 0 0 rgba(141,141,240,0); }
     }
     .mockup .dot.spacer { background: transparent; }
     .mockup .file-name {
@@ -1077,11 +1078,11 @@
   <div class="wrap">
     <div class="eyebrow">
       <span class="pulse"></span>
-      <span>v<span id="cur-version">0.30.2</span> · npm + macOS App</span>
+      <span>v<span id="cur-version">0.31.0</span> · npm + macOS App</span>
     </div>
     <h1>你让 AI 写了 30 份 HTML / Markdown 报告——<br/><span class="grad">它们现在在哪？</span></h1>
     <p class="lede">
-      <strong>Atlas</strong> 扫你硬盘上指定的目录，把所有 <code>.html</code> 与 <code>.md</code> 收进一棵本地目录树。更新过的标红点，看完即清。
+      <strong>Atlas</strong> 扫你硬盘上指定的目录，把所有 <code>.html</code> 与 <code>.md</code> 收进一棵本地目录树。更新过的亮起未读标记，看完即清。
     </p>
     <p class="lede">
       <strong>一个浏览器 Tab 替代之前的 30 个。</strong>
@@ -1156,7 +1157,7 @@
         </h3>
         <ul>
           <li>一个 Tab 看全部——所有 HTML 集中在 <code>localhost:4321</code></li>
-          <li>更新即标红——基于 mtime，未读自动出红点</li>
+          <li>更新即标记——基于 mtime，未读自动亮起未读标记</li>
           <li>看完即清——点开预览即标已读，专注没看过的</li>
         </ul>
       </div>
@@ -1246,6 +1247,14 @@
           <p>本地图片、任务列表、代码块复制、GFM 提示块、可折叠目录、三档阅读宽度、规整表格，一应俱全。</p>
         </div>
         <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.5v-3h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3"/></svg></span>专注阅读</h3>
+          <p>按 <kbd>⌘.</kbd> 或点顶栏的专注按钮，侧栏、顶栏、标签栏一起收起，只留正文（Markdown 和已信任的 HTML 顶部还有一条阅读进度条）；<kbd>Esc</kbd> 退出。Markdown 的推荐 / 加宽 / 占满三档宽度照常可切（左下角，或按 <kbd>[</kbd> <kbd>]</kbd>）。Safari 里 <kbd>⌘.</kbd> 被浏览器占用，请用按钮。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg></span>快速查看</h3>
+          <p>鼠标在目录树、标签、首页封面或星图上停留约半秒，旁边弹出小预览（标题、更新时间、缩略图），不打开也不标已读；键盘选中后按 <kbd>Space</kbd> 同效。悬停预览会像打开文档一样加载它引用的在线资源，不想要可以在设置里关掉悬停，<kbd>Space</kbd> 仍可用。</p>
+        </div>
+        <div class="feat">
           <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 3 3.8v4c0 3.07 2.07 5.6 5 6.67 2.93-1.07 5-3.6 5-6.67v-4z"/><path d="m5.9 7.9 1.6 1.6 2.7-2.9"/></svg></span>HTML 沙箱预览</h3>
           <p>AI 写的 HTML 默认隔离在沙箱里预览，脚本能跑却碰不到你的数据；需要更多能力时点盾牌按篇信任。</p>
         </div>
@@ -1264,8 +1273,8 @@
       <div class="feat-group-title">追踪 AI 的改动</div>
       <div class="features">
         <div class="feat">
-          <h3><span class="feat-ico" style="color:var(--unread)"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="3"/></svg></span>未读红点</h3>
-          <p>AI 改过的文档亮红点、看完即清，并按新鲜度分两档——几百篇里也一眼看出刚动过的那几个。</p>
+          <h3><span class="feat-ico" style="color:var(--unread)"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="3"/></svg></span>未读标记</h3>
+          <p>AI 改过的文档亮起蓝紫色的未读标记、看完即清，并按新鲜度分两档——几百篇里也一眼看出刚动过的那几个。红色只留给错误和危险操作。</p>
         </div>
         <div class="feat">
           <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg></span>版本对比与回退</h3>
@@ -1273,7 +1282,15 @@
         </div>
         <div class="feat">
           <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7 8 2.5 13.5 7V13a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5z"/></svg></span>首页概览</h3>
-          <p>没打开文档时，首页用一句大标题回答"今天 AI 改了几篇"，配一条 24 小时活动脉冲；待看队列铺成彩色封面墙，最近与收藏收在下方，点封面直接进文档。</p>
+          <p>没打开文档时，首页最上方是按标签筛选条，下面一句大标题回答"今天 AI 改了几篇"，旁边竖排读数（文档 / 项目 / 未读 / 近 7 天改动），再往下是时间河流和待看封面墙。本机有 Chrome / Edge 时封面就是文档首屏的真实缩略图（后台断网截图，放大到能看清标题，Markdown 封面不带目录栏，深色主题下白底页面自动压暗），没有就用中性底色的生成式封面；最近与收藏收在最下方。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 13.5h12"/><path d="M3.5 13.5v-3M6 13.5v-6M8.5 13.5v-4M11 13.5v-8M13.5 13.5V11"/></svg></span>时间河流</h3>
+          <p>首页把过去 7 天每小时的改动次数画成一条柱状河流，一眼看出 AI 哪段时间最忙；某一小时的尖峰不会把别的柱压扁，柱顶直接标出次数。在河流上拖出一段时间（或点「24 小时」「3 天」），目录树、首页和星图就只看这段时间里改过的文档；<kbd>Esc</kbd> 或「清除」撤掉。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="4" cy="5" r="1.4"/><circle cx="11.5" cy="4" r="1.4"/><circle cx="9" cy="11.5" r="1.4"/><path d="M5.3 5.4 10 4.3M10.8 5.3 9.5 10"/></svg></span>星图</h3>
+          <p>把全部文档画成一张星图：项目是星团、文档是星，<strong>亮度 = 新鲜度</strong>，<strong>连线 = 引用关系</strong>（A 链接到 B 才画线）。滚轮缩放看远景 / 中景 / 近景，悬停看名字和引用数，点一下打开。右侧星表可用键盘逐个浏览；标签、仅未读、时间段筛选同样生效。进星图时侧栏自动收起，离开后恢复。</p>
         </div>
         <div class="feat">
           <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v1M8 4a4 4 0 014 4v3l1 2H3l1-2V8a4 4 0 014-4z"/><path d="M6.5 14a1.5 1.5 0 003 0"/></svg></span>桌面通知</h3>
@@ -1286,8 +1303,8 @@
       <div class="feat-group-title">组织与查找</div>
       <div class="features">
         <div class="feat">
-          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4a1 1 0 011-1h3l1.5 1.5h5.5a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1V4z"/></svg></span>目录树：分组 / 目录两种视图</h3>
-          <p><strong>分组</strong>视图按项目自动归类、可拖拽重排、归档、一键全部折叠展开；<strong>目录</strong>视图按磁盘真实层级展开二级 / 三级子目录，深层同名文件（多个 README）也一眼分得清。切换一键完成，深滚时顶层名自动吸顶，再深再大的目录展开 / 收起都丝滑不掉帧。</p>
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4a1 1 0 011-1h3l1.5 1.5h5.5a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1V4z"/></svg></span>目录树：分组 / 目录 / 星图三种视图</h3>
+          <p><strong>分组</strong>视图按项目自动归类、可拖拽重排、归档、一键全部折叠展开；<strong>目录</strong>视图按磁盘真实层级展开二级 / 三级子目录，深层同名文件（多个 README）也一眼分得清；<strong>星图</strong>见上。同层文件名与文件夹名对齐，类型只看行尾 HTML / MD 角标。排序、仅未读和按标签筛选收进树头的排序按钮菜单，不占地方。</p>
         </div>
         <div class="feat">
           <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4"/><path d="M10 10l3 3"/></svg></span>全文搜索</h3>
@@ -1295,15 +1312,15 @@
         </div>
         <div class="feat">
           <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M5 6h6M5 8h4M5 10h2"/></svg></span><kbd>⌘K</kbd> 快速打开</h3>
-          <p>敲几个字母模糊匹配文件名，也搜正文；键盘选中直达并滚到命中处，鼠标可以放一边。</p>
+          <p>敲几个字母模糊匹配文件名，也搜正文；键盘选中直达并滚到命中处，鼠标可以放一边。还没输入时列出最近打开和收藏，读文档时也能一步跳回。</p>
         </div>
         <div class="feat">
           <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4"/><path d="M10 10l3 3"/><path d="M5.4 7h3.2"/></svg></span><kbd>⌘F</kbd> 文档内查找</h3>
           <p>在当前文档里逐词查找并高亮，<kbd>Enter</kbd> / <kbd>↑↓</kbd> 在命中处间跳。搜完按 <kbd>Esc</kbd> 或点命中条的 ✕ 就地清掉高亮——不必离开文档。</p>
         </div>
         <div class="feat">
-          <h3><span class="feat-ico" style="color:var(--fav,#f0b429)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2l1.85 3.9 4.15.56-3.05 2.86.79 4.18L8 11.5l-3.74 2 .79-4.18L2 6.46l4.15-.56z"/></svg></span>收藏与标签</h3>
-          <p><strong>☆</strong> 收藏跨文件夹聚到一处；给文件打标签后可按标签筛选，多标签取交集。收藏 / 最近 / 标签收进侧栏顶部的「快捷区」面板，与下面的全量目录树各归其位、一眼分得清。</p>
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2l1.85 3.9 4.15.56-3.05 2.86.79 4.18L8 11.5l-3.74 2 .79-4.18L2 6.46l4.15-.56z"/></svg></span>收藏与标签</h3>
+          <p>悬停文件行点星标收藏，收藏跨文件夹聚到首页的「收藏」轨道和 <kbd>⌘K</kbd> 里。给文件打标签后，用首页最上方的标签筛选条（或树头排序菜单里的「按标签筛选」）筛选，多标签取交集；目录树、首页和星图一起生效，命中数处处一致。</p>
         </div>
         <div class="feat">
           <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6.5h6M5 9h4"/></svg></span>多扫描根 & 归档</h3>
@@ -1335,11 +1352,15 @@
       <div class="features">
         <div class="feat">
           <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="12" height="8" rx="1.5"/><path d="M4.5 7h.01M7 7h.01M9.5 7h.01M4.5 9.5h7"/></svg></span>全键盘操作</h3>
-          <p><kbd>⌘K</kbd> 快速打开、<kbd>⌘F</kbd> 文档内查找、<kbd>/</kbd> 聚焦搜索、<kbd>Esc</kbd> 逐级退出、<kbd>?</kbd> 出速查表；多标签用 <kbd>⌘W</kbd> / <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>⌘1–9</kbd>——完整键盘流。</p>
+          <p><kbd>⌘K</kbd> 快速打开、<kbd>⌘F</kbd> 文档内查找、<kbd>/</kbd> 聚焦搜索、<kbd>Space</kbd> 快速查看、<kbd>⌘.</kbd> 专注阅读、<kbd>Esc</kbd> 逐级退出、<kbd>?</kbd> 出速查表；多标签用 <kbd>⌘W</kbd> / <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>⌘1–9</kbd>——完整键盘流。</p>
         </div>
         <div class="feat">
-          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3 5.5 5.5 0 1 0 13 9.5z"/></svg></span>深浅色主题</h3>
-          <p>默认跟随系统，也可固定浅 / 深色，Markdown 预览页一起钉住，不会外壳浅、正文深。还能选界面色调（冷灰 / 暖灰），和浅深主题自由搭配。</p>
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3 5.5 5.5 0 1 0 13 9.5z"/></svg></span>星图配色与动效开关</h3>
+          <p>深色是深空蓝黑、浅色是星图纸底，配色收敛到一个品牌强调色加中性色。默认跟随系统，也可固定浅 / 深色（Markdown 预览页一起钉住），另可选冷灰 / 暖灰色调。设置里的「界面动效」可选「减少」，转场和轻闪都停下，信息照常显示。</p>
+        </div>
+        <div class="feat">
+          <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M5.5 2.5v11"/><circle cx="3" cy="4.5" r=".4"/></svg></span>macOS 原生外观</h3>
+          <p>桌面 App 去掉了标题栏，红绿灯嵌进顶栏、和图标留足间距，侧栏透出桌面壁纸的毛玻璃材质（系统设置 → 辅助功能 → 显示 →「降低透明度」打开时换成实底）；固定浅 / 深色时窗口材质跟着变，切主题时整页柔和淡入。顶栏空白处可拖动，双击放大、再双击还原。专注阅读时红绿灯一起隐藏，顶部仍可拖动窗口。</p>
         </div>
         <div class="feat">
           <h3><span class="feat-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h10M3 8h6M3 12h4"/><path d="M13 7.5l-2.5 2.5 2.5 2.5"/></svg></span>自动更新</h3>
@@ -1428,7 +1449,7 @@ atlas start</code></pre>
     <div class="ai-rule">
 <pre><code>生成或更新 HTML 文档后，不要执行 open / xdg-open 打开浏览器。
 本机运行着 Atlas dashboard（http://localhost:4321），
-它会自动通过 mtime 显示未读红点。</code></pre>
+它会自动通过 mtime 显示未读标记。</code></pre>
     </div>
   </div>
 </section>
@@ -1855,7 +1876,7 @@ atlas start</code></pre>
       $preview.classList.remove('fading');
     }, 150);
 
-    // 更新激活态 + 红点（不重渲染整树，避免打断 SortableJS 拖拽态）
+    // 更新激活态 + 未读标记（不重渲染整树，避免打断 SortableJS 拖拽态）
     $tree.querySelectorAll('.file').forEach(el => {
       el.classList.toggle('active', el.dataset.fileId === file.id);
     });
@@ -1865,7 +1886,7 @@ atlas start</code></pre>
       const dot = fileEl.querySelector('.dot');
       if (dot) { dot.classList.remove('unread'); dot.classList.add('spacer'); }
     }
-    // 更新所属 folder 的未读小红点
+    // 更新所属 folder 的未读标记
     state.tree.forEach(folder => {
       if (folder.type !== 'folder') return;
       const folderEl = $tree.querySelector('.folder[data-folder-id="' + folder.id + '"]');
@@ -1998,7 +2019,7 @@ atlas start</code></pre>
       }
       folder.children = newChildren;
     });
-    // 更新 folder 的 count + 未读小红点显示，但不重建整树（SortableJS 状态保持）
+    // 更新 folder 的 count + 未读标记显示，但不重建整树（SortableJS 状态保持）
     state.tree.forEach(folder => {
       if (folder.type !== 'folder') return;
       const folderEl = $tree.querySelector('.folder[data-folder-id="' + folder.id + '"]');
@@ -2134,7 +2155,7 @@ atlas start</code></pre>
     const first = state.tree.flatMap(f => f.children || []).find(c => c.unread) ||
                   state.tree.flatMap(f => f.children || [])[0];
     if (first) {
-      // 预填 preview（不触发 unread 消除，让用户能看到红点效果）
+      // 预填 preview（不触发 unread 消除，让用户能看到未读标记效果）
       $preview.innerHTML = previews[first.view] || '';
     }
   }
