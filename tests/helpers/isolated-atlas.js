@@ -82,6 +82,9 @@ function health(base, expectScanDir) {
  * @param {object}  opts.config     额外的 config 字段，覆盖默认值
  * @param {number}  opts.scanRootCount 建几个扫描根（默认 1），多根场景用
  * @param {string}  opts.prefix     临时目录前缀，便于排查
+ * @param {object}  opts.env        额外的子进程环境变量（合并在最后，可覆盖默认值）。
+ *                                  默认注入 ATLAS_THUMBS=off：隔离实例不起 Chrome 截缩略图，
+ *                                  免得抢 CPU 让别的 spec 时序抖动；thumbnail.spec 用 env 打开
  * @returns {Promise<object>} 实例句柄
  */
 async function startAtlas(opts = {}) {
@@ -90,6 +93,7 @@ async function startAtlas(opts = {}) {
     config: extraConfig = {},
     scanRootCount = 1,
     prefix = 'atlas-spec-',
+    env: extraEnv = {},
   } = opts;
 
   const port = await pickFreePort();
@@ -131,6 +135,9 @@ async function startAtlas(opts = {}) {
       ATLAS_STORE_PATH: path.join(home, 'store.json'),
       ATLAS_PUBLIC_DIR: path.join(ROOT, 'public'),
       ATLAS_PORT: String(port),
+      ATLAS_THUMBS: 'off',
+      ATLAS_STARTUP_QUIET_MS: '0',   // 启动静默期（推迟引用索引 / 缩略图）在测试里关掉，免得拖慢断言
+      ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

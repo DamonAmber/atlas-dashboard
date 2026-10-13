@@ -170,6 +170,13 @@ atlas status                        # atlas 服务在跑？(测试需要)
 **所有 spec 都自起隔离实例，不需要预先起服务，也不会碰你真实的 `~/.atlas` 与文档。**
 直接跑即可（跑之前不用 `atlas stop`，跑的时候你正在用的 Atlas 也不受影响）：
 
+> **spec 都不依赖 `:4321`**（`tests/` 里出现的 4321 只在注释里）。需要手动点一点或截图验证时，
+> 另起一个实例：独立的 `ATLAS_HOME`（如 `/tmp/atlas-ui-test`）+ 扫描根只指向 fixture 目录 + 另一个端口
+> （如 `4322`），例如 `ATLAS_HOME=/tmp/atlas-ui-test node bin/atlas.js --port 4322`（`/tmp/atlas-ui-test/config.json`
+> 里的 `scanRoots` 只写 fixture 目录；`bin/atlas.js` 会把端口经 `ATLAS_PORT` 传给 `server.js`）。截图 / 验证脚本一律从环境变量读基址：
+> `process.env.BASE_URL || 'http://127.0.0.1:' + (process.env.ATLAS_PORT || 4321)`，运行时传
+> `BASE_URL=http://127.0.0.1:4322`，不在脚本里写死端口。**不要为了跑测试停掉或改动你正在用的实例。**
+
 ```bash
 for spec in tests/*.spec.js; do
   echo "=== $spec ==="
@@ -199,14 +206,33 @@ done
 >   期望末行 `总计 10 项，失败 0 项`。**记得删掉 tgz**，否则会被 `git add -A` 带进 commit。
 > - `scroll-after-toggle.spec.js` 在 iframe 还没加载出内容时打印 `!! HTML 不够长，没法测试` 并跳过（也是 exit 0）。这是它长期的既有行为，不是本次改动引入的；判断是否回归的办法是 `git stash` 后对比同一行输出。
 
-当前 spec 清单（51 个）。除 `landing-demo`（`file://`）、`diff-algorithm`（纯函数单测）、
-`md-fence-infostring`（纯函数，不起服务）
+当前 spec 清单（71 个）。除 `landing-demo`（`file://`）、`diff-algorithm`（纯函数单测）、
+`md-fence-infostring`（纯函数，不起服务）、`contrast-tokens`（纯 node 解析 styles.css）、
+`minimap-layout` / `river-scale`（纯 node require 前端模块）
 与 `fs-watcher`（直接对着临时目录测监听器，不起服务、不用浏览器）外，其余都通过
 `tests/helpers/isolated-atlas.js` 的 `startAtlas()` 起独立实例：临时 `ATLAS_HOME`
 （自带 config/store）+ 临时扫描根 + 临时 fixture + 随机端口，结束即删。
 需要"有规模的文档树"的用例（帧率 / 滚动 / 拖拽）用 `makeTreeFixtures()` 现造，
 不再依赖你本机那几百篇真实文档。
 
+> - `contrast-tokens.spec.js` — 令牌对比度护栏（星图配色新增，纯 node、不起服务）：解析 styles.css 的 `:root` 与 `:root[data-skin="warm"]` 两块 `light-dark()` 声明合成冷 / 暖 × 浅 / 深四组合，文字令牌（text / dim / faint / accent / unread / fav / signal / danger）对五种表面 ≥4.5、`--unread-stale` / `--border-input` / 四档星色 ≥3、`--on-accent` 对 `--accent` ≥4.5；`var()` 映射（`--signal` / `--fav` → 实际值、`--unread` = `--accent`）解析后再断言；`--glass-tint` 毛玻璃面叠白 / 叠黑取小值；桌面侧栏 `--sidebar-tint-light / -dark`（≤ 70%）叠在实测原生材质亮度区间两端（浅 195–255、深 0–88）上取小值，代入桌面侧栏块里的前景重映射；英雄区最亮星点有效 alpha ≤ .08；文本输入框背景不引用 `--bg-hover`（164 项）
+> - `motion-reduced.spec.js` — 动效基建（星图配色新增）：系统 reduced-motion 与设置里「界面动效：减少」（`html[data-motion]`）两路下，经 fixture 写文件触发 SSE 后无 running 的无限循环动画、时长令牌归零、`.just-changed` 行与首页封面仍在且点满亮度静止；正常偏好下点做 3 次 `atlas-twinkle`；`__atlasForceVT` 时切 Tab 期间 `html[data-vt="tab"]`（含方向）出现、结束后移除、DOM 最终生效，webdriver 默认下从不出现且同步完成；SSE `fs` 负载的 `self` / `selfReason`（外部改动 false / `/api/save-md` 为 save / `/api/rename` 新路径为 rename，自写不挂 `.just-changed`）；星图：reduce 下进入星图并触发一次 SSE 后 `AtlasStarmap.debug.frames` 2 秒内不增长，正常偏好下刚变更的星轻闪、帧数增长（46 项）
+> - `desktop-chrome.spec.js` — 桌面版原生外壳的前端钩子（星图配色新增，注入假 `window.atlasDesktop`）：`electron/titlebar.js` 红绿灯几何（macOS 26 灯组 60pt → 避让 90px、旧系统 52pt → 82px、灯组中心 = 顶栏中线）；`html[data-desktop="darwin"]`、`.sidebar-header` 90px 红绿灯避让（桥下发 `titlebarInset` 时首帧按它）而 `.sidebar` 几何不变、顶栏 drag / 按钮 no-drag、面包屑文字是拖动区且顶栏文字不可选、主顶栏 y=23 拖动区覆盖 ≥ 60%、窗口放大到 1512 宽前后 x=1140 都在拖动区（双击能还原）、侧栏 60% 着色层与透明 html 底、`{ reducedTransparency }`（推送或桥首帧下发）→ `html.reduce-transparency` 侧栏实底、吸顶分组头 `.is-stuck`、`setTheme` 启动同步与切换参数、全屏后内边距复原、侧栏收起时 `.main-header` 让位；不注入时没有 `data-desktop`、原生化 CSS 一条不生效；专注模式下 `#focus-drag` 贴顶 28px 且 `drag`、`#focus-exit` 为 `no-drag` 且 `elementFromPoint(胶囊中心)` 命中它、`.preview` 下移 28px、`setChromeState` 依次收到 `{focusMode:true}` / `{focusMode:false}`、菜单命令 `toggle-focus` 能进出，浏览器版专注时 `#focus-drag` 仍 `display:none`（57 项）
+> - `sidebar-row-stability.spec.js` — 侧栏文件行几何稳定 + 文件名优先（桌面实机验收新增）：侧栏 320 / 280 / 260 / 240px、长中文文件名 + 深层目录 + 标签 chip 下每行恰好 26px 不换行；悬停前后该行与下一行 `getBoundingClientRect` 完全相等、操作组绝对定位；鼠标在两行交界 ±0.5px 来回 40 次，逐帧采样两行高度 / 位置只有一种取值且无行级 layout-shift；320px 下文件名可见宽度 ≥ 目录提示、目录提示 ≤ 30% 且 `direction: rtl`（末级目录可见）、完整路径在 title；树宽 < 280px 时目录提示整段隐藏；目录视图 `contain-intrinsic-size` = 26px；键盘 Tab 进操作组（无悬停）时行底色 = `--bg-hover`、操作组继承到同一不透明底色、行几何不变；鼠标真实点击行尾按钮后移开，焦点还在按钮上但行回到静息（行规则只认 `:focus-visible`）（23 项）
+> - `minimap-layout.spec.js` — 迷你星图 / 远景布局护栏（桌面实机验收新增，纯 node）：`clusterRadius`（≤64 篇 = 14√n、之后对数增长且连续单调、800 篇 < 14√800 的 70%）；夹具同款 800/408/160/110 + 34 个小星团两两 `dist ≥ Hi + Hj + 28`；`fitThumb` 在 623×212 画布横向利用率 ≥ 70%、光晕全在画布内、屏幕间隙 ≥ 28·rs 且 ≥ 2px、最大光晕面积占比 < 30%；`placeThumbLabels` 星团名两两不交、不压任何星盘、不出画布、≥ 12 个且最大星团必有名字、确定性；30 组随机分布同样成立；主星图远景 `placeLabels` 星团名不压别的星团星盘、`clusterHidden` 计入（21 项）
+> - `river-scale.spec.js` — 时间河流比例尺与 mtime 兜底（桌面实机验收新增，纯 node）：日志为空时每篇只按最后一次 mtime 合成 1 个事件、已有同一 mtime 的日志事件不重复；`riverScale` 的 cap = 非零小时 p95（≥ 4）远小于 117 次的尖峰、≥ 3·cap 的尖峰列为 peaks（≤ 6）；`barHeight` 0 → 2、1 次 ≥ 14%、cap = 80%、最大尖峰 = 92%、中间按对数、单调；非零柱高度中位数 ≥ 25%（以前 8.5%）（16 项）
+> - `settings-theme-motion.spec.js` — 设置弹窗 / 主题过渡 / 侧栏动画逐帧连续（桌面实机验收新增）：样式表无 `transition: all`；设置 5 个分区 + 目录选择器展开时面板 top 与高度完全相同 = min(640, 视口 − 96)、内容区内滚、诊断清单 28 个选项 id 与各组选项数一个不少、面板实底、鼠标打开时关闭按钮不画焦点环、浏览器版不显示「侧栏透明度」；`__atlasForceVT` 下切「深色」同步出现 `data-vt="theme"` 与 `html.theme-switching`、切换期间文件行 transition 为 0s、结束后撤掉、迷你星图只重画 ≤ 1 次，切「暖灰」同样交叉淡入，reduced-motion 下同步硬切且从不出现 `data-vt`；侧栏收起 / 展开逐帧采样三个锚点：居中内容（河流卡片中心）单调走满 ±W/2、单帧位移 < 整段 60%（不横跳），左对齐内容单调，右对齐 `.main-actions` 全程不动、不出窗口，`.main` 不用 transform、margin-left 逐帧过渡，迷你星图 ≤ 2 次重画、画布 `object-fit: cover`，reduced-motion 下硬切（31 项）
+> - `sidebar-header-narrow.spec.js` — 侧栏拖窄后侧栏头不重叠（桌面实机验收第 2 轮新增）：浏览器版 / 假桥桌面版（红绿灯 inset 90）/ 桌面全屏三种外壳，真实拖 `#resizer` 从最窄扫到 800，每档品牌区（图标 + 可见字样）与操作组包围盒间隔 ≥ 4px、图标 28×28 完整、四个按钮都在侧栏内、字样要么完整要么整段隐藏、桌面版图标不进红绿灯内边距；最窄宽度浏览器 / 全屏 220、桌面 inset 90 时被 `sidebarMinWidth()` 撑到约 268；退出全屏与重载后存的 220 被兜底、偏好值本身不改
+> - `theme-overlay-continuity.spec.js` — 切主题时浮层全程可见（桌面实机验收第 2 轮新增）：设置窗 / ⌘K / 快速查看 / 对比面板四种浮层打开时，`__atlasForceVT` 下切深色，过渡中只有 `::view-transition-group(root)`；动画定在 0% 时浮层区域与切换前像素一致、定在 50%（线性）时 ≈ 前后平均，结束后浮层仍打开
+> - `sidebar-tree-alignment.spec.js` — 侧栏目录树层级对齐（侧栏瘦身新增）：目录视图三层嵌套下同层文件夹名与文件名起点一致（±0.5px）、逐层等量缩进、未读点对准同级文件夹图标中心；文件行无可见类型图标（DOM 保留）、已收藏行名字后有 `.fav-mark`、星标是悬停操作组第一个且悬停前可见宽度为 0；文件夹图标颜色 = `--text-dim`、不填充、展开 / 收起只换形状；文件夹 12.5px / 28px、文件 12px / 26px；行内标签 chip 最多 1 个、三层文件夹内的文件行不显示、完整标签在 title（39 项）
+> - `filter-consistency.spec.js` — 筛选口径统一（侧栏瘦身新增）：标签 / 仅未读 / 搜索单项与组合（含多标签 AND、侧栏菜单改筛选）下，首页筛选条命中数 == 目录树「命中 / 总数」的命中 == `filterSnapshot()` 大小 == 实际渲染的文件行、待看 == 命中 ∩ 未读、`#tree-count` 总数 == `#stats` 的 N，并用 fixture 的已知答案核对命中数；树顶提示文案与「清除」一次撤掉标签 + 仅未读；星图：HUD 命中数（`#starmap-readout[data-hits]`）、筛选状态条命中数与星表里全部星团 `.sm-star` 总数 == `filterSnapshot()` 大小；时间河流时间段单项、「时间段 + 标签」「时间段 + 标签 + 仅未读」组合下同样一致，首页「… 改动了 N 篇」的 N == 命中数，树顶「清除」连时间段一起撤掉（155 项）
+> - `thumbnail.spec.js` — 真实缩略图（缩略图新增）：纯 node 单测注入假 chromium / renderSource（key 计算、normTheme、HTML 双主题只截一次且两条 ready 同一 k、过期 stale、LRU、index 损坏恢复、去重 + LIFO、第 65 个挤掉最旧发 dropped、同 mtime 失败 2 次、熔断、`runExclusive` 高优抢占、`OFFLINE_ARGS`、截图参数不带 `--no-sandbox`、远程依赖检测正反例、MD 缩略图渲染页 `forThumb` 不带目录栏 / 宽度胶囊而普通预览页不受影响、`RENDER_VER` ≥ 3）；接口（`ATLAS_THUMBS` 默认 off：非法 theme 400、`Sec-Fetch-Site: cross-site` 403、k 不匹配 404、POST 超 48 项 400）；前端（webdriver 闸门、`__atlasForceThumbs`、深 / 浅主题、dropped 后只重请求那一条、ready 换图、onopen 清 queued、thumb 事件不重拉 state）；集成真截一张，页面脚本对 Atlas 端口与第三方零请求、PNG 640×400（134 项，本机没有 Chromium 系浏览器时集成段 SKIP）
+> - `peek-preview.spec.js` — 快速查看（缩略图新增）：悬停 450ms 弹出、title 暂存与还原、离开 150ms 收起、侧栏定位（左缘 = 侧栏右缘 + 10px）；Space 开关不滚树、↑/↓ 换内容、Esc 只关浮窗焦点留原行、第一行 ↑ 回搜索框、Enter 关浮窗并打开；`.peek-frame` 的 sandbox 严格等于 `allow-scripts`（含已信任文档）；不标已读；连按 10 次 ↓ 的 iframe src 尾防抖、有截图时 `<img>` 即时换；Tab 下方定位、活动 Tab / 活动文档不弹；⌘K 空状态 Space；拖拽期间不弹；关掉悬停后不碰 title 而 Space 仍可用；星表 `.sm-star` 上 Space 开关、↓ 换内容、Esc 只关浮窗且焦点留在原星（80 项）
+> - `star-map.spec.js` — 星图视图（星图新增）：node 段直接 require `public/starmap.js` 的纯函数——tier 边界（1h / 24h / 7d）、布局确定性、新增一篇不移动其他星、随机 1–200 个项目两两 `dist ≥ Hi + Hj + 28`、空间索引命中、5 万篇布局 < 300ms、`placeLabels` 两两不相交 / 不压 HUD 与星点 / 选中星必有标签 / 配额与 600 候选上限 / 确定性、`clusterLinks`；Playwright 段：视图切换规则表（首页 / 文档态 × 分组 / 目录 / 星图、←/→、刷新后保持、listView 保留）、`__atlasForceVT` 下一次操作只出现一次 `data-vt`、编辑态「继续编辑」后 aria-checked 与 `atlas:viewMode` 不变、画布 aria-label 篇数、星表数量与顺序 / Enter 进 Tab / 引用数、`debug.screenPos` + 点击打开对应文档、`debug.hitTest` 反查、只看未读时筛选状态条「命中 n / 总数」且不命中星不可点、星表只含命中项、进星图自动收起侧栏三条（偏好展开进出后恢复且偏好未写 / 偏好收起进出后仍收起 / 星图里 ⌘B 写偏好且离开后保持）、无边 / 有边时 `debug.linkCount`；星图态面包屑为「星图」、顶栏「快速打开 ⌘K」胶囊可见且点击打开 `#quickopen`（107 项）
+> - `link-index.spec.js` — 引用关系索引（星图新增，node + 接口）：MD 内联 / 尖括号 / 引用式定义、跳过图片 / 行内代码 / 围栏代码块，HTML `<a href>` 三种引号与注释；相对路径、`../`、编码路径、decode 失败跳过、去 `#hash` / `?query`、纯锚点与外链 / mailto / data / javascript 丢弃、`file://`、根外路径丢弃、目录 `index.html` / `README.md`、自引用与去重、每文件 200 条与全局上限截断、目标后来出现自动接上、内容不变的 change 不递增 version、mtime 变化只重解析该文件、unlink 后过滤、缓存写盘 / 复用 / 损坏 warn 一次并重建；`GET /api/links` 形状、`no-store`、跨站 403、改文件后 version 递增、缓存落在 `ATLAS_HOME/links/`；未就绪回 202 { ready:false } 而非 503（41 项）
+> - `activity-log.spec.js` — 活动日志与时间河流数据层（时间河流新增，node + 接口）：`lib/activity-log.js` 的固定窗口合并（每 30 秒连写 5 分钟 → 6 条、`t === lastT` 丢弃、mtime 回退超过一个窗口才记）、计数类与 `s` 类互不合并、按本地日期分文件、启动时只留 8 个日期文件、单日上限与 dropped 计数、8 天前不落盘 / 未来超过 5 分钟夹到 now / `t === 0` 忽略、坏行计入 skipped、`query` 范围裁剪与路径表、未落盘缓冲也可查、去重在截断前且 5 万条保留最新、重启预热（今天同一 mtime 不再记、3 天前的记两行但 query 只返回一条、预热期间事件按序处理）、目录建不出来停用并 warn 一次、追加失败 10 分钟内只 warn 一次；`classifyEvent` 表（盘点窗口内重命名的 change + rename 仍记 a）；`lib/self-writes.js` 三种返回值与 ttl 过期；`public/river.js` 的兜底合成 / 去重 / `classifySse` / `shouldMerge` 与 lib 逐例一致 / SSE 追加副本 == 服务端重拉 / 时间段与窗口滚动；接口：`/api/activity` 形状、`no-store`、`mergeWindowMs === 60000`、外部写 SSE `self:false` 与 kind 1、`/api/save-md` 为 `k:'s'` / kind 2 / `self:true`、`/api/rename` 新路径 `selfReason:'rename'` 与 `k:'a'`、归档项目不记、非法 since / until 400、跨站 403、日志只在 `ATLAS_HOME/activity/`、`store.json` 键集合与内容不出现活动日志字段（97 项）
+> - `time-river.spec.js` — 时间河流（时间河流新增）：mtime 用 `fs.utimesSync` 散布到 7 天，168 根柱与有计数的柱数、柱 `<title>` 文案、`#home-river` 的 role / aria；键盘刷选 `#river-start` / `#river-end`（Shift+→ 一天、← 一小时、aria-valuenow / valuetext）后 `#tree .file` 数 == 区间内文档数、`#time-filter-chip` 与树顶提示可见、`#home-grid` 标题「M/D HH:00 – M/D HH:00 改动了 N 篇」与封面倒序、选区与淡化；「清除」/ Esc / 双击 / 单击一小时 / 拖动吸附整点 / 「3 天」预设；「24 小时」预设（`to === null`）后新写的文件出现在 `#tree`；`/api/save-md` 后河流总数与「近 7 天改动」不变、无 `.just-changed`，强制 `fetchState()` + 重拉后仍不变；重命名后行与封面无 `.just-changed`、总数不变；`#home-river-meta` == 读数 == `#home-river-sum` 三处同一个数；`/api/activity` 失败时三处按修改时间兜底并显示「仅修改时间」（50 项）
+> - `focus-mode.spec.js` — 专注阅读模式（专注阅读新增）：首页 `⌘.` 无效且按钮隐藏；`⌘.` 进入后 `html.focus-mode`、`.sidebar` 的 right ≤ 0、`.main-header` 与 `#tab-bar` 不可见、`#focus-exit` 出现、焦点进预览帧、命中导航条挪到 `.main` 下；Esc 退出后侧栏几何与进入前一致（侧栏展开 / 收起两种初始态）、`atlas:sidebarCollapsed` 与 `body.sidebar-collapsed` 未变、焦点回 `#btn-focus`；MD 帧 `data-focus` 进入设置 / 退出移除，左下角宽度控件第一次进入即可见、实底 `--bg-elev-2`、带「宽度 [ ]」标签，鼠标静止 2 秒后与退出胶囊一起淡出、移动后回来；专注中点「加宽」→ `atlas:mdReadWidth === 'wide'` 且帧内 `data-read-width="wide"`、按 `[` 回推荐、退出后普通预览仍是推荐；焦点在 MD 帧 / 已信任 HTML 帧内时 `⌘.` 与 `Esc` 经桥生效，非专注时帧内 `Esc` 仍不转发；长 MD 与已信任 HTML 的 `#focus-progress` 滚到底 scaleX ≈ 1，未信任 HTML（沙箱帧）`#focus-progress.hidden` 且沙箱未放宽；进入时关查找栏；编辑态 `⌘.` 出 toast 且不进入；刷新后不在专注；活动文档被删除、关掉最后一个 Tab 时自动退出；目录栏底部留白让出左下角宽度控件（84 项）
 > - `fs-watcher.spec.js` — 目录树监听器（0.19.0 新增，纯 Node、不需要浏览器）：**造 600+ 个目录后 fd 净增 ≤ 2 且此时仍能 spawn**（这是整个模块存在的理由——旧版逐目录挂 watch 会吃掉上万个 fd，越过 Node 的 10240 上限后进程里所有 spawn 都报 EBADF）/ add·change·unlink 三种事件（macOS 上 eventType 永远是 rename，判定全靠 stat）/ **改动盘点期就存在的文件必须报 change 而不是 add**（报错了未读红点就不亮）/ 新建只报一次（父目录事件与文件事件必须合并，否则推两条桌面通知）/ 分段写入只报一次且报出来时内容完整 / depth 与 ignored 过滤（口径与 `walk()` 对齐）/ 整目录 mv 进来要补偿出里面的文档、整目录删除要逐个报 unlink / close 后无事件且 fd 归位（20 项）
 > - `rich-render.spec.js` — Mermaid 图表与数学公式（0.18.0 新增）：解析边界（价格 `$5` / `$100 到 $200` 不被当公式、句中 `$$…$$` 不留孤立的 `$`、代码里的 `$` 不算、`\(…\)` 也认）/ 图表渲染成 SVG 且语法错误显示 mermaid 原始报错并保留源码 / 行内与块级公式渲染成 KaTeX / 图表块不再被套代码块头部 / **按需加载**（没有图表公式的文档不下载那 3.5MB）/ 编辑器实时预览同样出图 / **往返保真**（改标题后图表与公式源码逐字节不变）/ 打印版挂上渲染器且主题钉浅色 / 局域网分享页能渲染且 `/vendor/` 对访客放行（39 项）
 > - `sandbox-trust.spec.js` — HTML 预览沙箱与信任分级（0.18.0 新增）：默认带 sandbox 且不含 `allow-same-origin`、保留 `allow-scripts`（文档自己的脚本要能跑）/ **沙箱里的文档确实读不到父页面、读不到也写不了 Atlas 接口** / Atlas 自渲染的预览页（md / csv）不被沙箱化 / 点信任后切同源、编辑按钮可用、落盘、刷新后仍有效、可收回 / **写类接口的 Origin 校验**（`null` 与别的站点、本机其它端口一律 403，不带 Origin 的 CLI 放行）（33 项）
@@ -216,10 +242,10 @@ done
 > - `folder-reveal-and-toc-resize.spec.js` — 分组「在访达中显示」+ Markdown 目录栏调宽（0.16.0 新增）：按钮只渲染给带 `autoFor` 的自动分组、`/api/reveal-folder` 的 4 条校验分支（缺参数 / 路径穿越 / 含分隔符 / 目录不存在——**成功路径会真的 spawn `open -R` 弹出文件管理器窗口，故意不进自动化**）；目录栏拖拽与 180~520px 钳制、双击复位、方向键 ±8 与 Shift ±24、`localStorage` 持久化与跨文档保持、收起目录时拖拽条隐藏且正文占满（26 项）
 > - `archive-and-collapse-all.spec.js` — 归档口径一致性：归档后 `files` / `tree` / `scannedCount` 同口径、「全部标为已读」一篇不剩（含 mtime 落在未来的文档）、正文搜索不捞归档文档、取消归档后原样回来且仍是未读、底栏统计与首页待看空态；以及「全部折叠 / 全部展开」按钮的两个状态与图标翻转、localStorage 持久化、刷新后保持、筛选态禁用（34 项）
 > - `preview-live-edit.spec.js` — 预览区轻量编辑：edit-doc 标注 / 进入编辑 / 文案改+保存 / 列表重排 / 取消恢复 / 冲突 / 安全（32 项）
-> - `favorites-and-tags.spec.js` — 收藏与标签：星标点击不误触"打开文档"、不被 SortableJS 当拖拽把手；收藏夹跨文件夹聚合、按收藏时间倒序、可取消、折叠态持久化；顶栏收藏按钮联动；标签去重与大小写合并、超量截断、行上最多 2 个 +N、"取消"不会清标签、清空即删 key；标签筛选条按用量倒序、多选为 AND、与搜索/仅未读正确叠加；重命名后收藏与标签跟随新路径（72 项）
+> - `favorites-and-tags.spec.js` — 收藏与标签：星标（行尾悬停操作组第一个）点击不误触"打开文档"、不被 SortableJS 当拖拽把手、已收藏行名字后有 `.fav-mark`；首页「收藏」轨道与 ⌘K 空状态「收藏」段跨文件夹聚合、按收藏时间倒序、可取消、每篇只出现一次；顶栏收藏按钮联动；标签去重与大小写合并、超量截断、行上最多 1 个（§10.5）、"取消"不会清标签、清空即删 key；首页顶部标签筛选条按用量倒序、多选为 AND、与搜索/仅未读（树头排序菜单里）正确叠加、侧栏菜单「按标签筛选」与首页同步；重命名后收藏与标签跟随新路径（106 项）
 > - `md-render-and-roundtrip.spec.js` — Markdown 渲染与往返保真：`<base href>`（相对图片能加载）/ front matter / 锚点链接不新开标签页 / 任务列表复选框 / 代码块语言标签+复制 / 标题锚点 / 表格横向滚动 / 深色模式；以及所见即所得改一处后源码逐字节保真（表格对齐、段落软换行、块间距都不被顺手改掉）（28 项）
 > - `md-editor-ux.spec.js` — Markdown 编辑器交互：`/` 键不再被全局快捷键抢走（设置里能手输绝对路径）/ ⌘B ⌘I ⌘E ⌘K ⌘S / 回车续列表（无序·有序·任务）/ Tab 多行缩进与反缩进 / 格式工具条 / 分栏拖拽与持久化 / 大纲 / 未保存草稿恢复（41 项）
-> - `quickopen-a11y-rename.spec.js` — ⌘K 快速打开（模糊匹配 + 键盘导航）/ 弹窗可访问性（Esc 关闭 · role=dialog · 焦点陷阱 · 焦点归还 · 嵌套只关最上层）/ 重命名磁盘文件与 store 状态迁移 + 输入校验（30 项）
+> - `quickopen-a11y-rename.spec.js` — ⌘K 快速打开（模糊匹配 + 键盘导航）/ 弹窗可访问性（Esc 关闭 · role=dialog · 焦点陷阱 · 焦点归还 · 嵌套只关最上层）/ 重命名磁盘文件与 store 状态迁移 + 输入校验；首页态顶栏「快速打开 ⌘K」胶囊可见、点击打开且关闭后焦点归还、文档态隐藏（35 项）
 > - `md-pdf-export.spec.js` — Markdown 导出 PDF：打印版形态（无目录侧栏 / 无复制按钮 / 配色钉回浅色 / `@page` 页边距）+ 端到端产出非空 PDF + 临时目录清理（21 项，本机没有 Chromium 系浏览器时自动跳过端到端部分）
 > - `index-perf-and-search.spec.js` — 文件索引与搜索：索引与磁盘一致 / watcher 增量维护（增·改·删·改名）/ 配置变更重建 / `/api/state` 不再每次重写 store.json / 切换文档类型不重扫 / 多关键词 AND 与引号短语 / 耗时门槛（25 项）
 > - `share-security.spec.js` — 局域网分享的安全边界：默认只放行文档引用到的资源、同目录未引用文件 403、显式 `scope=dir` 逃生口、路径穿越、有效期到期 410 与过期条目清理（42 项）
@@ -238,11 +264,15 @@ done
 > - `scan-guardrails.spec.js` — 超大扫描根护栏：索引总文件数硬上限（`MAX_INDEX_FILES`，可用 `ATLAS_MAX_INDEX_FILES` 覆盖）撞上限即停止收录、`/api/state` 用 `indexTruncated` / `indexCount` / `maxIndexFiles` 明示；`/api/estimate-scan` 添加扫描根前估算目录体量（真实数出文档数、缺参数 400 / 不存在 404 / 非目录 400、且不被索引上限影响）。用小上限验证截断，无需真造几万文件（约 14 项）
 > - `changelog.spec.js` — 应用内更新日志 + 新功能引导（0.28.0 新增）：全新安装不弹（只记版本）/ 从旧版升级且含 feature 才自动弹「Atlas 更新了」引导 + 带使用说明 / 看过后重开不再弹 / 纯 bug 修复版本不主动弹但仍推进 seen / 设置里手动入口打开完整日志 / 完整日志按 feature·fix 分类标注、引导底部「查看完整更新日志」就地切换（用 computed display 查真实渲染防 CSS 覆盖漏检）（约 15 项）
 > - `md-table-edit.spec.js` — Markdown 编辑：预览区表格所见即所得（0.29.0 新增）：编辑态每行有拖拽抓手 + 表头对齐占位、抓手不写进源码 / 直接改单元格文字同步回源码且表头与列数保持 / 单元格里的竖线 `|` 被转义成 `\|` 不错位 / 拖动整行重排后源码数据行顺序随之改变、表头与对齐行不动 / 全程无 JS 报错（12 项）
+> - `md-table-drag-persist.spec.js` — Markdown 表格拖行后保存落盘（0.29.1 回归）：顶层表格、引用块内表格、列表项内表格三种位置拖行 → 保存 → 磁盘是新顺序，且引用块每行仍带 `>`、列表项内表格仍缩进在列表项下（15 项）
+> - `md-table-escaped-pipe.spec.js` — 表格单元格里的转义竖线 `\|`（纯函数，不起服务）：`\|` 不切列、还原成字面 `|`，列数与行内加粗不受影响，序列化写出的 `\|` 能读回（13 项）
+> - `tree-no-ghost-drag-artifacts.spec.js` — 拖拽被打断不留「幽灵残影」（0.30.1 新增）：拖拽途中 `render()` / `destroySortables()` 打断后 body 上不留克隆且不累积、`isDragging` 复位、`render()` 恢复工作、折叠侧边栏后无浮层、正常拖拽不丢不重（14 项）
+> - `tree-toggle-perf.spec.js` — 目录树展开 / 折叠成本护栏（0.30.1 新增）：每行节点数上限、行尾操作组图标延迟注入与 hover / 键盘聚焦补齐（星标 + 5 个 `data-act`）、大分组即时展开无 `.animating` 残留、小分组仍走高度动画；耗时只打印不断言（20 项）
 > - `modal-close.spec.js` — 每个弹窗的每条关闭路径：✕ 按钮（含精确点在图标 span 上）、遮罩、Esc、关闭后焦点归还、以及"点弹窗内部不会误关"（22 项）
 > - `misc-hardening.spec.js` — 杂项加固：编辑备份扩展名跟随源文件 / 请求体上限与可读错误 / `/raw` 路由不依赖 `app._router.stack`（扫描根运行时增删后序号重排仍正确）（26 项）
 > - `toast.spec.js` — 扫描根增删与反馈 toast（12 项，含隔离性断言）
 > - `inline-edit.spec.js` — 编辑文件名 / 备注（18 项，含隔离性断言）
-> - `v0.2-features.spec.js` — 键盘导航 / 最近打开 / 全文搜索（17 项，含隔离性断言）
+> - `v0.2-features.spec.js` — 键盘导航 / 最近打开（⌘K 空状态「最近打开」段：新打开的排最前、点条目打开、段头「清除」）/ 全文搜索（23 项，含隔离性断言）
 > - `sse-leak-and-retry.spec.js` — SSE 连接不泄漏（含反向验证）+ `/api/state` 挂起时超时中止并自动重试恢复（13 项）
 > - `search-cn-and-highlight.spec.js` — 中文单字搜索 + iframe 内高亮跳转（13 项，fixture 自带含"灯"的长文档）
 > - `click-with-jitter.spec.js` — file 点击带抖动仍能打开（5 项）
@@ -327,7 +357,9 @@ npm publish --dry-run
 检查输出：
 - `name: atlas-dashboard`
 - `version: <新版本>`
-- `total files:` 应在 45~50 之间（当前为 48；bin/lib/public/server/README/LICENSE，包含 vendored 前端依赖）。
+- `total files:` 应在 55~60 之间（当前为 57；bin/lib/public/server/README/LICENSE，包含 vendored 前端依赖）。
+  星图 UI 升级这一版从 49 涨到 57 是预期的：新增 `lib/` 下 activity-log / chromium / link-index / self-writes / thumbnail
+  与 `public/` 下 peek / river / starmap 共 8 个文件。
   0.18.0 起这个数从 23 跳到 47、unpacked 从约 300KB 跳到 5.0MB —— mermaid 与 KaTeX
   （含 20 个 woff2 字体）进了 `public/vendor/`。**这是预期的**，看到 47 不要以为打包出了错。
 - 不应含 `tests/`、`data/`、`*.tgz`、`config.json`（这些在 `package.json` 的 `files` 白名单外）
@@ -422,7 +454,7 @@ atlas restart      # 让本机服务也用新版
 
 | 触发 | Workflow | 做什么 |
 |---|---|---|
-| `git push` 到 main | `.github/workflows/test.yml` | CLI smoke + landing demo + e2e install + 21 个隔离 spec（各自起实例，无需预置 fixture 与共享服务）+ 帧率非阻塞观测 |
+| `git push` 到 main | `.github/workflows/test.yml` | CLI smoke + landing demo + e2e install + 33 个隔离 spec（各自起实例，无需预置 fixture 与共享服务）+ 帧率非阻塞观测 |
 | `git push origin v*` (tag) | `.github/workflows/release.yml` | 抽取 PUBLISHING.md 该版本段落 → 创建 GitHub Release |
 | 任何 push 到 main | GitHub Pages（仓库设置） | 自动重新部署 `docs/` 到 https://damonamber.github.io/atlas-dashboard/ |
 | `npm publish` | npm registry | 包上架 + CDN 同步（约 1-2 分钟） |
@@ -545,6 +577,28 @@ rm -rf dist-app
 Developer ID Application 证书 → 导出为 .p12 → `base64 -i cert.p12 | pbcopy`。
 
 > 目前只出 arm64（Apple Silicon）。Intel / 通用二进制、Windows、以及 App 自动更新（electron-updater）待后续。
+
+**§3g 原生外壳实机手测（第 3 层，改过 `electron/` 或桌面外壳 CSS 的版本必做）：** 前两层是
+`desktop-chrome.spec.js`（假 `window.atlasDesktop` 桥，只测前端钩子）和 `--smoke` 冒烟，都碰不到主进程的
+真实窗口，下面这些只能装上新打的 App 用眼睛看。逐项打勾，有一项不对就别发：
+
+- [ ] 红绿灯与顶栏（46px）中线对齐，和侧栏头的品牌图标之间留出约 12pt 空隙；侧栏收起后顶栏的收起按钮同样离红绿灯 ≥ 12pt（macOS 26 灯组宽 60pt，避让 90px，见 `electron/titlebar.js`）
+- [ ] 侧栏透出桌面壁纸（vibrancy），浅色和深色都能看出背后窗口的颜色（着色层浅 60% / 深 68%）；窗口失焦时材质变灰；侧栏滚动时吸顶的分组头遮得住下面的行
+- [ ] 浅色 / 深色 / 跟随系统三种主题下，侧栏材质颜色都与主题一致
+- [ ] 系统深色 + Atlas 强制浅色时，打开一篇响应 `prefers-color-scheme` 的 HTML：预期显示浅色（已知差异，README「界面色调」一段写了）；切回「跟随系统」后恢复深色
+- [ ] 拖动顶栏空白处（含面包屑的文字）能移动窗口；双击按系统偏好（系统设置 → 桌面与程序坞 →「连按窗口标题栏以…」）缩放，**再双击同一位置能还原**
+- [ ] 顶栏所有按钮都能点（不被拖动区吃掉）
+- [ ] 全屏后左侧为红绿灯留的内边距消失，退出全屏恢复
+- [ ] 专注阅读（`⌘.`）时红绿灯隐藏、退出恢复；专注时拖窗口顶部 28px 能移动窗口，右上角「退出专注」胶囊可点；`⌘R` 重载后红绿灯恢复
+- [ ] 系统设置 → 辅助功能 → 显示 →「降低透明度」打开后，侧栏立即变成实底（Atlas 两条链路都读：Chromium 的 `prefers-reduced-transparency` 与主进程 `nativeTheme.prefersReducedTransparency` → `html.reduce-transparency`）；⚙ 设置 → 外观与通知 →「侧栏透明度」的状态行跟着变；关掉后恢复毛玻璃
+- [ ] 冷启动后连续收起 / 展开侧栏：除打开后**第一次**收起可能掉几帧（已知、在跟进，见 client-fix verification §2），之后都不卡；收起 / 展开时首页英雄区、河流卡片、MD 正文列跟着侧栏连续移动，首尾帧不横跳，右上角按钮不滑出窗口；浅色 / 深色 / 跟随系统、冷灰 / 暖灰来回切换时整页柔和淡入，没有一下子跳色或二次跳变
+- [ ] 侧栏拖窄到 240px，鼠标停在两行文档的交界处不闪
+- [ ] 设置弹窗切换 5 个分区时高度和位置不变
+- [ ] 把侧栏一路拖到最窄（桌面版约 268px）：左上角的 Atlas 图标与刷新 / 新建 / 全部已读 / 设置四个按钮不重叠、不被裁切，图标仍离红绿灯约 12pt；宽到约 314px 起「Atlas」字样回来
+- [ ] 开着设置窗切浅色 / 深色 / 跟随系统：设置窗全程都在，跟着整页一起淡入，不会消失一下再回来
+
+> 星图 UI 升级这一版改了 `electron/`（`main.js` 窗口选项 / IPC / 菜单、`preload.js` 桥）：npm 包里不含 `electron/`，
+> 但已装 App 的用户**必须重新出 DMG + zip + latest-mac.yml** 才能拿到，不能只发 npm。
 
 ## 故障排查
 

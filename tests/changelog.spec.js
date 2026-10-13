@@ -92,7 +92,11 @@ function check(name, actual, expected) {
   check('Esc 关闭更新日志', await page.evaluate(() => document.getElementById('changelog-modal').classList.contains('hidden')), true);
 
   // ① 续：看过后重开不再弹
+  //   上面受控注入时 seen 被记成假版本 9.9.9；重载后读的是真实 changelog。真实 [0] 是
+  //   feature 版本时，9.9.9 ≠ 真实版本会被当成"从旧版升级"而弹引导——这不是本用例要测的。
+  //   所以先把 seen 记成真实最新版（= 用户已看过这一版），再验证重开不弹。
   console.log('\n[看过后不再弹]');
+  await page.evaluate(() => { localStorage.setItem('atlas:changelogSeen', window.ATLAS_CHANGELOG[0].version); });
   await page.reload();
   await page.waitForSelector('.file');
   await page.waitForTimeout(1200);   // 超过 maybeShowWhatsNew 的 800ms 延迟

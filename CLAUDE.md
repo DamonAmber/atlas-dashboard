@@ -23,7 +23,7 @@
 - 当前版本：见 `package.json` 的 `version` 字段，或 PUBLISHING.md 顶部的"已发布版本"
 - 本地服务默认端口：4321
 - 用户配置目录：`~/.atlas/`（含 `config.json` / `store.json` / `update-check.json` / `atlas.pid` / `atlas.log`）
-- 测试运行前提：本地有 atlas 服务跑在 :4321，用 `node bin/atlas.js`（项目目录）启动让它读最新代码而不是 npm 包里的旧代码
+- 测试运行前提：无需预先起服务，spec 都自起隔离实例、不依赖 :4321；手动 / 截图验证用独立 ATLAS_HOME + 另一个端口，见 PUBLISHING.md「步骤 0」开头的说明
 
 ## 不要做的事
 

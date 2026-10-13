@@ -1,11 +1,13 @@
 // 收藏文档 + 收藏夹 / 文档标签 + 按标签筛选
 //
 // 覆盖三组回归：
-//   ① 收藏 —— 星标点击不被 SortableJS 吞掉、不误触"打开文档"、不启动拖拽；
-//      收藏夹是跨文件夹的平铺列表、按收藏时间倒序、可取消、折叠状态持久化；
-//      顶栏收藏按钮跟随当前文件；服务端 store 落盘 + 重命名后跟随
-//   ② 标签 —— 逗号分隔编辑、去重与大小写合并、超量截断、行上最多显示 2 个 +N、
-//      清空即删；标签筛选条按用量倒序、多选为 AND、清除按钮
+//   ① 收藏 —— 星标（行尾悬停操作组第一个）点击不被 SortableJS 吞掉、不误触"打开文档"、
+//      不启动拖拽；收藏是跨文件夹的平铺列表（首页「收藏」轨道 + ⌘K 空状态「收藏」段）、
+//      按收藏时间倒序、可取消；已收藏行名字后有 .fav-mark；顶栏收藏按钮跟随当前文件；
+//      服务端 store 落盘 + 重命名后跟随
+//   ② 标签 —— 逗号分隔编辑、去重与大小写合并、超量截断、行上最多显示 1 个、
+//      清空即删；首页顶部标签筛选条按用量倒序、多选为 AND、清除按钮；
+//      侧栏排序菜单里的「按标签筛选」与首页同一份状态
 //   ③ 筛选叠加 —— 标签筛选和「仅未读」/ 搜索必须是 AND 关系，而不是互相覆盖
 const path = require('path');
 const ROOT = path.join(__dirname, '..');
@@ -35,6 +37,45 @@ async function fillPrompt(page, value) {
 
 const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
 
+// 文件行的星标在行尾悬停操作组里（design §12.2）：先 hover 行让操作组展开，再点
+async function clickStar(page, name) {
+  await page.hover(fileRow(name));
+  await page.click(`${fileRow(name)} .fav-btn`);
+}
+// 排序方式与「仅未读」收在树头 #btn-sort 的菜单里（design §11.B3）
+async function openSortMenu(page) {
+  if (await page.getAttribute('#btn-sort', 'aria-expanded') !== 'true') await page.click('#btn-sort');
+  await page.waitForSelector('#sort-menu:not(.hidden)');
+}
+async function closeSortMenu(page) {
+  if (await page.getAttribute('#btn-sort', 'aria-expanded') === 'true') await page.keyboard.press('Escape');
+  await page.waitForSelector('#sort-menu.hidden', { state: 'attached' });
+}
+// 标签筛选条在首页顶部：打开着文档时先回首页（品牌区 #btn-home）
+async function goHome(page) {
+  await page.click('#btn-home');
+  await page.waitForSelector('#empty-state:not(.hidden)');
+}
+// 打开 ⌘K 读空状态的分段，再关掉
+async function qoEmptyState(page) {
+  await page.keyboard.press('Control+k');
+  await page.waitForSelector('#quickopen:not(.hidden) .quickopen-item');
+  const r = await page.evaluate(() => {
+    const pick = (sec) => [...document.querySelectorAll(`.quickopen-item[data-section="${sec}"]`)]
+      .map(e => e.dataset.path.split('/').pop());
+    return {
+      sections: [...document.querySelectorAll('#quickopen-list .qo-section')].map(e => e.dataset.section),
+      recent: pick('recent'),
+      fav: pick('fav'),
+      total: document.querySelectorAll('#quickopen-list .quickopen-item').length,
+      allHavePath: [...document.querySelectorAll('#quickopen-list .quickopen-item')].every(e => !!e.dataset.path),
+    };
+  });
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('#quickopen.hidden', { state: 'attached' });
+  return r;
+}
+
 (async () => {
   const atlas = await startAtlas({
     prefix: 'atlas-fav-',
@@ -55,49 +96,64 @@ const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
   await page.waitForFunction(() => document.querySelectorAll('.tree .file').length === 4);
 
   // ============ ① 收藏 ============
+  // 0.31 起（design §11.B1 / §12.2）：侧栏的收藏块 #fav-bar 移除，收藏改由首页「收藏」轨道
+  // #home-fav 与 ⌘K 空状态「收藏」段提供；文件行的星标 .fav-btn 移进行尾悬停操作组（先 hover
+  // 行才露出来），已收藏的行在名字后显示小实心星 .fav-mark。
   console.log('\n[收藏：星标按钮]');
   const star1 = `${fileRow('one.html')} .fav-btn`;
   check('文件行有星标按钮', await page.locator(star1).count(), 1);
+  check('星标在悬停操作组里', await page.locator(`${fileRow('one.html')} .file-actions .fav-btn`).count(), 1);
   check('初始 aria-pressed=false', await page.getAttribute(star1, 'aria-pressed'), 'false');
   check('初始行上没有 .favorite', await page.locator(`${fileRow('one.html')}.favorite`).count(), 0);
-  check('收藏夹初始隐藏', await page.locator('#fav-bar.hidden').count(), 1);
+  check('初始行上没有 .fav-mark', await page.locator(`${fileRow('one.html')} .fav-mark`).count(), 0);
+  check('首页收藏轨道初始隐藏', await page.locator('#home-fav-rail.hidden').count(), 1);
 
   // 关键回归：点星标不能顺带打开文档（.file 行是 pointerdown/pointerup 触发 openFile 的）
-  await page.click(star1);
+  await clickStar(page, 'one.html');
   await page.waitForTimeout(500);
   check('点星标后 aria-pressed=true', await page.getAttribute(star1, 'aria-pressed'), 'true');
   check('行上加了 .favorite', await page.locator(`${fileRow('one.html')}.favorite`).count(), 1);
+  check('名字后出现 .fav-mark', await page.locator(`${fileRow('one.html')} .fav-mark`).count(), 1);
   check('点星标没有打开文档（预览仍是空态）',
     await page.locator('#empty-state.hidden').count(), 0);
   check('点星标没有把这一行标 active',
     await page.locator(`${fileRow('one.html')}.active`).count(), 0);
 
-  console.log('\n[收藏夹]');
-  check('收藏夹显示出来了', await page.locator('#fav-bar.hidden').count(), 0);
-  check('收藏夹有 1 条', await page.locator('#fav-list .fav-item').count(), 1);
-  check('收藏夹条目名去掉了扩展名',
-    (await page.textContent('#fav-list .fav-item .fav-name')).trim(), 'one');
-  check('收藏夹条目带所属项目',
-    (await page.textContent('#fav-list .fav-item .fav-project')).trim(), 'alpha');
+  console.log('\n[收藏夹：首页轨道 + ⌘K 空状态]');
+  check('首页收藏轨道显示出来了', await page.locator('#home-fav-rail.hidden').count(), 0);
+  check('收藏轨道有 1 条', await page.locator('#home-fav .home-row').count(), 1);
+  check('收藏条目名去掉了扩展名',
+    (await page.textContent('#home-fav .home-row .home-row-name')).trim(), 'one');
+  check('收藏条目带所属项目',
+    (await page.textContent('#home-fav .home-row .home-row-proj')).trim(), 'alpha');
 
   // 跨文件夹 + 顺序：再收藏 beta 分组里的一个，它应该排在最前（最近收藏在前）
-  await page.click(`${fileRow('three.md')} .fav-btn`);
+  await clickStar(page, 'three.md');
   await page.waitForTimeout(400);
-  const favOrder = await page.$$eval('#fav-list .fav-item .fav-name',
+  const favOrder = await page.$$eval('#home-fav .home-row .home-row-name',
     els => els.map(e => e.textContent.trim()));
-  check('收藏夹跨文件夹聚合 2 条', favOrder.length, 2);
+  check('收藏跨文件夹聚合 2 条', favOrder.length, 2);
   check('按收藏时间倒序（最近收藏在最前）', favOrder, ['three', 'one']);
+  // ⌘K 空状态：还没打开过任何文档，所以只有「收藏」段 + 「全部文档」段，收藏段顺序同首页
+  const qoFav = await qoEmptyState(page);
+  check('⌘K 空状态有「收藏」段头', qoFav.sections, ['fav', 'all']);
+  check('⌘K「收藏」段按收藏时间倒序', qoFav.fav, ['three.md', 'one.html']);
+  check('⌘K 每篇只出现一次（共 4 篇）', qoFav.total, 4);
+  check('⌘K 每个条目都带 data-path', qoFav.allHavePath, true);
 
-  // 收藏夹条目点击能打开文档（点 one，它此刻排在第二条）
-  await page.click('#fav-list .fav-item:last-child');
+  // 收藏条目点击能打开文档（点 one，它此刻排在第二条）
+  await page.click('#home-fav .home-row:last-child');
   await page.waitForTimeout(700);
-  check('点收藏夹条目打开了文档', await page.locator('#empty-state.hidden').count(), 1);
+  check('点收藏条目打开了文档', await page.locator('#empty-state.hidden').count(), 1);
   check('打开的正是被点的那一条（one）',
     (await page.textContent('#crumbs')).includes('one.html'), true);
   check('树里对应行标了 active',
     await page.locator(`${fileRow('one.html')}.active`).count(), 1);
-  check('收藏夹里对应条目也标了 active',
-    await page.locator('#fav-list .fav-item.active .fav-name').count(), 1);
+  // 原「收藏夹里对应条目也标了 active」：侧栏收藏块已移除（§11.B1），阅读时收藏入口是 ⌘K。
+  // 改为断言 ⌘K 空状态里刚打开的 one 进了「最近打开」段、且不在「收藏」段里重复出现
+  const qoAfterOpen = await qoEmptyState(page);
+  check('⌘K「最近打开」段第一条是刚打开的 one', qoAfterOpen.recent[0], 'one.html');
+  check('⌘K「收藏」段不再重复列出 one', qoAfterOpen.fav, ['three.md']);
 
   console.log('\n[顶栏收藏按钮]');
   check('当前文件已收藏 → 顶栏按钮亮起', await page.locator('#btn-favorite.on').count(), 1);
@@ -107,35 +163,41 @@ const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
   await page.waitForTimeout(400);
   check('顶栏点一下取消收藏', await page.locator('#btn-favorite.on').count(), 0);
   check('树里的星标同步变灰', await page.getAttribute(star1, 'aria-pressed'), 'false');
-  check('收藏夹只剩 1 条', await page.locator('#fav-list .fav-item').count(), 1);
+  check('树里名字后的 .fav-mark 同步摘掉', await page.locator(`${fileRow('one.html')} .fav-mark`).count(), 0);
+  check('收藏轨道只剩 1 条', await page.locator('#home-fav .home-row').count(), 1);
   // 再收回来，供后面用
   await page.click('#btn-favorite');
   await page.waitForTimeout(400);
   check('再点一下又收藏回来', await page.locator('#btn-favorite.on').count(), 1);
 
-  console.log('\n[收藏夹里取消收藏]');
-  // 不假设顺序：取消收藏会把条目从列表里摘掉、重新收藏又会插回最前，
-  // 所以先读出最后一条到底是哪个文件，再据此断言
-  const lastFav = await page.getAttribute('#fav-list .fav-item:last-child', 'data-path');
+  console.log('\n[取消收藏]');
+  // 原来是点侧栏收藏夹条目上的 ✕；该列表随 §11.B1 移除，取消收藏走文件行星标（或顶栏星标），
+  // 断言首页收藏轨道同步变化。不假设顺序：先读出轨道最后一条到底是哪个文件
+  const lastFav = await page.getAttribute('#home-fav .home-row:last-child', 'data-path');
   const lastName = lastFav.split('/').pop();
-  await page.hover('#fav-list .fav-item:last-child');
-  await page.click('#fav-list .fav-item:last-child .fav-remove');
+  await clickStar(page, lastName);
   await page.waitForTimeout(400);
-  check('✕ 取消后收藏夹剩 1 条', await page.locator('#fav-list .fav-item').count(), 1);
+  check('取消后收藏轨道剩 1 条', await page.locator('#home-fav .home-row').count(), 1);
   check(`对应文件行（${lastName}）的 .favorite 也去掉了`,
     await page.locator(`${fileRow(lastName)}.favorite`).count(), 0);
-  // 清空最后一条 → 整个收藏夹隐藏
-  await page.hover('#fav-list .fav-item');
-  await page.click('#fav-list .fav-item .fav-remove');
+  // 清空最后一条 → 整条收藏轨道隐藏
+  const onlyFav = (await page.getAttribute('#home-fav .home-row', 'data-path')).split('/').pop();
+  await clickStar(page, onlyFav);
   await page.waitForTimeout(400);
-  check('收藏清空后收藏夹整块隐藏', await page.locator('#fav-bar.hidden').count(), 1);
+  check('收藏清空后收藏轨道整条隐藏', await page.locator('#home-fav-rail.hidden').count(), 1);
+  const qoNoFav = await qoEmptyState(page);
+  check('收藏清空后 ⌘K 不再有「收藏」段', qoNoFav.sections.includes('fav'), false);
 
   console.log('\n[星标不被当成拖拽把手]');
-  // 星标是常驻按钮、位置就在 SortableJS 的拖拽把手区里。如果没加进 Sortable 的
-  // filter，在星标上按下并移动就会开始拖这一行——拖完 onEnd 还会把排序模式
-  // 强行切到「自定义」，用户完全没想拖动却发现排序变了。
+  // 星标位于 SortableJS 的拖拽把手区里（文件行内）。如果没被 filter 排除，在星标上按下并移动
+  // 就会开始拖这一行——拖完 onEnd 还会把排序模式强行切到「自定义」，用户完全没想拖动却发现
+  // 排序变了。排序方式在树头 #btn-sort 的菜单里
+  await openSortMenu(page);
   await page.click('.seg-btn[data-sort="name"]');
+  await closeSortMenu(page);
   const orderBefore = await page.$$eval('.tree .file', els => els.map(e => e.dataset.path));
+  await page.hover(fileRow('two.html'));
+  await page.waitForTimeout(200);   // 悬停操作组展开有 120ms 宽度过渡
   const starBox = await page.locator(`${fileRow('two.html')} .fav-btn`).boundingBox();
   await page.mouse.move(starBox.x + starBox.width / 2, starBox.y + starBox.height / 2);
   await page.mouse.down();
@@ -153,33 +215,27 @@ const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
   // 但按下-抬起落在同一点时，它仍然是个正常按钮
   check('星标本身仍可点（two 被收藏）',
     await page.locator(`${fileRow('two.html')}.favorite`).count(), 0);
-  await page.click(`${fileRow('two.html')} .fav-btn`);
+  await clickStar(page, 'two.html');
   await page.waitForTimeout(400);
   check('点一下确实收藏成功', await page.locator(`${fileRow('two.html')}.favorite`).count(), 1);
-  await page.click(`${fileRow('two.html')} .fav-btn`);   // 收回，避免影响后续断言
+  await clickStar(page, 'two.html');   // 收回，避免影响后续断言
   await page.waitForTimeout(400);
 
   console.log('\n[服务端持久化]');
-  await page.click(star1);
+  await clickStar(page, 'one.html');
   await page.waitForTimeout(500);
   const storeFav = atlas.readStore().favorites || {};
   const oneAbs = atlas.filePath('alpha/one.html');
   check('store.json 里落盘了 favorites', Object.keys(storeFav), [oneAbs]);
   check('存的是收藏时间戳而不是 true', typeof storeFav[oneAbs], 'number');
 
-  // 折叠状态持久化
-  await page.click('#fav-toggle');
-  await page.waitForTimeout(200);
-  check('点标题栏按钮收起收藏夹', await page.locator('#fav-bar.collapsed').count(), 1);
-  check('收起状态写入 localStorage',
-    await page.evaluate(() => localStorage.getItem('atlas:favCollapsed')), '1');
+  // 原「折叠状态持久化」用例（#fav-toggle 收起收藏夹 + localStorage atlas:favCollapsed）已删除：
+  // 侧栏收藏块随 design §11.B1 移除，首页轨道与 ⌘K 分段都不可折叠，没有这份状态了。
+  // 保留「刷新后收藏仍在（服务端来的）」这一半
   await page.reload();
-  // 收起态下 .fav-list 是 display:none，所以只能等"挂上 DOM"而不是"可见"
-  await page.waitForSelector('#fav-list .fav-item', { state: 'attached' });
-  check('刷新后仍是收起态', await page.locator('#fav-bar.collapsed').count(), 1);
-  check('刷新后收藏仍在（服务端来的）', await page.locator('#fav-list .fav-item').count(), 1);
-  await page.click('#fav-toggle');   // 展开回来
-  await page.waitForTimeout(200);
+  await page.waitForSelector('#home-fav .home-row', { state: 'attached' });
+  check('刷新后收藏仍在（服务端来的）', await page.locator('#home-fav .home-row').count(), 1);
+  check('刷新后行上仍有 .fav-mark', await page.locator(`${fileRow('one.html')} .fav-mark`).count(), 1);
 
   // ============ ② 标签 ============
   console.log('\n[标签：编辑]');
@@ -192,7 +248,7 @@ const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
     els => els.map(e => e.textContent.trim()));
   check('去重 + 大小写合并（AI/ai 只留一个，保留首次写法）',
     atlas.readStore().tags[oneAbs], ['周报', 'AI', '待评审']);
-  check('行上最多显示 2 个标签 + “+N”', tagsOnRow, ['周报', 'AI', '+1']);
+  check('行上最多显示 1 个标签（design §10.5），不再有 “+N”', tagsOnRow, ['周报']);
   check('完整标签列表进了 title 提示',
     /标签：周报 · AI · 待评审/.test(await page.getAttribute(fileRow('one.html'), 'title')), true);
 
@@ -210,12 +266,16 @@ const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
     atlas.readStore().tags[oneAbs], ['周报', 'AI', '待评审']);
 
   console.log('\n[标签筛选条]');
-  check('筛选条显示出来了', await page.locator('#tag-bar.hidden').count(), 0);
+  // 标签筛选条在首页顶部 #home-tag-strip（design §12.3），先回首页
+  await goHome(page);
+  check('首页筛选条显示出来了', await page.locator('#home-tag-strip.hidden').count(), 0);
+  check('chip 区显示出来了', await page.locator('#tag-bar.hidden').count(), 0);
   const chipNames = await page.$$eval('#tag-bar .tag-chip .tag-chip-name',
     els => els.map(e => e.textContent.trim()));
   check('三个标签都成了 chip', chipNames.sort(), ['AI', '周报', '待评审']);
   check('chip 上带用量计数',
     (await page.textContent('#tag-bar .tag-chip .tag-chip-count')).trim(), '1');
+  check('侧栏菜单里同样有三个 chip', await page.locator('#sort-menu-tags .tag-chip').count(), 3);
 
   // 给另一个文件也打上「周报」，让计数变 2 并可验证筛选
   await page.hover(fileRow('three.md'));
@@ -238,6 +298,10 @@ const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
   check('出现「清除」按钮', await page.locator('#tag-bar-clear.hidden').count(), 0);
   check('不带标签的分组被整个剪掉',
     await page.locator('.tree .folder').count(), 2);
+  check('树顶出现筛选提示', await page.locator('#tree-filter-note.hidden').count(), 0);
+  check('筛选提示写明标签', /已按标签筛选：周报/.test(await page.textContent('#tree-filter-note')), true);
+  check('侧栏菜单里的同一 chip 也是选中态',
+    await page.locator('#sort-menu-tags .tag-chip.on .tag-chip-name').allTextContents(), ['周报']);
 
   // 多标签 = AND（同时具备），不是 OR
   const aiChip = page.locator('#tag-bar .tag-chip', { hasText: 'AI' }).first();
@@ -247,11 +311,26 @@ const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
   check('多选标签是 AND（只剩同时有「周报」和「AI」的）', visible, ['one.html']);
   check('两个 chip 都是选中态', await page.locator('#tag-bar .tag-chip.on').count(), 2);
 
+  // 侧栏菜单的「按标签筛选」与首页筛选条是同一份状态：在菜单里取消「AI」，首页随之同步
+  await openSortMenu(page);
+  await page.locator('#sort-menu-tags .tag-chip', { hasText: 'AI' }).first().click();
+  await page.waitForTimeout(300);
+  check('菜单里点 chip 后菜单仍开着', await page.locator('#sort-menu.hidden').count(), 0);
+  check('菜单里取消「AI」→ 首页筛选条只剩「周报」选中',
+    await page.locator('#tag-bar .tag-chip.on .tag-chip-name').allTextContents(), ['周报']);
+  visible = await page.$$eval('.tree .file', els => els.map(e => e.dataset.path.split('/').pop()));
+  check('菜单里改筛选，目录树同步', visible.sort(), ['one.html', 'three.md']);
+  await page.locator('#sort-menu-tags .tag-chip', { hasText: 'AI' }).first().click();
+  await page.waitForTimeout(300);
+  check('菜单里再选回「AI」→ 首页两个 chip 选中', await page.locator('#tag-bar .tag-chip.on').count(), 2);
+  await closeSortMenu(page);
+
   await page.click('#tag-bar-clear');
   await page.waitForTimeout(300);
   check('清除后所有文档回来', await page.locator('.tree .file').count(), 4);
   check('清除后没有选中的 chip', await page.locator('#tag-bar .tag-chip.on').count(), 0);
   check('「清除」按钮自己隐藏', await page.locator('#tag-bar-clear.hidden').count(), 1);
+  check('树顶筛选提示隐藏', await page.locator('#tree-filter-note.hidden').count(), 1);
 
   console.log('\n[筛选叠加]');
   // 标签筛选 + 搜索：必须 AND
@@ -265,7 +344,7 @@ const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
 
   // 标签筛选 + 仅未读：给从没打开过的 two.html 也打上「周报」，
   // 再把 three.md 点开变已读 —— 勾上「仅未读」后应该只剩 two.html
-  // （one.html 前面点收藏夹时已经打开过，也是已读）
+  // （one.html 前面点收藏条目时已经打开过，也是已读）
   await page.click('#tag-bar-clear');
   await page.hover(fileRow('two.html'));
   await page.click(`${fileRow('two.html')} [data-act="tags"]`);
@@ -273,15 +352,22 @@ const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
   await page.waitForTimeout(500);
   await page.click(fileRow('three.md'));
   await page.waitForTimeout(700);
+  // 打开文档后首页隐藏，回首页再点筛选条
+  await goHome(page);
   await page.locator('#tag-bar .tag-chip', { hasText: '周报' }).first().click();
   await page.waitForTimeout(300);
   visible = await page.$$eval('.tree .file', els => els.map(e => e.dataset.path.split('/').pop()));
   check('三个文档都带「周报」', visible.sort(), ['one.html', 'three.md', 'two.html']);
+  await openSortMenu(page);
   await page.check('#only-unread');
   await page.waitForTimeout(300);
   visible = await page.$$eval('.tree .file', els => els.map(e => e.dataset.path.split('/').pop()));
   check('标签 + 仅未读 = AND（已读的两个被滤掉）', visible, ['two.html']);
+  check('排序按钮小字带「· 未读」', (await page.textContent('#btn-sort-label')).trim(), '名称 · 未读');
+  check('树顶提示把两种筛选用「 · 」连起来',
+    /已按标签筛选：周报 · 仅看未读/.test(await page.textContent('#tree-filter-note')), true);
   await page.uncheck('#only-unread');
+  await closeSortMenu(page);
   await page.click('#tag-bar-clear');
   await page.waitForTimeout(300);
   // 把 two.html 的标签清掉，恢复到进入本节前的状态
@@ -319,6 +405,8 @@ const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
     void rel;
   }
   check('所有标签清空后筛选条隐藏', await page.locator('#tag-bar.hidden').count(), 1);
+  check('首页筛选条整条隐藏', await page.locator('#home-tag-strip.hidden').count(), 1);
+  check('侧栏菜单的「按标签筛选」段也隐藏', await page.locator('#sort-menu-tags-sec.hidden').count(), 1);
 
   // ============ ③ 重命名后收藏 / 标签跟随 ============
   console.log('\n[重命名后元数据跟随]');
@@ -368,7 +456,8 @@ const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
   check('前置：全部分组折叠，屏幕上看不到任何文档', base.visible, 0);
   check('前置：localStorage 记下了折叠偏好', base.lsCollapsed > 0, true);
 
-  // 标签筛选
+  // 标签筛选（筛选条在首页顶部；刷新后可能恢复了上次打开的 Tab，先回首页）
+  await goHome(page);
   await page.locator('#tag-bar .tag-chip', { hasText: '归档' }).first().click();
   await page.waitForTimeout(400);
   let v = await vis();
@@ -390,13 +479,15 @@ const fileRow = (name) => `.tree .file[data-path$="${name}"]`;
   await page.waitForTimeout(800);
   check('清空搜索后折叠状态恢复', (await vis()).collapsed, base.collapsed);
 
-  // 仅未读
+  // 仅未读（在树头排序菜单里）
+  await openSortMenu(page);
   await page.check('#only-unread');
   await page.waitForTimeout(400);
   v = await vis();
   check('「仅未读」命中结果同样可见', v.visible > 0, true);
   check('「仅未读」时命中分组自动展开', v.collapsed, 0);
   await page.uncheck('#only-unread');
+  await closeSortMenu(page);
   await page.waitForTimeout(400);
   check('取消「仅未读」后折叠状态恢复', (await vis()).collapsed, base.collapsed);
 

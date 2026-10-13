@@ -11,7 +11,10 @@
     // 提前同步设置初始状态，避免首次加载看到收起动画 / 主题闪一下
     (function () {
       try {
-        if (localStorage.getItem('atlas:sidebarCollapsed') === '1') {
+        // 星图视图进入时会自动收起侧栏（design §10.3）：首帧就按收起的姿态排版，
+        // 只是首帧姿态，不写 atlas:sidebarCollapsed 偏好
+        if (localStorage.getItem('atlas:sidebarCollapsed') === '1'
+            || localStorage.getItem('atlas:viewMode') === 'map') {
           document.documentElement.classList.add('init-sidebar-collapsed');
         }
         // 主题：system（不设 data-theme，跟随系统）/ light / dark
@@ -23,6 +26,24 @@
         // 界面色调（冷/暖中性）：同样要在 CSS 生效前设好，否则暖灰用户先看到一帧冷灰
         if (localStorage.getItem('atlas:skin') === 'warm') {
           document.documentElement.setAttribute('data-skin', 'warm');
+        }
+        // 界面动效「减少」：只能比系统更安静，不能在系统要求减少时强行开启
+        if (localStorage.getItem('atlas:motion') === 'reduce') {
+          document.documentElement.setAttribute('data-motion', 'reduce');
+        }
+      } catch (e) {}
+      // 桌面版（Electron preload 先于页面脚本执行，桥此时已就绪）：第一帧就带上平台属性，
+      // 所有原生化 CSS 只在 html[data-desktop] 下生效，浏览器版天然没有这个属性
+      try {
+        var d = window.atlasDesktop;
+        if (d && d.platform) {
+          var de = document.documentElement;
+          de.setAttribute('data-desktop', d.platform);
+          // 红绿灯避让宽度按主进程实测的灯组几何下发（macOS 26 起灯组 60pt），首帧就到位
+          if (typeof d.titlebarInset === 'number' && d.titlebarInset > 0 && d.titlebarInset < 200) {
+            de.style.setProperty('--titlebar-inset', d.titlebarInset + 'px');
+          }
+          if (d.reducedTransparency) de.classList.add('reduce-transparency');
         }
       } catch (e) {}
     })();
@@ -53,6 +74,7 @@
       <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></symbol>
       <symbol id="i-home" viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></symbol>
       <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
       <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/><path d="m15 5 4 4"/></symbol>
       <symbol id="i-file-pen" viewBox="0 0 24 24"><path d="M12.5 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8.5L20 7.5V10"/><path d="M14 2v6h6"/><path d="M18.4 12.6a2 2 0 0 1 3 3L17 20l-4 1 1-4z"/></symbol>
       <symbol id="i-tag" viewBox="0 0 24 24"><path d="M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.42l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r="1.4" fill="currentColor" stroke="none"/></symbol>
@@ -94,6 +116,15 @@
       <symbol id="i-expand-all" viewBox="0 0 24 24"><path d="m7 6 5 5 5-5"/><path d="m7 13 5 5 5-5"/></symbol>
       <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v13"/><path d="m7 12 5 5 5-5"/><path d="M4 21h16"/></symbol>
       <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></symbol>
+      <!-- 排序：三条递减的横线 + 向下箭头（树头 #btn-sort） -->
+      <symbol id="i-sort" viewBox="0 0 24 24"><path d="M4 6h10"/><path d="M4 12h7"/><path d="M4 18h4"/><path d="M18 5v14"/><path d="m15 16 3 3 3-3"/></symbol>
+      <!-- 星图：几颗星 + 引用连线；缩放组的放大 / 缩小 / 显示全部 -->
+      <symbol id="i-starmap" viewBox="0 0 24 24"><circle cx="6" cy="7" r="1.6"/><circle cx="17" cy="5" r="1.2"/><circle cx="12" cy="13" r="2"/><circle cx="19" cy="17" r="1.4"/><circle cx="7" cy="19" r="1.2"/><path d="M6 7l6 6 7 4M12 13l5-8M12 13l-5 6" opacity=".55"/></symbol>
+      <symbol id="i-zoom-in" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></symbol>
+      <symbol id="i-zoom-out" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+      <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/><circle cx="12" cy="12" r="2"/></symbol>
+      <!-- 专注阅读（顶栏 #btn-focus）：四个角框 -->
+      <symbol id="i-focus" viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></symbol>
       <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3.2l1.9 5.1 5.1 1.9-5.1 1.9L12 17.2l-1.9-5.1L5 10.2l5.1-1.9z"/><path d="M18.5 15.5l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7z"/></symbol>
     </defs>
   </svg>
@@ -103,7 +134,9 @@
       <!-- 品牌区同时是「回到首页」入口：点 logo 回首页是通用肌肉记忆，
            白捡一个入口且不占新的界面位置。主入口在面包屑最左段。 -->
       <button class="brand" id="btn-home" type="button" title="回到首页（Esc）" aria-label="回到首页">
-        <span class="brand-mark" aria-hidden="true"><svg class="brand-glyph" viewBox="0 0 28 28" width="28" height="28" aria-hidden="true"><rect x="9" y="6.4" width="11" height="14" rx="2" fill="#fff" opacity=".5" transform="rotate(9 14 14)"/><rect x="8" y="6.8" width="11" height="14" rx="2" fill="#fff"/><g fill="#aebfe0"><rect x="10" y="9.6" width="5.2" height="1.4" rx=".7"/><rect x="10" y="12.2" width="6.8" height="1.4" rx=".7"/><rect x="10" y="14.8" width="5.8" height="1.4" rx=".7"/></g><circle cx="19.2" cy="7" r="2.7" fill="#fff"/><circle cx="19.2" cy="7" r="1.8" fill="#ff4d4f"/></svg></span>
+        <!-- 品牌图标：内联 public/favicon.svg 的图形（渐变方底 + 文档卡片 + 未读点），
+             与浏览器标签页图标、App 图标同一个形象。渐变 id 加前缀，避免和页面其它 SVG 撞名 -->
+        <span class="brand-mark" aria-hidden="true"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true" focusable="false"><defs><linearGradient id="atlas-brand-grad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#5b9cff"/><stop offset="100%" stop-color="#8b5bff"/></linearGradient></defs><rect width="32" height="32" rx="7" fill="url(#atlas-brand-grad)"/><rect x="9.5" y="8.5" width="13" height="16.5" rx="2" fill="#ffffff" opacity="0.5" transform="rotate(8 16 16)"/><rect x="9" y="8" width="13" height="16.5" rx="2" fill="#ffffff"/><g fill="#aebfe0"><rect x="11.3" y="11.3" width="6.5" height="1.7" rx="0.85"/><rect x="11.3" y="14.3" width="8.4" height="1.7" rx="0.85"/><rect x="11.3" y="17.3" width="7.2" height="1.7" rx="0.85"/></g><circle cx="22" cy="8.6" r="3.3" fill="#ffffff"/><circle cx="22" cy="8.6" r="2.2" fill="#ff4d4f"/></svg></span>
         <span class="brand-text">
           <span class="brand-title">Atlas</span>
         </span>
@@ -123,78 +156,47 @@
     <div class="filter">
       <input id="search" type="search" placeholder="搜索文件名 / 备注 / 路径 / 内容（按 / 聚焦）" />
     </div>
-    <div class="sort-bar" role="group" aria-label="排序与筛选">
-      <span class="sort-bar-label">排序</span>
-      <div class="seg" role="radiogroup" aria-label="排序方式">
-        <button class="seg-btn" type="button" data-sort="name"   role="radio" aria-checked="true">名称</button>
-        <button class="seg-btn" type="button" data-sort="mtime"  role="radio" aria-checked="false">时间</button>
-        <button class="seg-btn" type="button" data-sort="custom" role="radio" aria-checked="false" title="拖动文件即自动切到此模式">自定义</button>
-      </div>
-      <label class="only-unread">
-        <input type="checkbox" id="only-unread" />
-        <span>仅未读</span>
-      </label>
-    </div>
-
-    <!-- 快捷区：收藏 / 最近 / 标签三段收进一个视觉独立的面板。
-         过去三段是并排的裸分区，各画一条分隔线、长得一模一样，堆在一起像表格，
-         也和下面的目录树糊成一片（"分区不清晰"的根源）。现在给它一个凹陷底色 +
-         发丝边 + 圆角的容器身份，一眼就是"快捷入口"这一块，和可滚动的全量树分开。
-         容器空时（无收藏/最近/标签）靠 :has() 整块隐藏，不留空面板。
-         顺序调成 收藏 → 最近 → 标签：前两个是并列的平铺列表，标签是过滤树的筛选器，
-         放最下方紧贴目录树，"筛的就是下面这棵树"的关系更直白。
-         每段内部结构 / id / 折叠与显隐逻辑完全不变，只是换了容器与外观。 -->
-    <div class="quick-zone" id="quick-zone">
-      <div id="fav-bar" class="fav-bar hidden">
-        <button class="section-head" id="fav-toggle" type="button" aria-expanded="true" aria-controls="fav-list" title="收起 / 展开收藏夹">
-          <svg class="ico section-chev" width="12" height="12" aria-hidden="true"><use href="#i-chevron-down"/></svg>
-          <svg class="ico section-ico" width="12" height="12" aria-hidden="true"><use href="#i-star"/></svg>
-          <span class="section-title">收藏</span>
-          <span class="section-count" id="fav-count"></span>
-        </button>
-        <div id="fav-list" class="fav-list"></div>
-      </div>
-
-      <div id="recent-bar" class="recent-bar hidden">
-        <!-- 折叠和「清除」是两个动作，必须是并列的两个 button（button 不能嵌套），
-             结构与 tag-bar-head 一致 -->
-        <div class="recent-bar-head">
-          <button class="section-head recent-toggle" id="recent-toggle" type="button" aria-expanded="true" aria-controls="recent-list" title="收起 / 展开最近打开列表">
-            <svg class="ico section-chev" width="12" height="12" aria-hidden="true"><use href="#i-chevron-down"/></svg>
-            <svg class="ico section-ico" width="12" height="12" aria-hidden="true"><use href="#i-clock"/></svg>
-            <span class="section-title">最近</span>
-            <span class="section-count" id="recent-count"></span>
-          </button>
-          <button id="recent-clear" class="recent-clear" type="button" title="清除最近浏览记录" aria-label="清除最近浏览记录">清除</button>
-        </div>
-        <div id="recent-list" class="recent-list"></div>
-      </div>
-
-      <!-- 标签筛选区：只在有标签存在时显示（renderTagBar 控制）。
-           分区头 + 可折叠 chip 区。 -->
-      <div id="tag-bar" class="tag-bar hidden" role="group" aria-label="按标签筛选">
-        <div class="tag-bar-head">
-          <!-- 折叠按钮和「清除」是两个动作，必须是并列的两个 button（button 不能嵌套） -->
-          <button class="section-head tag-bar-toggle" id="tag-bar-toggle" type="button" aria-expanded="true" aria-controls="tag-bar-chips" title="收起 / 展开标签筛选">
-            <svg class="ico section-chev" width="12" height="12" aria-hidden="true"><use href="#i-chevron-down"/></svg>
-            <svg class="ico section-ico" width="12" height="12" aria-hidden="true"><use href="#i-tag"/></svg>
-            <span class="section-title">标签</span>
-            <span class="section-count" id="tag-bar-count"></span>
-          </button>
-          <button id="tag-bar-clear" class="tag-bar-clear hidden" type="button" title="清除标签筛选" aria-label="清除标签筛选">清除</button>
-        </div>
-        <div id="tag-bar-chips" class="tag-bar-chips"></div>
-      </div>
-    </div>
-
+    <!-- 时间河流的时间段筛选（只存在本会话）：点一下清除 -->
+    <button id="time-filter-chip" class="time-filter-chip hidden" type="button" title="清除时间段筛选"></button>
+    <!-- 侧栏只留搜索、树头和目录树（design §11.B1）。原来的排序条与「收藏 / 最近 / 标签」快捷区移走：
+         排序与「仅未读」收进树头的 #btn-sort 菜单（原 [data-sort] / #only-unread 元素原样搬入，绑定不变）；
+         收藏 / 最近改由首页两条轨道与 ⌘K 空状态提供；标签筛选移到首页顶部 #home-tag-strip，
+         菜单里另有一份「按标签筛选」（#sort-menu-tags），两处读写同一个 state.tagFilter。 -->
     <div class="tree-head">
-      <svg class="ico section-ico" width="12" height="12" aria-hidden="true"><use href="#i-layers"/></svg>
-      <span class="section-title">全部文档</span>
       <!-- 目录树视图切换：分组（虚拟分组，可拖拽/归档）↔ 目录（磁盘真实多级结构，只读镜像）。
            用 data-view 而非 data-sort，避免被排序逻辑（els.segButtons）捕获。 -->
-      <div class="seg view-seg" role="radiogroup" aria-label="目录树视图">
+      <!-- 第三项「星图」占据主区（首页表面），侧栏仍显示切换前的列表视图（design §3a）。
+           ←/→ 在三项间移动并选中，全部走 app.js 的 selectView() -->
+      <div class="seg view-seg" role="radiogroup" aria-label="视图">
         <button class="seg-btn" type="button" data-view="groups" role="radio" aria-checked="true" title="按虚拟分组显示（可拖拽重排、归档、自定义子分组）">分组</button>
         <button class="seg-btn" type="button" data-view="tree" role="radio" aria-checked="false" title="按磁盘真实目录层级显示（二级 / 三级子目录都展开）">目录</button>
+        <button class="seg-btn" type="button" data-view="map" role="radio" aria-checked="false" title="星图：按项目聚成星团，亮度 = 新鲜度，连线 = 引用关系">星图</button>
+      </div>
+      <div class="sort-wrap" id="sort-wrap">
+        <button id="btn-sort" class="tree-head-btn sort-btn" type="button"
+                aria-haspopup="menu" aria-expanded="false" aria-controls="sort-menu"
+                title="排序：按名称 · 筛选：全部（点击修改）">
+          <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-sort"/></svg>
+          <span id="btn-sort-label" class="sort-btn-label">名称</span>
+        </button>
+        <div id="sort-menu" class="sort-menu hidden" role="menu" aria-label="排序与筛选">
+          <div class="sort-menu-h" aria-hidden="true">排序</div>
+          <div class="seg sort-menu-seg" role="radiogroup" aria-label="排序方式">
+            <button class="seg-btn" type="button" data-sort="name"   role="radio" aria-checked="true">名称</button>
+            <button class="seg-btn" type="button" data-sort="mtime"  role="radio" aria-checked="false">时间</button>
+            <button class="seg-btn" type="button" data-sort="custom" role="radio" aria-checked="false" title="拖动文件即自动切到此模式">自定义<span class="sort-menu-note">拖动文件即切到此模式</span></button>
+          </div>
+          <div class="sort-menu-sep" role="separator"></div>
+          <label class="only-unread">
+            <input type="checkbox" id="only-unread" />
+            <span>仅未读</span>
+          </label>
+          <div class="sort-menu-tags-sec hidden" id="sort-menu-tags-sec">
+            <div class="sort-menu-sep" role="separator"></div>
+            <div class="sort-menu-h" id="sort-menu-tags-h">按标签筛选</div>
+            <div id="sort-menu-tags" class="sort-menu-tags" role="group" aria-labelledby="sort-menu-tags-h"></div>
+          </div>
+        </div>
       </div>
       <button id="btn-collapse-all" class="tree-head-btn" type="button"
               title="全部折叠" aria-label="全部折叠">
@@ -202,10 +204,15 @@
       </button>
       <span class="section-count" id="tree-count"></span>
     </div>
+    <!-- 筛选提示：标签筛选 / 仅未读生效时出现，说清"树被筛过了"并给一个「清除」 -->
+    <div id="tree-filter-note" class="tree-filter-note hidden" role="status"></div>
     <div id="tree" class="tree"></div>
 
     <footer class="sidebar-footer">
       <span id="save-status" title="保存状态">●</span>
+      <!-- 实时更新连接状态（connectSSE 维护 data-state：live / retry / off）。
+           不加 role="status"：断线重连时不反复播报；读屏文案在 .sr-only 里 -->
+      <span id="live-status" class="live-status" data-state="live" title="实时更新：已连接"><i aria-hidden="true"></i><span class="hud">实时</span><span class="sr-only">实时更新已连接</span></span>
       <span id="stats" class="footer-stats" title="扫描到的文档总数与未读数">扫描中…</span>
       <button id="btn-shortcuts" class="footer-kbd" type="button"
               title="查看全部快捷键（按 ? 也可唤出）" aria-label="查看全部快捷键">
@@ -231,6 +238,8 @@
           <span>首页</span>
         </span>
       </div>
+      <!-- 进入星图时自动收起侧栏的提示（design §10.3）。只有 ⌘B / 顶栏按钮写侧栏偏好 -->
+      <div id="auto-collapse-note" class="auto-collapse-note hidden" role="status">侧栏已自动收起，离开星图后恢复 · <kbd>⌘B</kbd> 展开</div>
       <!-- 工具条分三组，用细分隔线隔开：
              ① 文档本身（刷新 / 对比 / 编辑）
              ② 标记与分发（收藏 / 未读 / 分享 / 导出）
@@ -265,7 +274,7 @@
         <button id="btn-favorite" disabled title="收藏此文档" aria-label="收藏此文档" aria-pressed="false">
           <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-star"/></svg>
         </button>
-        <button id="btn-mark-unread" disabled title="标为未读（红点重新亮起）" aria-label="标为未读"><svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-mail-open"/></svg></button>
+        <button id="btn-mark-unread" disabled title="标为未读（未读标记重新亮起）" aria-label="标为未读"><svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-mail-open"/></svg></button>
         <button id="btn-share" disabled title="分享到局域网（生成可访问链接 + 二维码）" aria-label="分享到局域网">
           <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-share"/></svg>
         </button>
@@ -273,6 +282,10 @@
           <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-file-down"/></svg>
         </button>
         <span class="tb-sep" aria-hidden="true"></span>
+        <!-- 专注阅读（design §3f）：只在有活动文档时去掉 .hidden；⌘. 同效 -->
+        <button id="btn-focus" class="ico hidden" type="button" aria-pressed="false" title="专注阅读（⌘.）" aria-label="专注阅读">
+          <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-focus"/></svg>
+        </button>
         <!-- 「更多」菜单：把三个低频的"跳出 Atlas"动作（新标签打开 / 访达 / 复制路径）
              收进一个下拉，顶栏从一排 ~10 个图标降到几个常用的 + 一个 ⋯。
              菜单项复用原按钮 id，所以 app.js 里的事件绑定与启用/禁用逻辑一律不动。 -->
@@ -294,8 +307,20 @@
               <svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-clipboard"/></svg>
               <span class="tb-more-label">复制文件路径</span>
             </button>
+            <button id="btn-focus-menu" role="menuitem" disabled title="专注阅读（⌘.）">
+              <svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-focus"/></svg>
+              <span class="tb-more-label">专注阅读</span>
+            </button>
           </div>
         </div>
+        <!-- 快速打开胶囊（design §10.7）：只在首页 / 星图态显示（body.no-active-doc），
+             文档态仍靠 ⌘K。点击走 app.js 里 [data-open-quickopen] 的委托 -->
+        <button id="btn-quickopen" class="qo-capsule" type="button" data-open-quickopen
+                title="快速打开（⌘K）" aria-label="快速打开（⌘K）" aria-keyshortcuts="Meta+K Control+K">
+          <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-search"/></svg>
+          <span>快速打开</span>
+          <kbd aria-hidden="true">⌘K</kbd>
+        </button>
       </div>
     </header>
 
@@ -360,7 +385,13 @@
          标签内容由 app.js 的 renderTabs() 渲染，每枚标签对应 .preview 里一个常驻 iframe。 -->
     <div class="tab-bar hidden" id="tab-bar" role="tablist" aria-label="打开的文档标签"></div>
 
+    <!-- 专注阅读（design §3f / §3g）：退出胶囊、桌面版顶部拖动条。html.focus-mode 下才显示 -->
+    <button id="focus-exit" class="focus-exit hidden" type="button">退出专注 · Esc</button>
+    <div id="focus-drag" aria-hidden="true"></div>
+
     <div class="preview">
+      <!-- 阅读进度：仅同源预览帧（MD / CSV 等 / 已信任 HTML）在专注模式下显示 -->
+      <div id="focus-progress" class="focus-progress hidden" aria-hidden="true"></div>
       <!-- 预览 iframe 不再是单例：每个 Tab 一个 .preview-frame，由 app.js 动态创建，
            只有当前 Tab 的那个可见。els.preview 始终指向当前活动 Tab 的 iframe。 -->
 
@@ -455,23 +486,86 @@
            未读队列 + 最近打开 + 收藏，点一下就进文档。 -->
       <div class="empty" id="empty-state">
         <div class="home">
+          <!-- 全局标签筛选条（design §12.3）：chip 与侧栏排序菜单里的「按标签筛选」读写同一个
+               state.tagFilter，经 fileMatches() 同时筛目录树与待看。没有任何标签时整条隐藏。
+               #tag-bar / #tag-bar-clear 沿用原 id（原先在侧栏快捷区）。 -->
+          <section id="home-tag-strip" class="home-tag-strip hidden" aria-label="按标签筛选">
+            <span class="home-tag-strip-label" aria-hidden="true">按标签筛选</span>
+            <div id="tag-bar" class="tag-strip-chips" role="group" aria-label="标签"></div>
+            <span id="tag-strip-hits" class="tag-strip-hits"></span>
+            <button id="tag-bar-clear" class="tag-bar-clear hidden" type="button" title="清除标签筛选" aria-label="清除标签筛选">清除</button>
+          </section>
+
           <section class="home-hero" id="home-hero">
             <div class="home-hero-glow" aria-hidden="true"></div>
             <div class="home-hero-body">
-              <span class="home-hero-eyebrow" id="home-eyebrow">今日</span>
+              <div class="home-hero-eyebrow-row">
+                <span class="home-hero-eyebrow" id="home-eyebrow">今日</span>
+                <span class="home-hero-eyebrow-sep" aria-hidden="true"></span>
+                <span class="home-clock" id="home-clock"></span>
+              </div>
               <h1 class="home-hero-line" id="home-hero-line">正在扫描本地文档…</h1>
               <p class="home-hero-sub" id="home-sub"></p>
               <div class="home-chips" id="home-chips"></div>
+              <!-- 迷你星图（design §10.1）：AtlasStarmap.renderThumbnail 走远景路径画进 canvas，
+                   只在路径集合变化或主题切换时重画。点击 = 选中「星图」视图 -->
+              <button id="home-minimap" class="home-minimap hidden" type="button" aria-label="进入星图视图">
+                <canvas id="home-minimap-canvas" aria-hidden="true"></canvas>
+                <span class="home-minimap-cap" aria-hidden="true">亮度 = 新鲜度 · 连线 = 引用关系</span>
+                <span class="home-minimap-go" aria-hidden="true">进入星图 →</span>
+              </button>
             </div>
-            <div class="home-pulse" id="home-pulse" aria-hidden="true"></div>
+            <!-- 竖排读数：文档 / 项目 / 未读 / 近 7 天改动（renderHome 填充） -->
+            <div class="home-readouts" id="home-readouts" role="list" aria-label="概览"></div>
+          </section>
+
+          <!-- 时间河流（design §3d）：近 7 天 × 每小时 168 根柱，数据 = 活动日志 + 修改时间兜底。
+               拖动 / 手柄 / 预设选出时间段 → state.timeRange，经 fileMatches() 同时筛目录树、首页与星图。
+               柱子由 AtlasRiver.renderRiverSvg 画进 svg；三处总数（#home-river-meta、读数「近 7 天改动」、
+               #home-river-sum）共用同一次 riverTotals() -->
+          <section class="home-river-card" id="home-river-card" aria-labelledby="home-river-title">
+            <div class="home-river-head">
+              <h2 class="home-river-title" id="home-river-title">时间河流</h2>
+              <span class="hud home-river-hud">近 7 天 · 每小时</span>
+              <span class="home-river-meta" id="home-river-meta"></span>
+              <span class="home-river-tag hidden" id="home-river-fallback" title="活动日志暂不可用，按每篇文档的修改时间推断">仅修改时间</span>
+              <div class="home-river-presets" role="group" aria-label="时间段预设">
+                <button type="button" class="river-preset" data-river-preset="24" aria-pressed="false">24 小时</button>
+                <button type="button" class="river-preset" data-river-preset="72" aria-pressed="false">3 天</button>
+                <button type="button" class="river-preset" data-river-preset="clear">清除</button>
+              </div>
+            </div>
+            <p class="home-river-note hidden" id="home-river-note">活动日志暂不可用，河流按每篇文档的修改时间推断（每篇只算最后一次改动）</p>
+            <div class="home-river" id="home-river" role="group" aria-label="过去 7 天的改动时间轴" aria-describedby="home-river-sum">
+              <svg class="river-svg" viewBox="0 0 168 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+              <span class="river-hatch-tag hidden" id="river-hatch-tag" title="这之前只记录每篇文档的最后一次改动">仅修改时间</span>
+              <div class="river-peaks" id="river-peaks" aria-hidden="true"></div>
+              <div class="river-sel hidden" id="river-sel" aria-hidden="true"></div>
+              <div class="river-handle" id="river-start" role="slider" tabindex="0" aria-label="时间段起点"
+                   aria-valuemin="0" aria-valuemax="168" aria-valuenow="0"></div>
+              <div class="river-handle" id="river-end" role="slider" tabindex="0" aria-label="时间段终点"
+                   aria-valuemin="0" aria-valuemax="168" aria-valuenow="168"></div>
+              <span class="river-now-tag" id="river-now-tag" aria-hidden="true">现在</span>
+            </div>
+            <div class="river-days" id="river-days" aria-hidden="true"></div>
+            <p class="sr-only" id="home-river-sum"></p>
+            <div class="river-foot" aria-hidden="true">
+              <span class="river-lg"><i class="lg-recent"></i>24 小时内</span>
+              <span class="river-lg"><i class="lg-older"></i>更早</span>
+              <span class="river-lg"><i class="lg-mtime"></i>斜纹底 = 仅按修改时间推断</span>
+              <span class="river-lg"><i class="lg-peak"></i>超出比例尺（柱顶标次数）</span>
+              <span class="river-lg"><i class="lg-now"></i>现在</span>
+              <span class="river-foot-hint">拖动选择时段 · 单击选一小时 · 双击清除 · 手柄支持 ←/→、Shift+←/→</span>
+            </div>
           </section>
 
           <section class="home-feed" id="home-feed">
             <div class="home-feed-head">
               <svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-mail-open"/></svg>
-              <span>待看</span>
+              <span id="home-feed-title">待看</span>
               <span class="home-feed-count" id="home-feed-count"></span>
               <span class="home-feed-hint" id="home-feed-hint"></span>
+              <button type="button" class="home-feed-all hidden" id="home-feed-all">在侧栏中列出全部</button>
             </div>
             <!-- 首屏骨架：扫描回来前先摆几张微光卡，renderHome 一跑即被覆盖 -->
             <div class="home-grid" id="home-grid">
@@ -487,6 +581,7 @@
               <div class="home-rail-head">
                 <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-clock"/></svg>
                 <span>最近打开</span>
+                <button id="home-recent-clear" class="recent-clear home-rail-clear hidden" type="button" title="清除最近浏览记录" aria-label="清除最近浏览记录">清除</button>
               </div>
               <div class="home-list" id="home-recent"></div>
             </section>
@@ -511,6 +606,51 @@
             </button>
           </footer>
         </div>
+
+        <!-- 星图（design §3a）：选中「星图」视图时替换首页封面墙，占满主区。
+             画布是 role=img 的摘要，等价的可操作界面是右侧星表（键盘全可达） -->
+        <section id="starmap-view" class="starmap-view hidden" aria-label="星图">
+          <div class="starmap-stage" id="starmap-stage">
+            <canvas id="starmap-canvas" tabindex="0" role="img" aria-label="星图"></canvas>
+            <canvas id="starmap-fx" aria-hidden="true"></canvas>
+            <div id="starmap-hud" class="starmap-hud sm-panel">
+              <span id="starmap-readout" class="hud-readout"></span>
+            </div>
+            <div id="starmap-filter-status" class="starmap-filter-status sm-panel hidden" role="status"></div>
+            <div id="starmap-lod" class="starmap-lod sm-panel" aria-hidden="true"><span data-lod="far">远景</span><span data-lod="mid">中景</span><span data-lod="near">近景</span></div>
+            <div id="starmap-legend" class="starmap-legend sm-panel" aria-hidden="true">
+              <span class="hud">亮度 = 新鲜度</span>
+              <div class="row"><span class="sw"><i class="t1"></i></span>1 小时内<span class="lg-n" data-lg="t1"></span></div>
+              <div class="row"><span class="sw"><i class="t2"></i></span>24 小时内<span class="lg-n" data-lg="t2"></span></div>
+              <div class="row"><span class="sw"><i class="t3"></i></span>7 天内<span class="lg-n" data-lg="t3"></span></div>
+              <div class="row"><span class="sw"><i class="t4"></i></span>更早<span class="lg-n" data-lg="t4"></span></div>
+              <div class="row"><span class="sw"><i class="un"></i></span>未读（亮点）<span class="lg-n" data-lg="unread"></span></div>
+              <div class="row"><span class="sw"><i class="jc"></i></span>刚变更（轻闪）<span class="lg-n" data-lg="just"></span></div>
+              <div class="row lg-link"><span class="sw"><i class="ln"></i></span>星团内引用（中景悬停时显示）<span class="lg-n" data-lg="intra"></span></div>
+              <div class="row lg-link"><span class="sw"><i class="arc"></i></span>星团间引用（越粗越多）<span class="lg-n" data-lg="inter"></span></div>
+              <div class="note lg-link">悬停或选中一颗星，完整高亮它的入链和出链</div>
+              <div class="note lg-na">引用关系暂不可用</div>
+            </div>
+            <div class="starmap-zoom sm-panel" role="group" aria-label="缩放">
+              <button id="starmap-zoom-in" class="ico" type="button" aria-label="放大" title="放大（+）"><svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-zoom-in"/></svg></button>
+              <button id="starmap-zoom-out" class="ico" type="button" aria-label="缩小" title="缩小（-）"><svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-zoom-out"/></svg></button>
+              <button id="starmap-fit" class="ico" type="button" aria-label="显示全部" title="显示全部（0）"><svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-fit"/></svg></button>
+              <span id="starmap-scale" class="hud-scale" aria-hidden="true"></span>
+            </div>
+            <div id="starmap-tip" class="starmap-tip hidden" role="tooltip"></div>
+            <button id="starmap-empty" class="starmap-empty hidden" type="button">还没有星星——去 ⚙ 设置 添加扫描目录</button>
+            <div id="starmap-nocanvas" class="starmap-nocanvas hidden" role="status">此环境无法绘制星图，已切换为列表</div>
+          </div>
+          <aside id="starmap-catalog" class="starmap-catalog" aria-label="星表">
+            <div class="cat-head">
+              <button id="starmap-catalog-toggle" type="button" aria-expanded="true" aria-controls="starmap-catalog-body" title="展开 / 收起星表">
+                <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-align-left"/></svg><span class="cat-label">星表</span>
+              </button>
+            </div>
+            <div id="starmap-catalog-body" class="starmap-catalog-body"></div>
+            <div class="cat-tl" aria-hidden="true"><span>↑↓ 移动</span><span>Enter 打开</span><span>Space 快速查看</span></div>
+          </aside>
+        </section>
       </div>
     </div>
   </main>
@@ -654,6 +794,46 @@
         </div>
       </section>
       <section class="modal-section" data-pane="appearance">
+        <h3>界面动效</h3>
+        <p class="muted">默认跟随系统的「减少动态效果」设置。选<strong>减少</strong>后，转场、错峰入场、未读标记的轻闪都会停下，信息照常显示。它只能让界面更安静，系统要求减少时不会强行打开动效。</p>
+        <div class="theme-choice" role="radiogroup" aria-label="界面动效">
+          <button class="theme-option" type="button" role="radio" data-motion-pick="system" aria-checked="true">
+            <svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-monitor"/></svg>
+            <span>跟随系统</span>
+          </button>
+          <button class="theme-option" type="button" role="radio" data-motion-pick="reduce" aria-checked="false">
+            <svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-clock"/></svg>
+            <span>减少</span>
+          </button>
+        </div>
+      </section>
+      <section class="modal-section" data-pane="appearance">
+        <h3>封面</h3>
+        <p class="muted" id="thumbs-status">正在检测本机浏览器…</p>
+        <p class="muted">依赖在线资源（CDN 脚本或样式）的页面使用生成式封面。</p>
+      </section>
+      <section class="modal-section" data-pane="appearance">
+        <h3>悬停预览</h3>
+        <p class="muted">指针在目录树、标签、封面上停留片刻弹出快速查看。关掉后仍可在目录树焦点行或 ⌘K 里按 Space 查看。</p>
+        <div class="theme-choice" role="radiogroup" aria-label="悬停预览">
+          <button class="theme-option" type="button" role="radio" data-peek-pick="on" aria-checked="true">
+            <svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-eye"/></svg>
+            <span>开</span>
+          </button>
+          <button class="theme-option" type="button" role="radio" data-peek-pick="off" aria-checked="false">
+            <svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-x"/></svg>
+            <span>关</span>
+          </button>
+        </div>
+        <p class="muted peek-net-note" id="peek-net-note">悬停预览会像打开文档一样加载页面，包括它引用的在线资源。</p>
+      </section>
+      <!-- 桌面版专属：侧栏毛玻璃跟随 macOS「降低透明度」（Atlas 不另设开关，只说明位置与当前状态） -->
+      <section class="modal-section desktop-only" data-pane="appearance" id="transparency-section">
+        <h3>侧栏透明度</h3>
+        <p class="muted" id="transparency-status"></p>
+        <p class="muted">跟随系统设置：系统设置 → 辅助功能 → 显示 →「降低透明度」。打开后侧栏立即改为实底，关闭后恢复毛玻璃。</p>
+      </section>
+      <section class="modal-section" data-pane="appearance">
         <h3>桌面通知</h3>
         <label class="row">
           <input type="checkbox" id="notify-toggle" />
@@ -770,6 +950,7 @@
       <div class="quickopen-footer">
         <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
         <span><kbd>enter</kbd> 打开</span>
+        <span><kbd>space</kbd> 快速查看</span>
         <span class="quickopen-count" id="quickopen-count"></span>
       </div>
     </div>
@@ -804,6 +985,21 @@
     </div>
   </div>
 
+  <!-- 快速查看（悬停预览）单例：只"看"，整体 pointer-events:none，焦点不移进来。
+       内容由 /peek.js 填：缓存截图走 #peek-img，否则按需插入 iframe.peek-frame（sandbox="allow-scripts"） -->
+  <div id="peek" class="peek hidden" role="dialog" aria-modal="false" aria-labelledby="peek-title" aria-describedby="peek-meta">
+    <div class="peek-head">
+      <span class="peek-label hud">快速查看</span>
+      <span id="peek-title" class="peek-title"></span>
+      <span id="peek-meta" class="peek-meta"></span>
+    </div>
+    <div class="peek-body">
+      <img id="peek-img" class="peek-img hidden" alt="" />
+      <div id="peek-empty" class="peek-empty hidden">无法预览这篇文档</div>
+    </div>
+    <div class="peek-foot" aria-hidden="true">Enter 打开 · Esc 关闭</div>
+  </div>
+
   <!-- Toast 通知容器：fixed 浮在右下角，aria-live=polite 不打断屏幕阅读器 -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
@@ -811,6 +1007,9 @@
   <script src="/vendor/qrcode.min.js"></script>
   <script src="/vendor/markdown.js"></script>
   <script src="/changelog.js"></script>
+  <script src="/starmap.js"></script>
+  <script src="/river.js"></script>
+  <script src="/peek.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

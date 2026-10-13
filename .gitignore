@@ -8,3 +8,4 @@ data/
 dist-app/
 out/
 electron/build/notarize.env
+.agents/

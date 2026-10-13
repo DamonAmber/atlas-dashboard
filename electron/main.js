@@ -12,7 +12,7 @@
 //
 // --smoke：无界面自检模式，加载成功打印 ATLAS_SMOKE_OK 并退出，供自动化验证。
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -87,6 +87,30 @@ function handleOpenPath(p) {
   flushOpenPath();
 }
 
+// macOS 原生外壳：隐藏标题栏、红绿灯嵌进 46px 顶栏、侧栏透出 vibrancy 材质。
+// 不用 'hiddenInset'：它的红绿灯位置不可调，对不齐顶栏中线。
+// 其它平台保持默认窗口（没有桌面包，也不套原生化 CSS）。
+const isMacWindow = process.platform === 'darwin';
+const chromeGeom = require('./titlebar').trafficLightGeometry(process.platform, require('os').release());
+const TRAFFIC_LIGHT_POS = chromeGeom.position;
+
+// 「降低透明度」（系统设置 → 辅助功能 → 显示）。Chromium 也会经 prefers-reduced-transparency
+// 上报给页面；这里再从 nativeTheme 读一次推给前端（html.reduce-transparency），两条链路任一生效即实底
+function reducedTransparency() {
+  try { return !!nativeTheme.prefersReducedTransparency; } catch { return false; }
+}
+
+// 把窗口状态推给前端：全屏时撤掉红绿灯避让内边距（html.is-fullscreen）、降低透明度时侧栏改实底
+function sendWindowState(win) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    win.webContents.send('atlas:window-state', {
+      fullscreen: win.isFullScreen(),
+      reducedTransparency: reducedTransparency(),
+    });
+  } catch {}
+}
+
 function createWindow() {
   if (mainWindow) { mainWindow.show(); mainWindow.focus(); return; }
   mainWindow = new BrowserWindow({
@@ -96,18 +120,44 @@ function createWindow() {
     minHeight: 600,
     title: 'Atlas',
     show: false,
+    ...(isMacWindow ? {
+      titleBarStyle: 'hidden',
+      trafficLightPosition: TRAFFIC_LIGHT_POS,
+      vibrancy: 'sidebar',
+      visualEffectState: 'followWindow',   // 窗口失焦时材质变灰，和 Finder 侧栏一致
+      backgroundColor: '#00000000',        // 透明，vibrancy 才透得出来
+    } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // 首帧就要用的外壳参数走 argv（preload 同步读到，index.html 防闪脚本写进 CSS 变量），
+      // 不必等 did-finish-load 之后的 IPC：红绿灯避让宽度、是否降低透明度
+      additionalArguments: isMacWindow ? [
+        `--atlas-titlebar-inset=${chromeGeom.inset}`,
+        `--atlas-reduce-transparency=${reducedTransparency() ? 1 : 0}`,
+      ] : [],
     },
   });
+  // 新版 Electron 把红绿灯位置调整迁到了这个方法；两条都写，哪条生效都对
+  if (isMacWindow && typeof mainWindow.setWindowButtonPosition === 'function') {
+    try { mainWindow.setWindowButtonPosition(TRAFFIC_LIGHT_POS); } catch {}
+  }
 
   mainWindow.loadURL(serverInfo.url);
   mainWindow.once('ready-to-show', () => { if (!isSmoke) mainWindow.show(); });
 
+  const win = mainWindow;
+  win.on('enter-full-screen', () => sendWindowState(win));
+  win.on('leave-full-screen', () => sendWindowState(win));
+
   mainWindow.webContents.on('did-finish-load', () => {
     if (isSmoke) { console.log('ATLAS_SMOKE_OK'); cleanupAndExit(0); return; }
+    sendWindowState(win);
+    // 专注模式不持久化：页面重载（⌘R）后前端回到正常布局，红绿灯也要跟着恢复
+    if (isMacWindow && typeof win.setWindowButtonVisibility === 'function') {
+      try { win.setWindowButtonVisibility(true); } catch {}
+    }
     // 冷启动带文件（open-file / argv 在窗口就绪前就到了）：页面加载完再转交
     flushOpenPath();
   });
@@ -187,6 +237,10 @@ function buildAppMenu() {
         { label: '下一个标签', accelerator: 'Control+Tab', click: () => sendMenuCommand('next-tab') },
         { label: '上一个标签', accelerator: 'Control+Shift+Tab', click: () => sendMenuCommand('prev-tab') },
         { type: 'separator' },
+        // ⌘.：进入 / 退出专注阅读。加速键在应用层生效，焦点在沙箱预览帧里也能触发
+        // （前端 onMenuCommand → toggleFocusMode；红绿灯由 atlas:set-chrome-state 隐藏 / 恢复）
+        { label: '专注阅读', accelerator: 'CmdOrCtrl+.', click: () => sendMenuCommand('toggle-focus') },
+        { type: 'separator' },
         { role: 'reload' },
         { role: 'forceReload' },
         { role: 'toggleDevTools' },
@@ -238,6 +292,10 @@ async function boot() {
     return;
   }
   createWindow();
+  // 系统外观 / 「降低透明度」在运行中改变：推给所有窗口（前端切 html.reduce-transparency）
+  nativeTheme.on('updated', () => {
+    for (const w of BrowserWindow.getAllWindows()) sendWindowState(w);
+  });
   if (!isSmoke) {
     Menu.setApplicationMenu(buildAppMenu());
     createTray();
@@ -306,6 +364,27 @@ ipcMain.handle('atlas:export-pdf', async (_e, args) => {
   if (!serverInfo) return { ok: false, error: '服务未就绪' };
   const a = args || {};
   return pdf.exportPdf({ serverUrl: serverInfo.url, filePath: a.path, fileName: a.fileName });
+});
+
+// Atlas 主题 → nativeTheme.themeSource。没有它，Atlas 强制深色而系统是浅色时，
+// vibrancy 材质会是浅色的。副作用：强制浅 / 深时文档里的 prefers-color-scheme
+// 也跟着 Atlas 主题走（themeSource 是应用级的），"跟随系统"时与浏览器版完全一致。
+// 不合法参数静默忽略。
+const THEME_SOURCES = new Set(['system', 'light', 'dark']);
+ipcMain.on('atlas:set-theme', (_e, mode) => {
+  if (typeof mode !== 'string' || !THEME_SOURCES.has(mode)) return;
+  try { if (nativeTheme.themeSource !== mode) nativeTheme.themeSource = mode; } catch {}
+});
+
+
+// 外壳状态：专注模式时隐藏红绿灯，退出时恢复。只认 { focusMode: boolean }，其它忽略。
+ipcMain.on('atlas:set-chrome-state', (e, s) => {
+  if (!s || typeof s !== 'object' || typeof s.focusMode !== 'boolean') return;
+  if (process.platform !== 'darwin') return;
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (win && typeof win.setWindowButtonVisibility === 'function') {
+    try { win.setWindowButtonVisibility(!s.focusMode); } catch {}
+  }
 });
 
 // 多 Tab：⌘W 在没有可关标签时回退为关窗（前端判断后调 atlasDesktop.closeWindow）

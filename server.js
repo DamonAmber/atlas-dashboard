@@ -10,6 +10,11 @@ const { EventEmitter } = require('events');
 const userPaths = require('./lib/paths');
 const updateCheck = require('./lib/update-check');
 const pdfExport = require('./lib/pdf-export');
+const chromium = require('./lib/chromium');
+const thumbnail = require('./lib/thumbnail');
+const linkIndexLib = require('./lib/link-index');
+const activityLogLib = require('./lib/activity-log');
+const selfWritesLib = require('./lib/self-writes');
 const share = require('./lib/share');
 const editable = require('./lib/editable');
 const editApply = require('./lib/edit-apply');
@@ -263,6 +268,23 @@ function isAnyDocPath(name) {
 }
 
 const fileIndex = new Map();     // absPath → 文件记录
+// 引用关系索引（design §10.9）：缓存在 ATLAS_HOME/links/，版本变化经 SSE 'links' 推给前端
+// 启动静默期：窗口刚打开的几秒里，前端要解析首个 /api/state、建整棵树、跑侧栏 / 首页动画。
+// 首次全量建引用索引、拉起缩略图浏览器都是重 I/O + CPU，和它抢会让启动初期的动画掉帧
+// （桌面实机实测 0–3s 最长帧 371ms，diagnosis §2）。静默期内这两件事往后推，之后照常。
+// ATLAS_STARTUP_QUIET_MS 可覆盖（测试的隔离实例设 0）。
+const SERVER_STARTED_AT = Date.now();
+const STARTUP_QUIET_MS = Number.isFinite(+process.env.ATLAS_STARTUP_QUIET_MS)
+  ? Math.max(0, +process.env.ATLAS_STARTUP_QUIET_MS) : 6000;
+function inStartupQuiet() { return Date.now() - SERVER_STARTED_AT < STARTUP_QUIET_MS; }
+const linkIndex = linkIndexLib.createLinkIndex({
+  cacheDir: path.join(userPaths.configDir(), 'links'),
+  startDelayMs: () => Math.max(0, STARTUP_QUIET_MS - (Date.now() - SERVER_STARTED_AT)),
+  getRoots: () => getScanRoots(),
+  isIndexed: (abs) => fileIndex.has(abs),
+  onVersion: (version) => events.emit('links', { version }),
+  log: console,
+});
 let indexSignature = null;       // 影响扫描结果的配置快照
 let indexBuilding = null;        // 构建中的 Promise（并发请求共用一次扫描）
 
@@ -320,16 +342,20 @@ async function indexUpsert(absPath) {
   try {
     const stat = await fsp.stat(absPath);
     const rec = makeRecord(absPath, owner.root, owner.rootIndex, stat);
+    const isNew = !fileIndex.has(absPath);
     fileIndex.set(absPath, rec);
+    // 引用索引只重解析这一个文件（后台进行，不阻塞 watcher）
+    linkIndex.update(absPath, isNew);
     return rec;
   } catch {
-    fileIndex.delete(absPath);
+    if (fileIndex.delete(absPath)) linkIndex.remove(absPath);
     return null;
   }
 }
 function indexRemove(absPath) {
   fileIndex.delete(absPath);
   cacheDelete(absPath);
+  linkIndex.remove(absPath);
 }
 
 async function buildIndex() {
@@ -346,6 +372,8 @@ async function buildIndex() {
   fileIndex.clear();
   for (const [k, v] of next) fileIndex.set(k, v);
   indexSignature = currentIndexSignature();
+  // 扫描完成：引用索引在后台串行补齐（mtime / size 没变的直接复用缓存）
+  linkIndex.sync([...fileIndex.keys()]);
 }
 
 // 拿当前启用文档类型下的文件列表。索引不存在 / 配置已变时才真正扫盘
@@ -646,26 +674,37 @@ function validateTree(rootNodes) {
 const events = new EventEmitter();
 events.setMaxListeners(50);
 
-// 自我写入抑制：/api/save-edits 写盘后登记 path→mtime，change 事件命中则
-// 不把文件标未读（避免用户刚保存就看到自己的红点）。10s 后自动过期。
-const selfWrites = new Map();
-function markSelfWrite(filePath, mtimeMs) {
-  selfWrites.set(filePath, mtimeMs);
-  setTimeout(() => {
-    if (selfWrites.get(filePath) === mtimeMs) selfWrites.delete(filePath);
-  }, 10_000).unref();
-}
-function isSelfWrite(filePath, mtimeMs) {
-  const v = selfWrites.get(filePath);
-  if (v === undefined) return false;
-  if (Math.abs((mtimeMs || 0) - v) < 2000) {
-    selfWrites.delete(filePath);
-    return true;
-  }
-  return false;
-}
+// 自我写入抑制（lib/self-writes.js）：/api/save-edits 等写盘后登记 path→{mtime, reason}，
+// watcher 事件命中则不标未读，SSE 负载带 self / selfReason，活动日志据 reason 分类。
+//   reason：'save'（保存 / 还原 / 回退等 Atlas 自己写内容）| 'rename'（/api/rename 的新路径）
+const selfWrites = selfWritesLib.createSelfWrites();
+const markSelfWrite = selfWrites.mark;     // (filePath, mtimeMs, reason = 'save')
+const isSelfWrite = selfWrites.check;      // → 'save' | 'rename' | null，命中即删
+
+// 活动日志（design §3d）：ATLAS_HOME/activity/，绝不写 store.json
+const activityLog = activityLogLib.createActivityLog({
+  dir: path.join(userPaths.configDir(), 'activity'),
+  log: console,
+});
 
 let watchers = new Map();   // root → watcher（增量增删，见 startWatchers）
+
+// 最近的文档 fs 事件时间戳：缩略图队列在"AI 正在批量写文件"时让路（5 秒内超过 20 个）
+const FS_BURST_WINDOW_MS = 5000;
+const FS_BURST_LIMIT = 20;
+const recentFsEvents = [];
+function noteFsEvent() {
+  const t = Date.now();
+  recentFsEvents.push(t);
+  while (recentFsEvents.length && t - recentFsEvents[0] > FS_BURST_WINDOW_MS) recentFsEvents.shift();
+  if (recentFsEvents.length > FS_BURST_LIMIT * 4) recentFsEvents.splice(0, recentFsEvents.length - FS_BURST_LIMIT * 4);
+}
+function fsBurstActive() {
+  const t = Date.now();
+  let n = 0;
+  for (let i = recentFsEvents.length - 1; i >= 0 && t - recentFsEvents[i] <= FS_BURST_WINDOW_MS; i--) n++;
+  return n > FS_BURST_LIMIT;
+}
 function buildIgnoredFn() {
   const ignore = getIgnoreSet();
   return (p) => {
@@ -696,9 +735,12 @@ function createWatcher(root, ignoredFn) {
       // 索引维护对所有文档类型都做（html + md），与当前启用的 docTypes 无关：
       // 这样在设置里切换文档类型不需要重新扫盘。
       if (!isAnyDocPath(filePath)) return;
+      noteFsEvent();
 
       if (kind === 'unlink') {
         indexRemove(filePath);
+        // 缩略图跟着源文件走：删掉缓存条目与 PNG（change 不做事，过期在下次请求时惰性判断）
+        try { thumbnailer.invalidate(filePath); } catch {}
         // 文件没了，它的 diff 底本也没有留存价值——顺手清掉，别让 versions/ 无限长
         try { versionStore.removeAllFor(filePath); } catch {}
         const st = loadStore();
@@ -724,13 +766,23 @@ function createWatcher(root, ignoredFn) {
       const store = loadStore();
       if ((store.archivedProjects || []).includes(projectName)) return;
 
+      // 自我写入判定只求值一次（isSelfWrite 命中即删），seen 清理与 SSE 负载共用
+      const selfReason = kind !== 'unlink' ? isSelfWrite(filePath, mtime) : null;
+      const self = !!selfReason;
+
       if (kind === 'change') {
         // 自我写入（编辑保存触发）不标未读
-        if (!isSelfWrite(filePath, mtime)) {
+        if (!self) {
           delete store.seen[filePath];
           saveStore(store);
         }
       }
+
+      // 活动日志（与未读 / 通知同口径：当前启用类型、非归档项目的 add / change）。
+      // 自写保存记覆盖标记 s；Atlas 的重命名无论 watcher 报 add 还是 change（盘点未完成时）都按 a 记。
+      // t 取文件 mtime（与河流的 mtime 兜底同一时间基准），mtime 为 0 时 record 直接忽略
+      const actKind = activityLogLib.classifyEvent(kind, selfReason);
+      if (actKind) activityLog.record({ t: mtime, kind: actKind, path: filePath });
 
       events.emit('fs', {
         kind,
@@ -739,6 +791,8 @@ function createWatcher(root, ignoredFn) {
         relPath: rel,
         projectName,
         mtime,
+        self,
+        selfReason,
       });
     };
 
@@ -782,6 +836,11 @@ function startWatchers({ full = true } = {}) {
 }
 
 const app = express();
+// 排查 / 测试用：ATLAS_LOG_REQUESTS=1 时每个请求打一行日志（thumbnail.spec 用它断言
+// 缩略图截图期间页面脚本一次都没打到 Atlas 端口上）
+if (process.env.ATLAS_LOG_REQUESTS === '1') {
+  app.use((req, _res, next) => { console.log(`[req] ${req.method} ${req.originalUrl}`); next(); });
+}
 // 上限要高于各路由自己的内容上限（save-md 是 5MB），否则请求会先被 body parser
 // 以一个含义不清的 413 挡掉，路由里那句"内容过大"的提示根本走不到
 const JSON_BODY_LIMIT_MB = 8;
@@ -1236,6 +1295,11 @@ app.get('/api/state', async (_req, res) => {
       indexTruncated,
       indexCount: fileIndex.size,
       maxIndexFiles: MAX_INDEX_FILES,
+      // 真实缩略图能力（只给浏览器名，不含路径）
+      thumbs: (() => {
+        const t = thumbnailer.status();
+        return { available: t.available, browser: t.browser || null, reason: t.reason || null };
+      })(),
     });
   } catch (e) {
     console.error(e);
@@ -1918,6 +1982,12 @@ app.post('/api/rename', async (req, res) => {
   } catch (e) {
     return res.status(500).json({ error: '重命名失败：' + (e && e.message || e) });
   }
+  // 新路径的 add / change 事件是 Atlas 自己造成的：登记后 SSE 负载带 selfReason:'rename'，
+  // 前端不会把它当成"AI 刚改过"去轻闪
+  try {
+    const st = await fsp.stat(nextPath);
+    markSelfWrite(nextPath, st.mtimeMs, 'rename');
+  } catch {}
   // 迁移 store 里挂在旧路径上的状态：已读时间、备注名、diff 底本、收藏、标签、
   // 最近打开、分享、树节点。漏一个用户就会觉得"改个名字东西就丢了"
   const store = loadStore();
@@ -2163,6 +2233,202 @@ app.post('/api/resolve-open', (req, res) => {
 // 把 HTML 文件导出为 PDF——用本机 Chromium 系浏览器（Chrome / Edge / Brave / Arc / Chromium）
 // headless 模式渲染，保存到 ~/Downloads/。找不到 chromium 时返回 reason='no-chromium'，前端降级走 window.print()
 // SSE 流式：launching → rendering → writing → done | error
+// 把文档渲染成一份可在 file:// 下打开的 HTML，供 PDF 导出与缩略图截图共用。
+//   HTML                → 原文件（file:// 加载，相对资源按原目录解析）
+//   Markdown            → markdown.renderPage 写到临时目录；base href 指回 md 原目录的
+//                         file:// URL（预览页那套 /raw/ 前缀在 file:// 下取不到图），
+//                         图表 / 公式库用 public/vendor 的 file:// 绝对地址
+//                         （"/vendor/mermaid.min.js" 会被解析到文件系统根目录；也不能用相对路径——
+//                         baseHref 已经指向 md 的原目录了）
+//   CSV / JSON / 文本   → plainRender.renderPage 写到临时目录（不引用外部资源）
+//   SVG（仅非打印）     → plainRender 的 svg 页，用 <img src="file://…"> 引入（<img> 不执行脚本）
+// 返回 { renderPath, tempDir }（tempDir 由调用方用完删除）或 { error: 'too-large' }。
+// theme：'light' | 'dark' | undefined，透传给渲染器（缩略图按外壳主题各截一份）。
+async function renderForCapture(absPath, theme, { forPrint = false, forThumb = false } = {}) {
+  const isMd = isMarkdownPath(absPath);
+  const kind = docTypeOfPath(absPath);
+  const isPlain = READONLY_DOC_TYPES.has(kind) && (kind !== 'svg' || !forPrint);
+  if (!isMd && !isPlain) return { renderPath: absPath, tempDir: null };
+  // 大小闸门：md 渲染整份读入 + 递归解析，与 plain 对齐，超限不渲染
+  const stat = await fsp.stat(absPath);
+  if (kind !== 'svg' && stat.size > plainRender.MAX_BYTES) return { error: 'too-large' };
+  const themeOpt = theme === 'light' || theme === 'dark' ? { theme } : {};
+  let html;
+  if (isMd) {
+    const raw = await fsp.readFile(absPath, 'utf8');
+    html = markdown.renderPage(raw, {
+      title: path.basename(absPath),
+      baseHref: pdfExport.dirFileUrl(path.dirname(absPath)),
+      assetBase: pdfExport.dirFileUrl(path.join(PUBLIC_DIR, 'vendor')),
+      forPrint,
+      forThumb,   // 缩略图：不带目录栏 / 宽度胶囊（800 宽下目录浮层会盖住标题）
+      ...themeOpt,
+    });
+  } else if (kind === 'svg') {
+    html = plainRender.renderPage({
+      kind: 'svg',
+      title: path.basename(absPath),
+      rawUrl: pdfExport.fileUrl(absPath),
+      sizeText: fmtBytes(stat.size),
+      ...themeOpt,
+    });
+  } else {
+    const raw = await fsp.readFile(absPath, 'utf8');
+    html = plainRender.renderPage({
+      kind,
+      text: raw,
+      title: path.basename(absPath),
+      ext: path.extname(absPath).toLowerCase(),
+      forPrint,
+      ...themeOpt,
+    });
+  }
+  const prefix = forPrint ? (isMd ? 'atlas-mdpdf-' : 'atlas-docpdf-') : 'atlas-thumbsrc-';
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+  const renderPath = path.join(tempDir, 'doc.html');
+  try {
+    await fsp.writeFile(renderPath, html, 'utf8');
+  } catch (e) {
+    try { await fsp.rm(tempDir, { recursive: true, force: true }); } catch {}
+    throw e;
+  }
+  return { renderPath, tempDir };
+}
+
+// ---------- 真实缩略图（§3b） ----------
+// 后台按需截图、断网、只用 file:// 打开源文件；PNG 经下面的 GET 端点以 <img> 下发。
+// ATLAS_THUMBS=off：逃生开关，缩略图恒不可用、永不 spawn 浏览器（startAtlas 隔离实例默认也关）。
+const HTML_THUMB_MAX_BYTES = 8 * 1024 * 1024;
+const THUMBS_DISABLED = process.env.ATLAS_THUMBS === 'off';
+const thumbnailer = thumbnail.createThumbnailer({
+  cacheDir: path.join(userPaths.configDir(), 'thumbnails'),
+  chromium,
+  disabled: THUMBS_DISABLED,
+  log: console,
+  async renderSource(absPath, theme) {
+    if (thumbnail.isHtmlPath(absPath)) {
+      const st = await fsp.stat(absPath);
+      if (st.size > HTML_THUMB_MAX_BYTES) return { error: 'too-large' };
+      return { htmlPath: absPath, cleanup: null };
+    }
+    const r = await renderForCapture(absPath, theme, { forPrint: false, forThumb: true });
+    if (r.error) return r;
+    return {
+      htmlPath: r.renderPath,
+      cleanup: () => { if (r.tempDir) { try { fs.rmSync(r.tempDir, { recursive: true, force: true }); } catch {} } },
+    };
+  },
+  // 让路：首次扫描 / 重建索引中、启动静默期内，或 AI 正在批量写文件（截图要读的正是这些文件）
+  isBusy: () => !!indexBuilding || fsBurstActive() || inStartupQuiet(),
+  // 清扫时判断源文件还在不在索引里；索引没建好时返回 null，不剪条目
+  isKnownPath: (abs) => (indexSignature === null || indexBuilding) ? null : fileIndex.has(abs),
+  onEvent: (e) => events.emit('thumb', e),
+});
+
+// 跨站拦截：带 Sec-Fetch-Site 且不是 same-origin / none → 403。
+// 沙箱 iframe 里的文档是 opaque origin，它发起的请求是 cross-site，连别的文档的缩略图也拿不到。
+function rejectCrossSite(req, res) {
+  const site = req.headers['sec-fetch-site'];
+  if (site && site !== 'same-origin' && site !== 'none') {
+    res.status(403).json({ error: 'cross-site-forbidden' });
+    return true;
+  }
+  return false;
+}
+
+// GET /api/links → { version, truncated, edges: [[srcIdx, dstIdx], …], paths: [...] }
+// 下标对齐 paths（只含参与连线的端点）。首轮解析没跑完时 202 { ready:false }（不用 503：浏览器会把非 2xx 记成控制台报错，
+// 而"还没算完"是正常状态），前端等 SSE 'links' 再来拉
+app.get('/api/links', async (req, res) => {
+  if (rejectCrossSite(req, res)) return;
+  res.set('Cache-Control', 'no-store');
+  if (indexSignature === null) { try { await getScannedFiles(); } catch {} }
+  if (!linkIndex.isReady()) return res.status(202).json({ ready: false, error: 'not-ready', version: linkIndex.version });
+  res.json(linkIndex.snapshot());
+});
+
+// GET /api/activity?since=&until= → 时间河流的活动日志（design §3d）
+//   { logStart, paths, events: [[t, kind(0 add / 1 change / 2 self), pathIndex]], mergeWindowMs, truncated, skipped }
+// since 默认 now - 7d，早于 now - 8d 时夹到 now - 8d；until 默认 now；非整数或 until ≤ since → 400。
+// 只返回当前仍在索引里的路径
+const ACTIVITY_DEFAULT_MS = 7 * 86_400_000;
+const ACTIVITY_MAX_MS = 8 * 86_400_000;
+function parseIntParam(v) {
+  if (v === undefined) return { ok: true, value: undefined };
+  const s = String(v);
+  if (!/^-?\d+$/.test(s)) return { ok: false };
+  const n = Number(s);
+  return Number.isSafeInteger(n) ? { ok: true, value: n } : { ok: false };
+}
+app.get('/api/activity', async (req, res) => {
+  if (rejectCrossSite(req, res)) return;
+  res.set('Cache-Control', 'no-store');
+  const now = Date.now();
+  const s = parseIntParam(req.query.since);
+  const u = parseIntParam(req.query.until);
+  if (!s.ok || !u.ok) return res.status(400).json({ error: 'bad-request' });
+  let since = s.value === undefined ? now - ACTIVITY_DEFAULT_MS : s.value;
+  const until = u.value === undefined ? now : u.value;
+  if (since < now - ACTIVITY_MAX_MS) since = now - ACTIVITY_MAX_MS;
+  if (until <= since) return res.status(400).json({ error: 'bad-request' });
+  if (indexSignature === null) { try { await getScannedFiles(); } catch {} }
+  try {
+    const r = await activityLog.query(since, until, { inIndex: (p) => fileIndex.has(p) });
+    res.json({ ...r, mergeWindowMs: activityLogLib.MERGE_WINDOW_MS });
+  } catch (e) {
+    res.status(500).json({ error: 'activity-failed' });
+  }
+});
+const THUMBS_MAX_PATHS = 48;
+// POST /api/thumbs { paths: string[1..48], theme?: 'light'|'dark' } → { available, items }
+// 写类请求，经上面的 Origin 中间件校验。单项不合法只把该项记为 invalid。
+app.post('/api/thumbs', async (req, res) => {
+  // 索引还没建过（服务刚启动、还没人拉过 /api/state）时先建一次，否则所有路径都会判 invalid
+  if (indexSignature === null) { try { await getScannedFiles(); } catch {} }
+  const body = req.body || {};
+  const paths = body.paths;
+  if (!Array.isArray(paths) || paths.length < 1 || paths.length > THUMBS_MAX_PATHS) {
+    return res.status(400).json({ error: 'bad-request' });
+  }
+  const theme = body.theme === 'dark' ? 'dark' : 'light';
+  const invalid = {};
+  const valid = [];
+  for (const p of paths) {
+    if (typeof p !== 'string' || !p || !isPathInScanRoots(p) || !fileIndex.has(p)) {
+      invalid[String(p)] = { status: 'invalid' };
+    } else {
+      valid.push(p);
+    }
+  }
+  const r = thumbnailer.request(valid, theme);
+  res.json({ available: r.available, items: { ...invalid, ...r.items } });
+});
+
+// GET /api/thumb?path=&theme=light|dark&k=<16 hex> → image/png
+app.get('/api/thumb', async (req, res) => {
+  if (rejectCrossSite(req, res)) return;
+  const p = req.query.path;
+  const theme = req.query.theme;
+  const k = req.query.k;
+  if (typeof p !== 'string' || !p || !isPathInScanRoots(p)) {
+    return res.status(400).json({ error: 'invalid-path' });
+  }
+  // 取图的 URL 由前端拼出，出现非法 theme 说明是 bug，直接报错更容易发现
+  if (theme !== 'light' && theme !== 'dark') return res.status(400).json({ error: 'bad-theme' });
+  if (typeof k !== 'string' || !/^[0-9a-f]{16}$/.test(k)) return res.status(404).json({ error: 'not-found' });
+  const hit = thumbnailer.get(p, theme, k);
+  if (!hit) return res.status(404).json({ error: 'not-found' });
+  let buf;
+  try { buf = await fsp.readFile(hit.file); } catch { return res.status(404).json({ error: 'not-found' }); }
+  res.set({
+    'Content-Type': 'image/png',
+    'Cache-Control': 'private, max-age=31536000, immutable',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'",
+  });
+  res.end(buf);
+});
+
 app.post('/api/export-pdf', async (req, res) => {
   const filePath = req.body && req.body.path;
   const fileName = req.body && req.body.fileName;
@@ -2194,54 +2460,20 @@ app.post('/api/export-pdf', async (req, res) => {
     return res.end();
   }
 
-  // Markdown 先渲染成一份打印版 HTML 落到临时目录，再交给同一套 Chromium 管线。
-  // base href 指向 md 原目录的 file:// URL：PDF 是在 file:// 下渲染的，
-  // 预览页那套 /raw/ 前缀在这里取不到图。
+  // Markdown / CSV / JSON / 文本先渲染成一份打印版 HTML 落到临时目录，再交给同一套
+  // Chromium 管线（renderForCapture，与缩略图共用）；HTML 直接用原文件。
   let renderPath = filePath;
   let tempDir = null;
   try {
-    if (isMd) {
-      send({ phase: 'launching', message: '正在渲染 Markdown…' });
-      // 大小闸门：与 plain 分支（下方）对齐，md 渲染整份读入 + 递归解析，超限不导出。
-      const mdStat = await fsp.stat(filePath);
-      if (mdStat.size > plainRender.MAX_BYTES) {
-        send({ phase: 'error', reason: 'too-large', message: `文件超过 ${fmtBytes(plainRender.MAX_BYTES)}，不支持导出` });
-        return res.end();
-      }
-      const raw = await fsp.readFile(filePath, 'utf8');
-      const html = markdown.renderPage(raw, {
-        title: path.basename(filePath),
-        baseHref: pdfExport.dirFileUrl(path.dirname(filePath)),
-        // 图表 / 公式的库要用 file:// 绝对地址：这份 HTML 是在 file:// 下被
-        // Chromium 打开的，"/vendor/mermaid.min.js" 会被解析到文件系统根目录。
-        // 注意不能用相对路径——baseHref 已经指向 md 的原目录了
-        assetBase: pdfExport.dirFileUrl(path.join(PUBLIC_DIR, 'vendor')),
-        forPrint: true,
-      });
-      tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'atlas-mdpdf-'));
-      renderPath = path.join(tempDir, 'doc.html');
-      await fsp.writeFile(renderPath, html, 'utf8');
-    } else if (isPlain) {
-      // CSV / JSON / 文本走同一套：渲染成打印版 HTML 落到临时目录，
-      // 再交给同一个 Chromium 管线。这些页面不引用外部资源，不需要 base href
-      send({ phase: 'launching', message: '正在渲染文档…' });
-      const stat = await fsp.stat(filePath);
-      if (stat.size > plainRender.MAX_BYTES) {
-        send({ phase: 'error', reason: 'too-large', message: `文件超过 ${fmtBytes(plainRender.MAX_BYTES)}，不支持导出` });
-        return res.end();
-      }
-      const raw = await fsp.readFile(filePath, 'utf8');
-      const html = plainRender.renderPage({
-        kind: plainKind,
-        text: raw,
-        title: path.basename(filePath),
-        ext: path.extname(filePath).toLowerCase(),
-        forPrint: true,
-      });
-      tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'atlas-docpdf-'));
-      renderPath = path.join(tempDir, 'doc.html');
-      await fsp.writeFile(renderPath, html, 'utf8');
+    if (isMd) send({ phase: 'launching', message: '正在渲染 Markdown…' });
+    else if (isPlain) send({ phase: 'launching', message: '正在渲染文档…' });
+    const rendered = await renderForCapture(filePath, undefined, { forPrint: true });
+    if (rendered.error === 'too-large') {
+      send({ phase: 'error', reason: 'too-large', message: `文件超过 ${fmtBytes(plainRender.MAX_BYTES)}，不支持导出` });
+      return res.end();
     }
+    renderPath = rendered.renderPath;
+    tempDir = rendered.tempDir;
     const result = await pdfExport.exportPdf(
       { htmlPath: renderPath, fileName },
       (phaseEvent) => send(phaseEvent),  // 把每个阶段事件转发为 SSE
@@ -2946,8 +3178,12 @@ app.get('/api/events', (req, res) => {
   };
   const onFs = (e) => send({ channel: 'fs', ...e });
   const onUpdate = (e) => send({ channel: 'update', ...e });
+  const onThumb = (e) => send({ channel: 'thumb', ...e });
+  const onLinks = (e) => send({ channel: 'links', ...e });
   events.on('fs', onFs);
   events.on('update', onUpdate);
+  events.on('thumb', onThumb);
+  events.on('links', onLinks);
 
   // 新连接进来时，若已知有可用更新，立即推一次（避免依赖 frontend 主动 fetch）
   const cached = updateCheck.getCachedResult(pkg.version);
@@ -2957,6 +3193,8 @@ app.get('/api/events', (req, res) => {
   req.on('close', () => {
     events.off('fs', onFs);
     events.off('update', onUpdate);
+    events.off('thumb', onThumb);
+    events.off('links', onLinks);
     clearInterval(ping);
   });
 });
@@ -2982,6 +3220,9 @@ const httpServer = app.listen(PORT, () => {
   }
   console.log(`  配置: ${CONFIG_PATH}`);
   console.log(`  扫描根: ${getScanRoots().join(', ')}\n`);
+  if (!THUMBS_DISABLED && !chromium.findChromium()) {
+    console.log('  缩略图: 未找到 Chrome / Edge 等浏览器，首页使用生成式封面');
+  }
   startWatchers();
   // 升级检查：启动立即查一次 + 每 1h 重复，发现新版本时 SSE 推到所有 tab
   const checkUpdate = async () => {
@@ -3009,6 +3250,9 @@ httpServer.on('error', (err) => {
 // 优雅退出
 function shutdown() {
   console.log('\n  收到退出信号，关闭中…');
+  try { thumbnailer.shutdown(); } catch {}
+  try { linkIndex.flush(); } catch {}
+  try { activityLog.flushSync(); } catch {}
   for (const w of watchers.values()) {
     try { w.close().catch(() => {}); } catch {}
   }
@@ -3017,3 +3261,5 @@ function shutdown() {
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+// 其它路径的退出（process.exit 等）：活动日志缓冲尽力冲刷一次（flushSync 可重复调用）
+process.on('exit', () => { try { activityLog.flushSync(); } catch {} });

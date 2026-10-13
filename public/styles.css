@@ -16,52 +16,101 @@
    * 取向参考 Linear：中性偏冷的灰，不带蓝味（原来的 #f4f6f9 / #14181f 蓝味偏重，
    * 导致整个界面像"浅蓝色的后台系统"）。深色侧压到接近纯黑，让内容浮起来。
    * 分层主要靠这四级表面 + border，几乎不靠阴影——见下方 shadow 的注释。 */
-  --bg:        light-dark(#f7f8f9, #0a0a0b);   /* canvas：主区域底 */
-  --bg-elev:   light-dark(#ffffff, #101113);   /* 面板：侧栏 / 顶栏 / 弹窗 */
-  --bg-elev-2: light-dark(#f0f1f3, #18191c);   /* 控件：输入框 / chip / ghost 按钮 */
-  --bg-hover:  light-dark(#eaecef, #1f2024);
-  --bg-active: light-dark(#e4eafd, #1d2436);   /* 选中态填充（带一点 accent 味） */
+  /* 「星图 / 任务控制台」配色：深色侧是深空蓝黑（星点在里面发光），浅色侧是星图纸。
+   * 四组合（冷/暖 × 浅/深）的对比度由 tests/contrast-tokens.spec.js 逐项验算。 */
+  --bg:        light-dark(#f5f7fa, #06080d);   /* canvas：主区域底 / 星图底 */
+  --bg-elev:   light-dark(#ffffff, #0b0e15);   /* 面板：侧栏 / 顶栏 / 弹窗 */
+  --bg-elev-2: light-dark(#edf0f5, #121620);   /* 控件：输入框 / chip / ghost 按钮 */
+  --bg-hover:  light-dark(#e5e9f0, #191e2b);
+  --bg-active: light-dark(#e1e7fb, #1b2340);   /* 选中态填充（带一点 accent 味） */
 
   /* ---------- 描边 ----------
    * border 是这套设计的主要分层手段，所以要淡——"看得出有一条"就够，
    * 一旦重了，密集列表里几十条线会变成栅栏。 */
-  --border:        light-dark(#e6e8eb, #1f2023);  /* 分隔线 */
-  --border-strong: light-dark(#c9cdd4, #303136);  /* 控件轮廓：需要圈住一个可点区域 */
-  --hairline:      light-dark(rgba(16, 24, 40, .05), rgba(255, 255, 255, .05));
+  --border:        light-dark(#e3e7ee, #171b26);  /* 分隔线（装饰） */
+  --border-strong: light-dark(#c5cbd6, #2c3243);  /* 卡片 / 分组轮廓（装饰，非唯一辨识边界） */
+  /* 文本输入框轮廓：它是输入框唯一的边界（WCAG 1.4.11），对 --bg-elev / --bg-elev-2 ≥3:1。
+   * 输入框背景只能是 --bg-elev / --bg-elev-2，不得用 --bg-hover（对它余量太小） */
+  --border-input:  light-dark(#7c8597, #636b7d);
+  --hairline:      light-dark(rgba(13, 18, 32, .06), rgba(180, 200, 255, .06));
 
-  /* ---------- 文字：三档 + 一档极弱 ----------
-   * primary 承载内容，dim 承载次要信息（路径 / 时间），faint 只用于分区标题这类
-   * "知道它在那儿就行"的文字。三档之间的对比差要够大，否则层级等于不存在。 */
-  --text:       light-dark(#101113, #f7f8f8);
-  --text-dim:   light-dark(#57606a, #9ea2a8);
-  --text-faint: light-dark(#818b98, #6f747c);
+  /* ---------- 文字：三档 ----------
+   * primary 承载内容，dim 承载次要信息（路径 / 时间），faint 用于分区标题 / HUD 标签。
+   * 三档都 ≥4.5:1（README 的"小字满足 WCAG AA"）；层级差改由字号、字重、字距承担。 */
+  --text:       light-dark(#0d1220, #eef1f7);
+  --text-dim:   light-dark(#4d5767, #a3abbc);
+  --text-faint: light-dark(#5a6474, #878fa0);
 
   /* ---------- 主色与语义色 ----------
    * accent 从纯蓝改成紫蓝：一是纯蓝是所有后台系统的默认色，没有辨识度；
    * 二是 brand-mark 的渐变本来就是 #5b9cff→#8b5bff，界面主色偏紫才和品牌自洽。
    * 浅色侧压深到能配白字（对比度 ≈ 6:1），深色侧提亮后必须换近黑文字（见 --on-accent）。 */
-  --accent:       light-dark(#5b5bd6, #8d8df0);
-  --accent-hover: light-dark(#4f4fc7, #a3a3f7);
-  --accent-press: light-dark(#4444b0, #7a7ade);
+  --accent:       light-dark(#5151cf, #8d8df0);
+  --accent-hover: light-dark(#4545bf, #a3a3f7);
+  --accent-press: light-dark(#3b3ba8, #7a7ade);
   /* accent 的淡填充（标签 chip 选中态这类需要"底色也表态"的地方） */
-  --accent-soft:  light-dark(rgba(91, 91, 214, .10), rgba(141, 141, 240, .16));
-  --accent-ring:  light-dark(rgba(91, 91, 214, .30), rgba(141, 141, 240, .34));
+  --accent-soft:  light-dark(rgba(81, 81, 207, .10), rgba(141, 141, 240, .16));
+  --accent-ring:  light-dark(rgba(81, 81, 207, .30), rgba(141, 141, 240, .34));
   /* accent 实心填充上的文字色：浅色主题的蓝够深可以配白字，
    * 深色主题的蓝偏亮，白字只有 2.6:1，必须换成近黑 */
   --on-accent:    light-dark(#ffffff, #08101c);
-  --unread: light-dark(#d92135, #ff5b5b);
-  --ok:     light-dark(#15803d, #4ade80);
-  --warn:   light-dark(#b45309, #f59e0b);
-  /* 收藏星标：金色。刻意不用 accent——收藏和"选中 / 激活"是两回事，
-   * 同色会让一行里出现两种含义相同的蓝。浅色底上要压深才够对比度 */
-  --fav: light-dark(#a8760a, #f0b429);
-
-  /* 未读点的"陈旧"态：超过 24h 的变更降级用（见 .dot.is-stale）。
-   * 588 个饱和红点铺满侧栏等于没有信号，只有新鲜变更才配得上红色。 */
-  --unread-stale: light-dark(#a8b0bd, #4e545e);
+  /* 未读 = 品牌强调色（新鲜未读满亮度 + 粗体，不只靠颜色）；红色改名 --danger，只表示错误 / 破坏性 */
+  --unread: light-dark(#5151cf, #8d8df0);
+  --ok:     light-dark(#116d35, #4ade80);
+  --warn:   light-dark(#9a4604, #f59e0b);
+  /* 错误 / 破坏性操作（删除确认、导出失败、回退、超预算告警）。即原来的红色未读 */
+  --danger:        light-dark(#c01427, #ff5b5b);
   /* 危险按钮（实心红底）的 hover 态。浅色要更深、深色要更亮——两个方向都是
    * 为了把按钮上那层文字的对比度往上推，而不是像 brightness() 那样往下拉。 */
-  --unread-strong: light-dark(#b3162a, #ff7d7d);
+  --danger-strong: light-dark(#a01020, #ff7d7d);
+  /* 收藏星标：中性色。收藏用填充形状表达，不再用金色（配色收敛：一个强调色 + 中性色） */
+  --fav: var(--text-dim);
+  /* 控制台"实时"信号色：刚变更的轻闪、在线状态。收敛为强调色 */
+  --signal: var(--accent);
+
+  /* 未读点的"陈旧"态：超过 24h 的变更降级用（见 .file.unread.stale）。
+   * 和新鲜未读同一色相、更低明度：几百个满亮度点铺满侧栏等于没有信号。
+   * 浅色取 #7677cd（比设计稿的 #7c7dd2 略深）：后者对 hover 行 / 选中行只有 2.90–2.98，
+   * 这里让它对 bg / bg-elev / bg-hover / bg-active 四种表面冷暖都 ≥3.1 */
+  --unread-stale: light-dark(#7677cd, #6668b8);
+  /* 实心未读底（计数角标等）的 hover 态，跟随强调色 */
+  --unread-strong: light-dark(#4545bf, #a3a3f7);
+
+  /* 渐变文字专用（英雄区大数字）：比 --brand-1/2 压深 / 提亮，保证 34px 大字 ≥3:1。
+   * --brand-1/-2/--brand-grad 只留给 logo 方块这类非文字的品牌面 */
+  --brand-ink-1: light-dark(#3a6fe0, #5b9cff);
+  --brand-ink-2: light-dark(#6b3ff0, #8b5bff);
+  --brand-text-grad: linear-gradient(135deg, var(--brand-ink-1), var(--brand-ink-2));
+
+  /* ---------- 星图专用令牌 ----------
+   * 新鲜度 = 强调色色相上的明暗四档（浅色侧是墨色浓度，深色侧是亮度）。
+   * 不只靠颜色：四档同时对应半径 --star-r-1..4，1–2 档带外晕。 */
+  --star-1: light-dark(#2c2fb3, #eeeeff);   /* ≤1h */
+  --star-2: light-dark(#3a55ad, #b3b3f6);   /* ≤24h */
+  --star-3: light-dark(#5d6c8f, #7f82c4);   /* ≤7d */
+  --star-4: light-dark(#7d879b, #5b5f8a);   /* 更早 */
+  --star-halo: light-dark(rgba(81, 81, 207, .18), rgba(179, 179, 246, .22));
+  --star-pulse: var(--unread);
+  --star-twinkle: var(--signal);
+  --star-r-1: 3.5px; --star-r-2: 2.75px; --star-r-3: 2px; --star-r-4: 1.5px;
+  /* 引用关系连线（星图，FEAT-004 使用）：常态低透明度，悬停 / 选中实色 */
+  --link-line:    color-mix(in srgb, var(--accent) 32%, transparent);
+  --link-line-hl: var(--accent);
+  /* 星云明度参数（非颜色令牌，走下方三处覆盖；浅色是默认值） */
+  --nebula-s: 60%;
+  --nebula-l: 55%;
+  --nebula-a: .10;
+
+  /* 半透明表面（毛玻璃面板 / 桌面版 vibrancy 侧栏）共用的着色比例。
+   * 94% 下所有文字令牌、状态点、输入框轮廓叠在纯白 / 纯黑上都达标，无需令牌重映射 */
+  --glass-tint: 94%;
+  /* 桌面版侧栏叠在原生 vibrancy 材质上的着色比例（浅 / 深各一个，见「桌面版原生化」段）。
+   * 材质本身不是纯白 / 纯黑，contrast-tokens.spec 按实测的材质亮度区间验算文字对比度 */
+  --sidebar-tint-light: 60%;
+  --sidebar-tint-dark: 68%;
+
+  /* 控制台读数用的等宽字体：只用系统字体，不打包、不下载 */
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 
   /* ---------- 阴影 ----------
    * 取向参考 Linear：分层交给 border 和表面色，阴影只在"真的浮在内容之上"时出现。
@@ -108,8 +157,10 @@
    * （目录树里的文件行，解决文件名被截断成 `01-user-segment-and...` 的问题）。 */
   --h-row: 28px; --h-row-2: 46px;
 
-  /* ---------- 焦点环：全站唯一一种写法 ---------- */
-  --ring: 0 0 0 3px var(--accent-ring);
+  /* ---------- 焦点环：全站唯一一种写法 ----------
+   * 实色双环：内圈 --bg-elev 间隙让它压在任何控件色上都看得见，外圈实色 accent
+   * 对 --bg-elev 四组合都 ≥6:1（原 30% 透明晕在白底上只有约 1.5:1，不满足 1.4.11） */
+  --ring: 0 0 0 2px var(--bg-elev), 0 0 0 4px var(--accent);
 
   /* 用于 CSS mask 的图标（伪元素里没法插 <svg>，只能走 data-URI） */
   --ico-search: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E");
@@ -117,11 +168,22 @@
   /* 布局变量（JS 动态改 --sidebar-w） */
   --sidebar-w: 320px;
   --resizer-w: 5px;
-  /* 动画 token：iOS 抽屉曲线 + 200ms */
-  --ease: cubic-bezier(.32, .72, 0, 1);
-  --ease-out: cubic-bezier(.22, 1, .36, 1);
-  --dur: 200ms;
-  --dur-fast: 120ms;
+  /* ---------- 动效令牌（全站唯一来源） ----------
+   * 组件 CSS 不写裸 ms / 裸 cubic-bezier。旧名 --ease / --ease-out 保留为别名。
+   * reduced-motion（系统或 html[data-motion="reduce"]）下全部 --dur-* 与 --stagger 归零。 */
+  --ease-standard: cubic-bezier(.2, 0, 0, 1);      /* 一般状态变化（颜色、透明度） */
+  --ease-enter:    cubic-bezier(.22, 1, .36, 1);   /* 进场 / 展开 */
+  --ease-exit:     cubic-bezier(.4, 0, 1, 1);      /* 退场 / 收起：起步慢收尾快 */
+  --ease-drawer:   cubic-bezier(.32, .72, 0, 1);   /* 侧栏、抽屉（iOS 抽屉曲线） */
+  --ease: var(--ease-drawer);
+  --ease-out: var(--ease-enter);
+  --dur-instant: 80ms;    /* 按下反馈 */
+  --dur-fast: 120ms;      /* hover、颜色 */
+  --dur: 200ms;           /* 一般过渡、侧栏 */
+  --dur-med: 280ms;       /* 浮窗、视图切换、View Transitions */
+  --dur-ambient: 2400ms;  /* 呼吸（持续循环） */
+  --dur-twinkle: 1600ms;  /* 刚变更的轻闪（单次，重复 3 次） */
+  --stagger: 45ms;        /* 错峰步距 */
 
   /* ---------- UI 升级迭代新增令牌 ----------
    * 下面这几组是这次「有温度的编辑感」升级引入的：弹簧曲线让 hover / 卡片
@@ -139,30 +201,93 @@
   /* 英雄区 / 侧栏头背后的极淡光晕，深浅色各一档 */
   --brand-glow: light-dark(rgba(123, 108, 255, .16), rgba(123, 108, 255, .24));
 
-  /* 生成式封面 / 项目色：色相由路径哈希得出（元素上设 --h），S/L 按主题两套。
-   * ⚠️ 不能用 light-dark() —— 它只接受 <color>，塞百分比会让整个 hsl() 非法、
-   * 封面回退成透明。所以走 prefers-color-scheme + [data-theme] 显式切换。
-   * 浅色是默认值，深色在下方覆盖。 */
-  --cover-s:  72%;
-  --cover-l1: 60%;
-  --cover-l2: 46%;
-
   /* 英雄区大标题字号：比页面标题再大一档，作为首页唯一的视觉落点 */
   --fs-hero: 34px;
 }
 
-/* 封面色的深色档：跟随系统（未强制浅色时）+ 显式深色 */
+/* 星云明度参数的深色档：百分比不能塞进 light-dark()（它只接受 <color>），
+ * 所以走 prefers-color-scheme + [data-theme] 三处覆盖 */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --cover-s: 56%; --cover-l1: 44%; --cover-l2: 27%; }
+  :root:not([data-theme="light"]) { --nebula-s: 55%; --nebula-l: 45%; --nebula-a: .16; }
 }
-:root[data-theme="dark"]  { --cover-s: 56%; --cover-l1: 44%; --cover-l2: 27%; }
-:root[data-theme="light"] { --cover-s: 72%; --cover-l1: 60%; --cover-l2: 46%; }
+:root[data-theme="dark"]  { --nebula-s: 55%; --nebula-l: 45%; --nebula-a: .16; }
+:root[data-theme="light"] { --nebula-s: 60%; --nebula-l: 55%; --nebula-a: .10; }
+
+/* 首页英雄区背后的静态星空（非颜色令牌：整组背景图，同样走三处覆盖）。
+ * 浅色 = 星图纸坐标点阵，深色 = 散落星点 + 两团极淡星云。
+ * 对比度约束：.home-hero::before 统一 opacity .5，所以这里每一个 rgba 的 alpha × .5
+ * 都必须 ≤ .08（最亮星点 alpha ≤ .16），文字落在任何星点上 faint 仍 ≥4.5:1。
+ * tests/contrast-tokens.spec.js 会解析这些声明逐个断言。 */
+:root {
+  --hero-stars:
+    radial-gradient(circle, rgba(13, 18, 32, .13) 1px, transparent 1.2px) 0 0 / 22px 22px,
+    radial-gradient(600px 260px at 85% -10%, rgba(107, 63, 240, .08), transparent 70%),
+    radial-gradient(500px 240px at -5% 120%, rgba(58, 111, 224, .07), transparent 70%);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --hero-stars:
+      radial-gradient(1px 1px at 12% 22%, rgba(238, 238, 255, .16), transparent 60%),
+      radial-gradient(1px 1px at 28% 68%, rgba(238, 238, 255, .11), transparent 60%),
+      radial-gradient(1.4px 1.4px at 41% 34%, rgba(238, 238, 255, .16), transparent 60%),
+      radial-gradient(1px 1px at 56% 82%, rgba(179, 179, 246, .13), transparent 60%),
+      radial-gradient(1px 1px at 63% 18%, rgba(238, 238, 255, .12), transparent 60%),
+      radial-gradient(1.2px 1.2px at 74% 52%, rgba(179, 179, 246, .15), transparent 60%),
+      radial-gradient(1px 1px at 86% 28%, rgba(238, 238, 255, .11), transparent 60%),
+      radial-gradient(1px 1px at 92% 76%, rgba(238, 238, 255, .10), transparent 60%),
+      radial-gradient(1px 1px at 6% 84%, rgba(238, 238, 255, .09), transparent 60%),
+      radial-gradient(1px 1px at 35% 8%, rgba(238, 238, 255, .10), transparent 60%),
+      radial-gradient(1px 1px at 48% 58%, rgba(238, 238, 255, .08), transparent 60%),
+      radial-gradient(1px 1px at 19% 45%, rgba(179, 179, 246, .10), transparent 60%),
+      radial-gradient(600px 260px at 85% -10%, rgba(139, 91, 255, .16), transparent 70%),
+      radial-gradient(500px 240px at -5% 120%, rgba(91, 156, 255, .12), transparent 70%);
+  }
+}
+:root[data-theme="dark"] {
+  --hero-stars:
+    radial-gradient(1px 1px at 12% 22%, rgba(238, 238, 255, .16), transparent 60%),
+    radial-gradient(1px 1px at 28% 68%, rgba(238, 238, 255, .11), transparent 60%),
+    radial-gradient(1.4px 1.4px at 41% 34%, rgba(238, 238, 255, .16), transparent 60%),
+    radial-gradient(1px 1px at 56% 82%, rgba(179, 179, 246, .13), transparent 60%),
+    radial-gradient(1px 1px at 63% 18%, rgba(238, 238, 255, .12), transparent 60%),
+    radial-gradient(1.2px 1.2px at 74% 52%, rgba(179, 179, 246, .15), transparent 60%),
+    radial-gradient(1px 1px at 86% 28%, rgba(238, 238, 255, .11), transparent 60%),
+    radial-gradient(1px 1px at 92% 76%, rgba(238, 238, 255, .10), transparent 60%),
+    radial-gradient(1px 1px at 6% 84%, rgba(238, 238, 255, .09), transparent 60%),
+    radial-gradient(1px 1px at 35% 8%, rgba(238, 238, 255, .10), transparent 60%),
+    radial-gradient(1px 1px at 48% 58%, rgba(238, 238, 255, .08), transparent 60%),
+    radial-gradient(1px 1px at 19% 45%, rgba(179, 179, 246, .10), transparent 60%),
+    radial-gradient(600px 260px at 85% -10%, rgba(139, 91, 255, .16), transparent 70%),
+    radial-gradient(500px 240px at -5% 120%, rgba(91, 156, 255, .12), transparent 70%);
+}
+:root[data-theme="light"] {
+  --hero-stars:
+    radial-gradient(circle, rgba(13, 18, 32, .13) 1px, transparent 1.2px) 0 0 / 22px 22px,
+    radial-gradient(600px 260px at 85% -10%, rgba(107, 63, 240, .08), transparent 70%),
+    radial-gradient(500px 240px at -5% 120%, rgba(58, 111, 224, .07), transparent 70%);
+}
 
 :root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"]  { color-scheme: dark; }
 
+/* 弹簧曲线：支持 linear() 的浏览器用真正的弹簧采样，否则用上面的三次贝塞尔近似 */
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --ease-spring: linear(0, .009, .035 2.1%, .141, .281 6.7%, .723 12.9%, .938 16.7%, 1.017, 1.077, 1.121, 1.149 24.3%, 1.159, 1.163, 1.161, 1.154 29.9%, 1.129 32.8%, 1.051 39.6%, 1.017 43.1%, .991, .977 51%, .974 53.8%, .975 57.1%, .997 69.8%, 1.003 76.9%, 1.004 83.8%, 1);
+  }
+}
+
+/* reduced-motion：系统偏好与应用内开关（html[data-motion="reduce"]）走同一组归零。
+ * 新增动画只写在下方「运动需授权」块里，这里兜住所有引用时长令牌的旧过渡 */
 @media (prefers-reduced-motion: reduce) {
-  :root { --dur: 0ms; --dur-fast: 0ms; }
+  :root {
+    --dur-instant: 0ms; --dur-fast: 0ms; --dur: 0ms; --dur-med: 0ms; --dur-slow: 0ms;
+    --dur-ambient: 0ms; --dur-twinkle: 0ms; --stagger: 0ms;
+  }
+}
+:root[data-motion="reduce"] {
+  --dur-instant: 0ms; --dur-fast: 0ms; --dur: 0ms; --dur-med: 0ms; --dur-slow: 0ms;
+  --dur-ambient: 0ms; --dur-twinkle: 0ms; --stagger: 0ms;
 }
 
 /* 全站统一焦点可见性：键盘导航一定看得见，鼠标点击不出现难看的框。
@@ -302,7 +427,14 @@ body.resizing iframe { pointer-events: none; }
 /* logo 轻轻一顶：hover 时品牌方块微放大 + 侧倾，作为"点这里回首页"的俏皮暗示 */
 .brand:hover .brand-mark { transform: scale(1.08) rotate(-3deg); }
 .brand:focus-visible { outline: none; box-shadow: var(--ring); }
-.brand-text { min-width: 0; }
+/* 侧栏拖窄后品牌区与操作组排不下：先收起「Atlas」字样只留图标（容器查询按侧栏头内容区宽度，
+ * 浏览器 / 桌面红绿灯内边距 / 全屏同一套阈值）。图标 + 操作组的最窄宽度由 app.js sidebarMinWidth()
+ * 兜住，拖不到更窄。阈值 = 品牌区全宽 80 + 间距 8 + 操作组 126；字体回退略宽时 overflow 兜底，只裁不压 */
+.sidebar-header { container: sbhead / inline-size; }
+.brand-text { min-width: 0; overflow: hidden; white-space: nowrap; }
+@container sbhead (max-width: 213.98px) {
+  .brand-text { display: none; }
+}
 .brand-mark {
   width: 28px; height: 28px; border-radius: 8px;
   background: linear-gradient(135deg, #5b9cff, #8b5bff);
@@ -311,7 +443,7 @@ body.resizing iframe { pointer-events: none; }
   font-size: 14px;
   flex: none;
 }
-/* 品牌小图标（堆叠文档 + 未读红点），与 App 图标同款；渐变方块由 .brand-mark / .home-logo 提供 */
+/* 品牌小图标（堆叠文档 + 未读点），与 App 图标同款；渐变方块由 .brand-mark / .home-logo 提供 */
 .brand-glyph { display: block; width: 100%; height: 100%; }
 .brand-title {
   display: block;
@@ -355,7 +487,7 @@ body.resizing iframe { pointer-events: none; }
  * 快速打开的结果行。它们本身是 ghost / 列表行，被这条规则套上边框和填充后
  * 会变成一格格的方块（快速打开列表里最明显：每一行都被画成一个按钮）。
  * 用 :where() 包住是为了不抬高整条选择器的优先级。 */
-.modal button:not(:where(.modal-close, .settings-nav-item, .quickopen-item, .settings-changelog-btn, .settings-update-btn)) {
+.modal button:not(:where(.modal-close, .settings-nav-item, .quickopen-item, .qo-section-act, .settings-changelog-btn, .settings-update-btn)) {
   height: var(--h-ctl);
   min-width: var(--h-ctl);
   padding: 0 10px;
@@ -373,13 +505,13 @@ body.resizing iframe { pointer-events: none; }
   justify-content: center;
   gap: 5px;
 }
-.modal button:not(:where(.modal-close, .settings-nav-item, .quickopen-item, .settings-changelog-btn, .settings-update-btn)):hover:not(:disabled) {
+.modal button:not(:where(.modal-close, .settings-nav-item, .quickopen-item, .qo-section-act, .settings-changelog-btn, .settings-update-btn)):hover:not(:disabled) {
   background: var(--bg-hover);
   border-color: var(--text-faint);
 }
 .actions button:active:not(:disabled),
 .main-actions > button:active:not(:disabled),
-.modal button:not(:where(.modal-close, .settings-nav-item, .quickopen-item, .settings-changelog-btn, .settings-update-btn)):active:not(:disabled),
+.modal button:not(:where(.modal-close, .settings-nav-item, .quickopen-item, .qo-section-act, .settings-changelog-btn, .settings-update-btn)):active:not(:disabled),
 .toggle-sidebar:active { transform: scale(0.95); }
 .main-actions > button:disabled { opacity: 0.32; cursor: not-allowed; }
 .actions button:disabled { opacity: 0.32; cursor: not-allowed; }
@@ -405,12 +537,28 @@ body.resizing iframe { pointer-events: none; }
 body.no-active-doc .main-actions > button:disabled,
 body.no-active-doc .tb-sep { display: none; }
 
+/* 快速打开胶囊（design §10.7）：首页 / 星图态的 ⌘K 可见入口；文档态隐藏，仍靠快捷键。
+ * 选择器带 .main-actions > 才压得过上面 ghost 按钮的 padding / border / hover 缩放 */
+.main-actions > button.qo-capsule {
+  height: 30px;
+  padding: 0 6px 0 10px;
+  gap: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.main-actions > button.qo-capsule:hover:not(:disabled) { transform: none; }
+.qo-capsule kbd { color: inherit; }
+body:not(.no-active-doc) .main-actions > button.qo-capsule,
+html.focus-mode .main-actions > button.qo-capsule { display: none; }
+
 .actions button.scanning svg,
 .main-actions button.spinning svg {
   animation: spin 0.9s linear infinite;
 }
 
-/* sort 按钮已迁移到 .sort-bar 分段控件 */
+/* 排序与「仅未读」在树头 #btn-sort 的菜单里（见「侧栏瘦身」段） */
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -425,7 +573,7 @@ body.no-active-doc .tb-sep { display: none; }
 .filter input[type="search"] {
   flex: 1;
   background: var(--bg-elev-2);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-input);
   border-radius: var(--r-sm);
   color: var(--text);
   padding: 6px 10px;
@@ -442,28 +590,6 @@ body.no-active-doc .tb-sep { display: none; }
   box-shadow: var(--ring);
 }
 
-/* 排序 + 仅未读：紧贴搜索框下方一行
- * 设计风格：IDE 工具栏 inline 风——无外框、无填充按钮，靠文字色 + 短下划线表态
- * 不抢戏，密度紧凑（高度 28px 含 padding）
- */
-.sort-bar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 12px 8px;
-  border-bottom: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--text-faint);
-  user-select: none;
-}
-.sort-bar-label {
-  flex: none;
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-  margin-right: 4px;
-}
 .seg {
   display: inline-flex;
   align-items: center;
@@ -508,19 +634,6 @@ body.no-active-doc .tb-sep { display: none; }
   box-shadow: var(--ring);
 }
 
-.only-unread {
-  margin-left: auto;        /* 推到最右，和 seg 拉开距离 */
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  color: var(--text-dim);
-  cursor: pointer;
-  white-space: nowrap;
-  flex: none;
-}
-.only-unread input { margin: 0; cursor: pointer; }
-.only-unread:hover { color: var(--text); }
 
 /* ---------- 分区标题 ----------
  * 收藏 / 最近 / 全部文档三段共用一套标题样式，视觉层级明显低于文件行，
@@ -560,10 +673,9 @@ body.no-active-doc .tb-sep { display: none; }
 }
 .section-chev { transition: transform var(--dur-fast) var(--ease-out); }
 .section-head[aria-expanded="false"] .section-chev { transform: rotate(-90deg); }
-/* tree-head 不可折叠，所以不给 chevron 位，用等宽缩进对齐上面两段。
- * margin-top 比其它分区大一档：上面几段是"固定的快捷入口"，这里往下是
- * 可滚动的全量树，用一段更宽的留白代替一条分隔线来表达这个转折。 */
-.tree-head { padding-left: 24px; margin-top: 10px; }
+/* 树头：视图分段控件（左）+ 排序按钮 / 全部折叠 / 计数（右）。侧栏瘦身后它紧贴搜索框，
+ * 排序菜单 #sort-menu 以它为定位基准向下展开。 */
+.tree-head { position: relative; padding: 6px 8px 6px 8px; margin-top: 2px; gap: 4px; }
 
 /* 全部折叠 / 全部展开：常驻但低调（分组多时是主要导航手段，藏在 hover 里
  * 反而找不到）。和分区标题同一行右侧，紧贴计数徽章。 */
@@ -599,92 +711,6 @@ body.no-active-doc .tb-sep { display: none; }
 .view-seg .seg-btn[aria-checked="true"] { font-weight: 600; }
 .view-seg .seg-btn[aria-checked="true"]::after { left: 7px; right: 7px; }
 
-/* ============================================================
- * 快捷区（收藏 / 最近 / 标签的共同外壳）
- * ------------------------------------------------------------
- * 过去这三段是并排的裸分区，各占一条灰线、字号字色一模一样，堆在一起像表格，
- * 又和下面的目录树糊成一片——这正是"分区不清晰 / 上世纪办公软件"的主因。
- * 现在给它们一个凹陷面板身份：比侧栏表面（--bg-elev）更沉一档的底色 + 发丝边 +
- * 圆角。于是"快捷入口"是明确的一块，"全量目录树"是另一块，中间自然断开。
- * 三段全空时用 :has() 把整块收掉，不留空框。每段内部 id / 折叠 / 显隐逻辑不变。 */
-.quick-zone {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin: 8px 10px 2px;
-  padding: 3px;
-  border-radius: var(--r-lg);
-  background: var(--bg);
-  border: 1px solid var(--hairline);
-}
-/* 三段都为空（或都 .hidden）→ 整块隐藏。Chromium 原生支持 :has() 的相对选择器列表 */
-.quick-zone:not(:has(> .fav-bar:not(.hidden), > .recent-bar:not(.hidden), > .tag-bar:not(.hidden))) {
-  display: none;
-  margin: 0;
-  border: none;
-}
-/* 收进面板后，各段自身的外边距收紧——呼吸感交给面板统一给 */
-.quick-zone > .fav-bar,
-.quick-zone > .recent-bar,
-.quick-zone > .tag-bar {
-  padding: 1px 2px 2px;
-}
-/* 段与段之间一条极淡分隔（仅在同时可见时出现，避免顶部第一段头上挂线） */
-.quick-zone > .fav-bar:not(.hidden) ~ .recent-bar:not(.hidden),
-.quick-zone > .fav-bar:not(.hidden) ~ .tag-bar:not(.hidden),
-.quick-zone > .recent-bar:not(.hidden) ~ .tag-bar:not(.hidden) {
-  border-top: 1px solid var(--hairline);
-  margin-top: 1px;
-  padding-top: 3px;
-}
-
-/* 最近打开。
- * 不再画 border-bottom：标签 / 收藏 / 最近三段各画一条线的话，侧栏上半部分
- * 会叠出三条横线，看起来像表格而不像分区。Bear 的做法是纯靠间距分组——
- * 分区头本身（弱色小字 + 字距）已经足够表达"这是新的一段"。 */
-.recent-bar {
-  padding: 4px 8px 8px;
-  flex: none;
-}
-.recent-bar.hidden { display: none; }
-.recent-bar.collapsed .recent-list { display: none; }
-
-/* 分区头 + 「清除」并列（同 .tag-bar-head）：折叠按钮吃掉整行剩余宽度，
- * 热区尽量大，不用瞄着 chevron 点 */
-.recent-bar-head { display: flex; align-items: center; gap: 2px; }
-.recent-toggle { flex: 1; min-width: 0; width: auto; }
-/* 收起时「清除」也留着：折叠只是把列表藏起来，记录还在，这时候更需要一键清掉 */
-
-.recent-list {
-  display: flex; flex-direction: column; gap: 1px;
-  max-height: 160px;
-  overflow-y: auto;
-}
-.recent-list .recent-item {
-  display: flex; align-items: center; gap: 6px;
-  padding: 4px 8px;
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--text);
-  user-select: none;
-  transition: background var(--dur-fast, 120ms);
-}
-.recent-list .recent-item:hover { background: var(--bg-hover); }
-.recent-list .recent-item.active { background: var(--bg-active); }
-.recent-list .recent-icon { width: 12px; height: 12px; color: var(--text-faint); flex: none; }
-.recent-list .recent-name {
-  flex: 1;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.recent-list .recent-project {
-  font-size: 10px;
-  color: var(--text-faint);
-  flex: none;
-}
-.recent-list .recent-item.unread .recent-name { font-weight: 600; }
-.recent-list .recent-item.has-alias .recent-name { font-style: italic; }
 
 /* tree */
 .tree {
@@ -699,10 +725,13 @@ body.no-active-doc .tb-sep { display: none; }
 
 .folder { margin: 1px 0; }
 .folder.dragging-ghost { opacity: 0.5; }
+/* 文件夹行前缀 = 折叠箭头 16 + 间距 4 + 图标 16 + 间距 4 = 40px（左内边距 2px）；
+ * 文件行用同宽的 40px 固定列（见 .file / .unread-dot），于是同一层的文件名与文件夹名
+ * 起点落在同一条竖线上（design §12.2，tests/sidebar-tree-alignment.spec.js 断言）。 */
 .folder-header {
-  display: flex; align-items: center; gap: 6px;
-  min-height: 26px;
-  padding: 4px 8px 4px 6px;
+  display: flex; align-items: center; gap: 4px;
+  min-height: 28px;
+  padding: 0 6px 0 2px;
   cursor: pointer;
   border-radius: var(--r-sm);
   user-select: none;
@@ -749,22 +778,26 @@ body.no-active-doc .tb-sep { display: none; }
   mask: var(--ico-search) center / contain no-repeat;
 }
 .folder-toggle {
-  width: 14px; height: 14px;
+  width: 16px; height: 16px;
   color: var(--text-faint);
   transition: transform var(--dur-fast) var(--ease-out), color var(--dur-fast);
   flex: none;
 }
 .folder-header:hover .folder-toggle { color: var(--text-dim); }
 .folder.collapsed > .folder-header .folder-toggle { transform: rotate(-90deg); }
+/* 文件夹图标统一中性色、不填充、不随新鲜度变化（design §12.1）；展开 / 收起只换形状 */
 .folder-icon {
-  width: 14px; height: 14px; flex: none;
-  /* 比文件类型 icon（--text-faint）实一档，强化"这是容器不是文件"的层级 */
+  width: 16px; height: 16px; flex: none;
   color: var(--text-dim);
 }
+.folder-icon svg { fill: none; }
+.folder-icon .fi-open { display: none; }
+.folder:not(.collapsed) > .folder-header .folder-icon .fi-closed { display: none; }
+.folder:not(.collapsed) > .folder-header .folder-icon .fi-open { display: inline; }
 .folder-name {
   flex: 1;
-  font-weight: var(--fw-semi);
-  font-size: var(--fs-base);
+  font-weight: 600;
+  font-size: 12.5px;
   /* 分组名是这一层的主角，字距收紧一点点让它更"结实"，和文件名的常规字重拉开 */
   letter-spacing: -0.01em;
   color: var(--text);
@@ -777,6 +810,10 @@ body.no-active-doc .tb-sep { display: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 嵌套子分组的名字比顶层轻一档 */
+.folder .folder .folder-name { font-weight: 560; }
+/* 编辑态字号固定 12px（var(--fs-sm)）：静息态文件夹名是 12.5px，但输入框外观要稳定，
+ * 也不能被粘贴进来的格式改掉（tests/inline-edit.spec.js 断言） */
 .folder-name[contenteditable="true"],
 .file-name[contenteditable="true"] {
   background: var(--bg);
@@ -789,7 +826,7 @@ body.no-active-doc .tb-sep { display: none; }
   word-break: break-word;
   font-weight: 600;
   font-style: normal;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.4;
   color: var(--text);
   /* 屏蔽粘贴进来的字号/颜色等格式 */
@@ -842,20 +879,23 @@ body.no-active-doc .tb-sep { display: none; }
 .folder-actions button:hover { background: var(--bg-elev-2); color: var(--text); }
 .folder-actions button { display: inline-flex; align-items: center; justify-content: center; }
 
+/* 子级容器：每层缩进 10 + 8 + 1px 引导线 = 19px，竖线就是层级引导线（design §10.5b） */
 .folder-children {
   min-height: 4px;
-  padding-left: 14px;
   margin-left: 10px;
-  /* 常显的极淡竖线：804 个文件的树里，靠缩进量猜层级很累 */
-  border-left: 1px solid var(--hairline);
+  padding-left: 8px;
+  border-left: 1px solid var(--border-strong);
   /* 注意：不在这里常驻 overflow:hidden——那会裁掉行内按钮的键盘焦点环。
    * 只有动画期间（.animating）才需要裁剪来实现高度收缩，见下方规则。 */
   transition: border-color var(--dur-fast);
 }
-.folder-children:hover { border-left-color: var(--border-strong); }
-/* 选中文件所在的整条层级链，缩进引导线点亮成 accent——一眼看清"当前文件在哪条支上"
+/* 选中文件所在的整条层级链，缩进引导线混入 55% 强调色——一眼看清"当前文件在哪条支上"
  * （祖先链的 .on-active-path 由 markSidebarActive 维护）。 */
-.folder.on-active-path > .folder-children { border-left-color: var(--accent-ring); }
+.folder.on-active-path > .folder-children {
+  border-left-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+}
+/* 顶层分组之间留 4px 呼吸 */
+.tree > .folder + .folder { margin-top: 4px; }
 
 /* 折叠末态：display:none。三个理由缺一不可——
  *   ① 键盘上下导航 visibleFilesInOrder() 靠 .folder.collapsed 类过滤，class 一直在；
@@ -887,7 +927,7 @@ body.no-active-doc .tb-sep { display: none; }
  * 展开一个大目录时浏览器要对整棵子树做一次性布局（实测同步阻塞 ~85ms、明显掉帧）。
  * content-visibility:auto 让浏览器只对视口内（及邻近）的行做布局 / 绘制，视口外的行用
  * contain-intrinsic-size 占位、跳过渲染——等于原生的列表虚拟化。实测展开大目录的同步
- * 阻塞从 ~85ms 降到 <1ms、0 掉帧，滚动也更轻。--h-row=28px 作为文件行高度估值，
+ * 阻塞从 ~85ms 降到 <1ms、0 掉帧，滚动也更轻。26px（= 文件行高）作为高度估值，
  * auto 关键字会在首次渲染后记住真实高度、自我校正，滚动条不跳。
  * 只作用于目录视图：分组视图要拖拽重排，content-visibility 会影响命中判定，故不加。
  *
@@ -900,7 +940,7 @@ body.no-active-doc .tb-sep { display: none; }
  *      而过渡起点又提交不了，只能等 400ms 兜底超时才跳开 —— 就是「点了之后卡一会儿
  *      才啪一下打开」。目录视图本来就默认全展开、极少走这条分流，所以只在那边成立。 */
 .tree.tree-view-mode .folder-children { content-visibility: auto; contain-intrinsic-size: auto 40px; }
-.tree.tree-view-mode .file { content-visibility: auto; contain-intrinsic-size: auto 28px; }
+.tree.tree-view-mode .file { content-visibility: auto; contain-intrinsic-size: auto 26px; }   /* = 行高 26px，未渲染与渲染后一致，不再每行差 2px */
 /* 展开时子项依次淡入并轻微上移，给折叠展开一点"空间连续性"。
  * 只 stagger 前 8 个，长分组尾部不再拖延迟；reduced-motion 下 --dur=0 自然失效。 */
 @keyframes treeItemIn {
@@ -927,40 +967,62 @@ body.no-active-doc .tb-sep { display: none; }
  * flex-wrap 是为了 .file-snippet：搜索命中正文时它 flex-basis:100% 强制换行，
  * 于是这一行自然变成"标题 + 内容摘要"的两行式（Bear 的列表行就是这个结构），
  * 没有命中时完全不占高度，密集树里仍是紧凑单行。 */
+/* 行高固定（26px；带正文摘要的命中行 42px）、不换行：以前 flex-wrap 让窄侧栏下"静息态挤成两行、
+ * 悬停后元素变少回到一行"，鼠标停在两行交界处时两行高度每帧来回翻（diagnosis §5）。
+ * 现在悬停时行尾元素只是 visibility 隐身（占位不变），操作组绝对定位盖在行尾，悬停前后几何完全一致。
+ * 摘要 .file-snippet 也改成绝对定位在第二行，不再参与流式换行 */
 .file {
-  display: flex; align-items: center; gap: 5px;
-  flex-wrap: wrap;
-  min-height: var(--h-row);
-  padding: 4px 8px;
+  position: relative;
+  display: flex; align-items: center; gap: 4px;
+  flex-wrap: nowrap;
+  height: 26px;
+  box-sizing: border-box;
+  padding: 0 6px 0 2px;
   border-radius: var(--r-sm);
   cursor: pointer;
-  font-size: var(--fs-base);
-  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-normal);
+  color: var(--text-dim);
   user-select: none;
   transition: background var(--dur-fast);
 }
-.file:hover { background: var(--bg-hover); }
+/* 键盘 Tab 进操作组时（没有悬停）与悬停同样上底色：操作组 background: inherit，
+ * 行透明时图标会直接叠在文件名尾部的文字上（client-fix review #5）。只认 :focus-visible：鼠标点按钮也会给焦点，
+ * 用 :focus-within 时点完「分享」等按钮移开鼠标，这一行会一直停在悬停态（第 2 轮评审 #2） */
+.file:hover,
+.file:has(.file-actions :focus-visible) { background: var(--bg-hover); color: var(--text); }
+.file.unread, .file.active { color: var(--text); }
+.file:has(.file-snippet) { height: 42px; padding-bottom: 16px; }
+/* 分组视图的文件行同样按视口渲染（client-fix §2 / §6）：2,000 篇时侧栏常驻约 4 万个节点，
+ * 每次切主题 / 首次光栅都要对它们全量重算样式。content-visibility:auto 让视口外的行跳过样式 / 布局 / 绘制，
+ * 占位高度与真实行高完全一致（26px / 命中行 42px），所以 .folder-children 的 scrollHeight、
+ * 展开动画的分流估算和滚动条都不受影响。只加在 .file 行上，不加在 .folder-children 上
+ * （那样会让 scrollHeight 只报占位值，见上方目录视图段的实测记录） */
+.tree .file { content-visibility: auto; contain-intrinsic-size: auto 26px; }
+.tree .file:has(.file-snippet) { contain-intrinsic-size: auto 42px; }
 .file.active {
   background: var(--bg-active);
   box-shadow: inset 2px 0 0 var(--accent);
 }
 .file.active .file-name { font-weight: var(--fw-semi); }
 .file.dragging-ghost { opacity: 0.5; }
-/* 树列表只保留左侧类型 icon，避免与 HTML/MD 标签重复占用标题空间。 */
-.tree .file .file-type-badge { display: none; }
-.file .file-type-icon {
-  width: 13px; height: 13px;
+/* 文件行不再有左侧类型图标（design §11.B2）：DOM 保留、只是不显示，类型看右侧角标 */
+.file .file-type-icon { display: none; }
+/* 树里的类型角标：中性等宽小字（配色收敛，不再按类型换色相），悬停时让位给操作按钮 */
+.tree .file .file-type-badge {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 9.5px;
   color: var(--text-faint);
-  transition: color var(--dur-fast);
+  background: transparent;
+  border-color: var(--border-strong);
 }
-.file:hover .file-type-icon,
-.file.active .file-type-icon { color: var(--text-dim); }
-/* md 与 html 用不同色相区分，比只靠图形更快辨认 */
-.file[data-doctype="md"] .file-type-icon { color: light-dark(#7a6cb0, #9a92d0); }
-.file[data-doctype="html"] .file-type-icon { color: light-dark(#3d8a7a, #5cb39c); }
+.tree .file .file-type-badge { flex: none; }
+/* 文件名优先（diagnosis §11）：basis 取内容宽度、收缩权重 1；目录提示 / 标签 chip 收缩权重大得多，
+ * 空间不够时先缩它们，文件名最后才被截。完整路径在悬停预览与行 title 里 */
 .file-name {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 auto;
+  min-width: 48px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -973,7 +1035,7 @@ body.no-active-doc .tb-sep { display: none; }
  * 外观必须稳定（见下方 .file-name[contenteditable] 那条），不该再受
  * "这个文件未读吗"影响——否则同一个输入框会因为文件状态不同而粗细不一。 */
 .file.unread .file-name:not([contenteditable="true"]) { font-weight: var(--fw-semi); }
-/* 陈旧未读也恢复常规字重：和红点降级是同一个道理——588 行全是粗体时，
+/* 陈旧未读也恢复常规字重：和未读点降级是同一个道理——588 行全是粗体时，
  * 粗体不再表示"这行重要"，只是让整个侧栏看起来在喊。 */
 .file.unread.stale .file-name:not([contenteditable="true"]) { font-weight: var(--fw-normal); }
 .file.has-alias .file-name { font-style: italic; }
@@ -981,9 +1043,11 @@ body.no-active-doc .tb-sep { display: none; }
  * 让平铺在同一分组里的多个同名文件（README / index …）一眼看出各自在哪个子目录。
  * 和时间戳一样在 hover 时让位给操作按钮，避免右侧拥挤。 */
 .file-dir-hint {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 45%;
+  flex: 0 4 auto;       /* 收缩权重（× 内容宽）比文件名大得多：空间不够时先缩目录提示 */
+  min-width: 32px;      /* 至少留出末级目录的尾巴（省略号在开头） */
+  max-width: 30%;
+  direction: rtl;       /* 省略号在开头，末级目录始终可见 */
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -991,7 +1055,14 @@ body.no-active-doc .tb-sep { display: none; }
   color: var(--text-faint);
   margin-left: 6px;
 }
-.file:hover .file-dir-hint { display: none; }
+/* 侧栏较窄（树宽 < 280px，约侧栏 290px 以下）时整段不显示：同名文件靠悬停预览 / title 里的完整路径区分 */
+.tree { container-type: inline-size; container-name: tree; }
+@container tree (max-width: 279px) {
+  .file-dir-hint { display: none; }
+}
+/* 悬停时行尾的次要信息只隐身、不出流（visibility），行内几何不变；操作组盖在上面 */
+.file:hover :is(.file-dir-hint, .file-tags, .file-type-badge, .fav-mark, .share-badge),
+.file:has(.file-actions :focus-visible) :is(.file-dir-hint, .file-tags, .file-type-badge, .fav-mark, .share-badge) { visibility: hidden; }
 .file-mtime {
   font-size: var(--fs-xs);
   color: var(--text-faint);
@@ -1002,17 +1073,21 @@ body.no-active-doc .tb-sep { display: none; }
  * 原来两者是叠加的：actions 展开 94px，把文件名从 163px 直接压到 97px——
  * 也就是"想操作某个文件时，恰恰看不清它叫什么"。时间戳在 hover 的那一刻
  * 是最不重要的信息，让它先走。 */
-.file:hover .file-mtime { display: none; }
+.file:hover .file-mtime,
+.file:has(.file-actions :focus-visible) .file-mtime { visibility: hidden; }
 /* 静息态默认不显示右侧时间戳。一列右对齐的 03-25 / 03-18 正是"上世纪办公软件
  * 详细信息列表"观感的主要来源；时间信息在行 title 与顶栏面包屑「更新于」里都有，
  * 加上按时间排序本身就表达了新旧，树里不必再挂一列日期。
  * 唯一例外：仅内容命中的行保留时间戳（连同前置放大镜标记）——它是"这行为什么
  * 会出现在结果里"的直接答案，属于有效信息而非噪音。 */
 .file .file-mtime { display: none; }
-.file.content-match:not(:hover) .file-mtime { display: inline; }
+.file.content-match .file-mtime { display: inline; }
 
+/* 文件行的 40px 前缀列：左 25px + 6px 点 + 右 5px + 行内 gap 4px。点的中心正对同级文件夹
+ * 图标的中心（2 + 16 + 4 + 8 = 30px），文件名从 42px 起、和同级文件夹名对齐。已读时点隐身但占位 */
 .unread-dot {
   width: 6px; height: 6px;
+  margin: 0 5px 0 25px;
   border-radius: 50%;
   background: var(--unread);
   flex: none;
@@ -1020,16 +1095,16 @@ body.no-active-doc .tb-sep { display: none; }
 }
 .file:not(.unread) .unread-dot { visibility: hidden; }
 /* 陈旧未读（>24h）降级成灰点：见 app.js 里 isFresh 的注释。
- * 红点必须稀缺才有意义——588 个红点等于 0 个红点。 */
+ * 未读点必须稀缺才有意义——588 个满亮度点等于 0 个。 */
 .file.unread.stale .unread-dot { background: var(--unread-stale); }
 
 /* 搜索命中正文时的第二行摘要。
  * flex-basis:100% 让它独占一行；原来这段摘要只存在于 title tooltip 里，
  * 白白浪费——它恰恰是"为什么这个文件出现在结果里"的唯一答案。 */
 .file-snippet {
-  flex: 0 0 100%;
+  position: absolute;
+  left: 42px; right: 6px; top: 24px;   /* 第二行，与上一行的文件名文字左缘对齐（40px 前缀列） */
   min-width: 0;
-  margin: 1px 0 1px 24px;   /* 与上一行的文件名左缘对齐（dot + fav + icon 的宽度） */
   font-size: var(--fs-xs);
   line-height: var(--lh-base);
   color: var(--text-dim);
@@ -1045,14 +1120,21 @@ body.no-active-doc .tb-sep { display: none; }
   font-weight: var(--fw-medium);
 }
 /* 默认 width:0 不占布局，让 mtime 贴最右；hover 时平滑展开（3 个按钮 = 57px） */
+/* 绝对定位盖在行尾：展开 / 收起不参与行内布局（行高、文件名宽度都不变）。
+ * 底色继承行的背景（悬停 / 选中色），盖住下面已隐身的角标位置；左缘一段渐隐接到文件名上 */
 .file-actions {
-  display: flex; gap: 1px; flex: none;
+  position: absolute; right: 4px; top: 4px; height: 18px;
+  display: flex; gap: 1px;
   width: 0; overflow: hidden;
   opacity: 0;
+  background: inherit;
+  border-radius: 3px;
   transition: width .12s, opacity .12s;
 }
-/* 5 个按钮 × 18px + 4 个 1px 间隙 = 94px（新增了「编辑标签」） */
-.file:hover .file-actions { width: 94px; opacity: 1; }
+/* 6 个按钮（收藏 / 分享 / 标签 / 重命名文件 / 备注名 / 访达）× 18px + 5 个 1px 间隙 = 113px。
+ * 键盘 Tab 进到某个按钮时同样展开（只看按钮自己的 :focus-visible，点行本身、鼠标点按钮都不会撑住） */
+.file:hover .file-actions,
+.file-actions:has(:focus-visible) { width: 113px; opacity: 1; }
 /* 分享态的 share button 用 accent 蓝标识（已分享中再点是再次打开 modal） */
 .file.shared .file-actions [data-act="share"] { color: var(--accent); }
 
@@ -1074,40 +1156,22 @@ body.no-active-doc .tb-sep { display: none; }
 
 /* ==================== 收藏与标签 ==================== */
 
-/* 文件行上的星标：常驻按钮（不在 .file-actions 里）——收藏是高频二元操作，
- * 不该藏在 hover 才出现的那排按钮后面。
- * 未收藏时几乎透明，只在 hover 行 / 键盘聚焦时浮出来；已收藏则常亮。 */
-.fav-btn {
-  width: 14px; height: 14px;
+/* 文件行上的星标：悬停操作组 .file-actions 的第一个按钮（design §12.2），尺寸与外观
+ * 跟随 .file-actions button。已收藏 = 实心填充；静息态的收藏标记由名字后的 .fav-mark 负责。 */
+.file.favorite .fav-btn { color: var(--fav); }
+.file.favorite .fav-btn svg { fill: currentColor; }
+/* 已收藏文件名后的 9px 实心星：不占左侧空间、不可点（点星走悬停组里的按钮） */
+.fav-mark {
   flex: none;
   display: inline-flex; align-items: center; justify-content: center;
-  padding: 0;
-  border: none;
-  background: transparent;
   color: var(--text-faint);
-  cursor: pointer;
-  border-radius: 3px;
-  opacity: 0;
-  transition: opacity var(--dur-fast), color var(--dur-fast), background var(--dur-fast);
 }
-.file:hover .fav-btn { opacity: 0.75; }
-.fav-btn:hover { opacity: 1; color: var(--fav); background: var(--bg-elev-2); }
-.fav-btn:focus-visible {
-  opacity: 1;
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-/* 已收藏：实心填充 + 常亮，不受 hover 影响 */
-.file.favorite .fav-btn {
-  opacity: 1;
-  color: var(--fav);
-}
-.file.favorite .fav-btn svg { fill: var(--fav); }
+.fav-mark svg { width: 9px; height: 9px; fill: currentColor; }
 
-/* 文件行上的标签：最多两个 + “+N”，宽度受限、优先让文件名占空间 */
+/* 文件行上的标签：最多一个（design §10.5），宽度受限、优先让文件名占空间 */
 .file-tags {
   display: flex; align-items: center; gap: 3px;
-  flex: 0 1 auto;
+  flex: 0 4 auto;      /* 比文件名先缩（见 .file-name） */
   min-width: 0;
   overflow: hidden;
 }
@@ -1128,66 +1192,15 @@ body.no-active-doc .tb-sep { display: none; }
   color: var(--text-dim);
   border: none;
 }
-.file-tag.more {
-  color: var(--text-faint);
-  padding: 0 4px;
-}
+/* 两层以下不显示（design §10.5）：三层文件夹内（及更深）的文件行只留文件名 + 类型角标；
+ * 两层文件夹内的文件行仍显示。
+ * 用嵌套深度判定而不是在 renderFile 里算，懒展开渲染的子树也天然一致 */
+.folder-children .folder-children .folder-children .file .file-tags { display: none; }
 /* hover 时把标签让给操作按钮：侧栏默认只有 320px，标签 chip 和展开后的
  * 5 个按钮同时占位会把文件名压成「留…」。标签是"平时用来认"的信息，
  * hover 是"现在要操作"，让位是正确的取舍（完整标签仍在 title 里） */
-.file:hover .file-tags { display: none; }
+/* （悬停时的让位改为 visibility，见 .file-dir-hint 段） */
 
-/* ==================== 标签筛选区 ====================
- * 和「收藏 / 最近打开」同构：section-head 分区头 + 可折叠内容区。
- * 之所以不再沿用 sort-bar 那种 inline 工具栏风：sort-bar 是"一行两个控件"的固定
- * 高度条，而标签数量不可控——裸 chip 直接贴在分隔线下方时，既缺一个"这排东西是
- * 什么"的锚点，也会在标签变多时无声地把文件树往下推。给它一个头，就同时有了
- * 呼吸空间、语义标签、计数反馈和一个能收起来的开关。
- */
-.tag-bar {
-  display: flex;
-  flex-direction: column;
-  /* 内边距对齐 fav-bar / recent-bar，三段分区左右缘才在一条线上。
-   * 分隔线去掉的理由见 .recent-bar 的注释。 */
-  padding: 4px 8px 8px;
-  flex: none;
-}
-.tag-bar.hidden { display: none; }
-.tag-bar.collapsed .tag-bar-chips { display: none; }
-
-.tag-bar-head { display: flex; align-items: center; gap: 2px; }
-/* 折叠按钮吃掉整行剩余宽度：热区尽量大，不用瞄着 chevron 点 */
-.tag-bar-toggle { flex: 1; min-width: 0; width: auto; }
-/* 有筛选生效时，计数徽章用 accent 表态——即使把 chip 区收起来了，
- * 分区头也还在说"树被过滤过，不是文档丢了" */
-.tag-bar.filtering .tag-bar-toggle .section-count {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.tag-bar-chips {
-  /* chip 尺寸抽成变量，只为让下面的 max-height 能按"几行"来表达 */
-  --tag-chip-h: 22px;
-  --tag-chip-gap: 5px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--tag-chip-gap);
-  min-width: 0;
-  /* 和 section-head 的文字左缘对齐（chevron 12px + gap 6px + padding 6px） */
-  padding: 4px 2px 2px 24px;
-  /* 标签多了不无限撑高侧边栏：最多 4 行，超出可滚。
-   * 按整行算而不是拍一个 96px——差半行的截断看起来像渲染坏了，
-   * 而滚动条停在行与行之间是干净的 */
-  max-height: calc(var(--tag-chip-h) * 4 + var(--tag-chip-gap) * 3 + 6px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-/* 只有真的溢出、且还没滚到底时才做底部渐隐（class 由 JS 维护）。
- * 无条件挂 mask 会把最后一行 chip 也一起淡掉，看着像渲染坏了；
- * 滚到底还淡着同理——那时下面真的没东西了，不该再暗示"还有" */
-.tag-bar-chips.scrollable:not(.at-end) {
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
-}
 .tag-chip {
   display: inline-flex; align-items: center; gap: 5px;
   height: 22px;
@@ -1254,65 +1267,6 @@ body.no-active-doc .tb-sep { display: none; }
 .tag-bar-clear.hidden,
 .recent-clear.hidden { display: none; }
 
-/* 收藏夹：结构与「最近打开」一致（跨文件夹的平铺列表）。分隔线同样去掉，见 .recent-bar */
-.fav-bar {
-  padding: 4px 8px 8px;
-  flex: none;
-}
-.fav-bar.hidden { display: none; }
-.fav-bar.collapsed .fav-list { display: none; }
-
-.fav-list {
-  display: flex; flex-direction: column; gap: 1px;
-  max-height: 200px;
-  overflow-y: auto;
-}
-.fav-list .fav-item {
-  display: flex; align-items: center; gap: 6px;
-  padding: 4px 8px;
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--text);
-  user-select: none;
-  transition: background var(--dur-fast, 120ms);
-}
-.fav-list .fav-item:hover { background: var(--bg-hover); }
-.fav-list .fav-item.active { background: var(--bg-active); }
-.fav-list .fav-icon { width: 12px; height: 12px; color: var(--text-faint); flex: none; }
-.fav-list .fav-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.fav-list .fav-project {
-  font-size: 10px;
-  color: var(--text-faint);
-  flex: none;
-}
-.fav-list .fav-item.unread .fav-name { font-weight: 600; }
-.fav-list .fav-item.has-alias .fav-name { font-style: italic; }
-/* 取消收藏按钮：hover 该行才出现，避免一列 ✕ 造成视觉噪音 */
-.fav-list .fav-remove {
-  flex: none;
-  width: 15px; height: 15px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: 9px;
-  cursor: pointer;
-  border-radius: 3px;
-  opacity: 0;
-  transition: opacity var(--dur-fast), background var(--dur-fast), color var(--dur-fast);
-}
-.fav-list .fav-item:hover .fav-remove { opacity: 1; }
-.fav-list .fav-remove:hover { background: var(--bg-elev-2); color: var(--text); }
-.fav-list .fav-remove:focus-visible {
-  opacity: 1;
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
 
 /* 顶栏收藏按钮：当前文件已收藏时 → 星星本身填成金色。
  * 刻意不像 #btn-share.shared 那样连边框一起变色：星形 fill 之后在 28px 按钮里
@@ -1382,7 +1336,7 @@ body.no-active-doc .tb-sep { display: none; }
 }
 .share-url-row .share-url-text {
   flex: 1;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11.5px;
   color: var(--text);
   overflow: hidden;
@@ -1425,15 +1379,15 @@ body.no-active-doc .tb-sep { display: none; }
 .modal .share-btn-danger {
   height: 30px;
   padding: 0 14px;
-  border: 1px solid var(--unread);
+  border: 1px solid var(--danger);
   background: transparent;
-  color: var(--unread);
+  color: var(--danger);
   border-radius: 6px;
   font-size: 12.5px;
   cursor: pointer;
   transition: background var(--dur-fast), color var(--dur-fast);
 }
-.modal .share-btn-danger:hover { background: var(--unread); color: light-dark(#fff, #1a0508); }
+.modal .share-btn-danger:hover { background: var(--danger); color: light-dark(#fff, #1a0508); }
 .file-actions button {
   width: 18px; height: 18px;
   border: none;
@@ -1461,7 +1415,7 @@ body.no-active-doc .tb-sep { display: none; }
 }
 #save-status { color: var(--ok); transition: color .2s; font-size: 8px; flex: none; }
 #save-status.saving { color: var(--warn); }
-#save-status.error { color: var(--unread); }
+#save-status.error { color: var(--danger); }
 .footer-stats {
   flex: 1;
   min-width: 0;
@@ -1481,6 +1435,9 @@ body.no-active-doc .tb-sep { display: none; }
   background: var(--bg);
   overflow: hidden; /* iframe 冻结时超出部分裁掉 */
 }
+/* 主区跟着侧栏连续重排（margin-left 过渡）：动画期间主区宽度始终等于"侧栏右缘到窗口右缘"，
+ * 居中 / 右对齐的内容不会横跳或滑出窗口。只排一次 + transform 平移的方案会在首尾帧横跳（见 app.js 注释）。
+ * reduced-motion 下 --dur = 0，硬切 */
 body.tx-ready .main { transition: margin-left var(--dur) var(--ease); }
 body.sidebar-collapsed .main { margin-left: 0; }
 
@@ -1643,7 +1600,8 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
   padding: 4px 4px 4px 8px;
   border-radius: var(--r-md);
   background: var(--bg-elev);
-  border: 1px solid var(--border);
+  /* 查找栏本身就是 #find-input 的可见边界（输入框无边框），用输入框轮廓色 */
+  border: 1px solid var(--border-input);
   box-shadow: 0 6px 20px rgba(0, 0, 0, .18);
 }
 .find-bar.hidden { display: none; }
@@ -1668,7 +1626,7 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
   text-align: center;
   user-select: none;
 }
-.find-bar .find-count.none { color: var(--unread); }
+.find-bar .find-count.none { color: var(--danger); }
 .find-bar .find-nav,
 .find-bar .find-close {
   width: 22px; height: 22px;
@@ -1769,7 +1727,7 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
   background: var(--accent);
 }
 
-/* 脉动小红点（unread 色）——表达 "有新东西" */
+/* 脉动小圆点（unread 色）——表达 "有新东西" */
 .update-banner .ub-pulse {
   width: 7px; height: 7px;
   border-radius: 50%;
@@ -1804,7 +1762,7 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
   border-radius: 6px;
   cursor: pointer;
   color: var(--text-dim);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11.5px;
   transition: border-color var(--dur-fast, 120ms),
               background var(--dur-fast, 120ms),
@@ -1943,7 +1901,7 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
   margin: 0;
   padding: 0;
   overflow: auto;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.55;
   color: var(--text-dim);
@@ -1961,10 +1919,10 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
 .update-banner .ub-log .log-line.stderr { color: var(--text); }
 
 /* error 模式 */
-.update-banner.state-error { border-bottom-color: var(--unread); }
-.update-banner.state-error .ub-stripe { background: var(--unread); }
+.update-banner.state-error { border-bottom-color: var(--danger); }
+.update-banner.state-error .ub-stripe { background: var(--danger); }
 .update-banner .ub-error-text {
-  color: var(--unread);
+  color: var(--danger);
   font-weight: 500;
   margin-left: auto;
   white-space: nowrap;
@@ -2145,6 +2103,10 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
   font-size: 13px;
 }
 .empty.hidden { display: none; }
+/* 星图态（showHomeSurface 给 .home 加 hidden）必须真正移出布局：只靠 #starmap-view 实底盖住时，
+ * 河流手柄（z-index:2）会透到星图上抢点击，被盖住的首页控件也还在 Tab 序列里。
+ * 河流手柄 / 选区按百分比定位，回到封面墙时 renderHome() 重画即可，不依赖隐藏期间的尺寸 */
+.home.hidden { display: none; }
 
 /* max-width 从 880 提到 1120：1440 宽的屏幕上原来右侧空着一大块，
  * 而这一屏恰恰是信息最该铺开的地方（封面墙越宽，一屏能看到的越多）。 */
@@ -2161,19 +2123,66 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
  * 取代四个 KPI 数字方块。这个 dashboard 真正要回答的是"AI 今天动了什么"——
  * 于是用一句大标题把它讲出来，数字（喷了品牌渐变）是句子的一部分而不是一格格
  * 仪表。背后垫一层极淡品牌光晕给首页一个焦点，正文阅读区一律不碰这层光。 */
+/* 左栏（眉标 / 标题 / 副标题 / 迷你星图槽位）+ 右栏 208px 竖排读数（design §10.1）。
+ * 视口 < 1100px 时右栏折到下方；< 700px 时右栏隐藏、改显示 chip 行。 */
 .home-hero {
   position: relative;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--sp-6);
-  padding: 26px 28px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 208px;
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
   background: var(--bg-elev);
   overflow: hidden;
   isolation: isolate;
 }
+.home-hero-body { padding: 24px 28px; }
+.home-hero-eyebrow-row { display: flex; align-items: center; gap: 10px; }
+.home-hero-eyebrow-sep { width: 18px; height: 1px; background: var(--border-strong); flex: none; }
+.home-clock {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  color: var(--text-faint);
+}
+.home-minimap.hidden { display: none; }
+.home-readouts {
+  display: flex; flex-direction: column;
+  padding: 18px 18px;
+  border-left: 1px solid var(--hairline);
+}
+.home-readout {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 44px;
+  border-bottom: 1px solid var(--hairline);
+}
+.home-readout:last-child { border-bottom: 0; }
+.home-readout-k {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0;
+  font-size: var(--fs-sm); font-weight: var(--fw-medium); color: var(--text-dim);
+}
+.home-readout-tag {
+  font-size: 10px; font-weight: var(--fw-normal); color: var(--text-faint);
+  padding: 0 5px; border: 1px solid var(--border); border-radius: var(--r-full);
+  white-space: nowrap;
+}
+.home-readout-v {
+  font-family: var(--font-mono);
+  font-size: 20px; font-weight: 600;
+  color: var(--text);
+}
+.home-readout.is-signal .home-readout-v { color: var(--accent); }
+/* ≥700px 读数栏在，chip 行就是重复信息；窄屏读数栏隐藏时 chip 回来 */
+@media (min-width: 700px) { .home-hero .home-chips { display: none; } }
+@media (max-width: 1099px) {
+  .home-hero { grid-template-columns: minmax(0, 1fr); }
+  .home-readouts {
+    flex-direction: row; flex-wrap: wrap;
+    padding: 4px 28px 12px;
+    border-left: 0; border-top: 1px solid var(--hairline);
+  }
+  .home-readout { flex: 1 1 140px; border-bottom: 0; padding-right: 16px; }
+}
+@media (max-width: 699px) { .home-readouts { display: none; } }
 .home-hero-glow {
   position: absolute;
   z-index: -1;
@@ -2200,7 +2209,8 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
 /* 数字喷品牌渐变——首页唯一一处彩色文字，作为视觉落点 */
 .home-hero-line .n {
   font-variant-numeric: tabular-nums;
-  background: var(--brand-grad);
+  /* 渐变文字专用令牌：浅色起点压深，34px 大字对底 ≥3:1（--brand-grad 只给非文字品牌面） */
+  background: var(--brand-text-grad);
   -webkit-background-clip: text; background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -2220,21 +2230,6 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
 }
 .home-chip b { font-weight: var(--fw-bold); color: var(--text); font-variant-numeric: tabular-nums; }
 
-/* 活动脉冲：过去 24h 每小时的改动数做成小竖条。今天忙就"有生命"，
- * 没动作就整条低平——不用读数字就知道最近是不是频繁在改。 */
-.home-pulse {
-  flex: none;
-  display: flex; align-items: flex-end; gap: 3px;
-  height: 56px; width: 208px;
-}
-.home-pulse-bar {
-  flex: 1;
-  border-radius: 2px 2px 0 0;
-  background: color-mix(in srgb, var(--accent) 20%, var(--bg-elev-2));
-  transform-origin: bottom;
-}
-.home-pulse-bar.on { background: var(--brand-grad); }
-@media (max-width: 760px) { .home-pulse { display: none; } }
 
 /* ---------- 待看：封面图卡流 ----------
  * 原来 793 篇文档每一篇只是"图标 + 一行字"，这是最像上世纪文件管理器的地方。
@@ -2287,31 +2282,31 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
   height: 96px;
   display: flex; align-items: center; justify-content: center;
   overflow: hidden;
-  background: linear-gradient(135deg,
-    hsl(var(--h) var(--cover-s) var(--cover-l1)),
-    hsl(calc(var(--h) + 42) var(--cover-s) var(--cover-l2)));
+  /* 兜底封面单色（design §10.8）：不再按项目名哈希色相，全界面只留一个品牌强调色 */
+  background: var(--bg-elev-2);
 }
-/* 大号类型字形水印：给同色系封面一点区分度与"内容感" */
-.cover-art .cover-glyph { color: #fff; opacity: .92; filter: drop-shadow(0 1px 3px rgba(0,0,0,.2)); }
-/* 细斜纹，避免纯渐变太"塑料" */
+/* 大号类型字形水印：中性弱色，给封面一点"内容感" */
+.cover-art .cover-glyph { color: var(--text-faint); }
+/* 极淡斜纹，避免纯色块太"塑料" */
 .cover-art::after {
   content: ''; position: absolute; inset: 0; pointer-events: none;
-  background: repeating-linear-gradient(45deg, rgba(255,255,255,.05) 0 8px, transparent 8px 16px);
+  background: repeating-linear-gradient(45deg,
+    color-mix(in srgb, var(--text) 3%, transparent) 0 8px, transparent 8px 16px);
 }
 .cover-badge {
   position: absolute; top: 8px; left: 8px;
   display: inline-flex; align-items: center;
   height: 18px; padding: 0 7px;
   border-radius: var(--r-full);
-  background: rgba(0, 0, 0, .3);
-  color: #fff; font-size: 10px; font-weight: var(--fw-semi); letter-spacing: .04em;
-  backdrop-filter: blur(4px);
+  /* 半透明着色层（--glass-tint，见令牌区）；叠在缩略图上，只着色不模糊 */
+  background: color-mix(in srgb, var(--bg-elev) var(--glass-tint), transparent);
+  color: var(--text); font-size: 10px; font-weight: var(--fw-semi); letter-spacing: .04em;
 }
+/* 状态点统一：6px 实心、无外环（新鲜 = --unread；刚变更的轻闪见动效段 .just-changed） */
 .cover-fresh {
   position: absolute; top: 8px; right: 8px;
-  width: 8px; height: 8px; border-radius: 50%;
+  width: 6px; height: 6px; border-radius: 50%;
   background: var(--unread);
-  box-shadow: 0 0 0 3px rgba(0, 0, 0, .2);
 }
 .cover-body { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px 12px; }
 .cover-name {
@@ -2377,7 +2372,7 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
 }
 .home-row.unread .home-row-dot { visibility: visible; }
 /* 和侧栏一致：陈旧未读（>24h）降级成灰点 + 常规字重。
- * 「待看」卡片是按 mtime 倒序的，于是红点自然聚在顶部几行——
+ * 「待看」卡片是按 mtime 倒序的，于是未读点自然聚在顶部几行——
  * 这一列点从红渐灰，本身就成了"新鲜度"的刻度。 */
 .home-row.unread .home-row-name { font-weight: var(--fw-semi); }
 .home-row.unread.stale .home-row-dot { background: var(--unread-stale); }
@@ -2484,7 +2479,7 @@ kbd {
   border-radius: var(--r-xs);
   padding: 1px 5px;
   color: var(--text-dim);
-  font-family: ui-monospace, "SF Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
   line-height: 1.5;
 }
@@ -2642,7 +2637,7 @@ kbd {
   color: var(--text-faint);
   word-break: break-word;
 }
-.settings-nav .settings-update-status.is-error { color: var(--unread); }
+.settings-nav .settings-update-status.is-error { color: var(--danger); }
 
 .modal-section {
   padding: 16px 18px;
@@ -2668,7 +2663,7 @@ kbd {
 .modal-section input[type="text"] {
   width: 100%;
   background: var(--bg-elev-2);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-input);
   border-radius: var(--r-sm);
   color: var(--text);
   padding: 7px 10px;
@@ -2689,7 +2684,7 @@ kbd {
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   margin-bottom: 5px;
-  font-family: ui-monospace, "SF Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 .root-list li .root-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2759,15 +2754,15 @@ kbd {
 .modal .share-stop-all-btn {
   height: 24px;
   padding: 0 10px;
-  border: 1px solid var(--unread);
+  border: 1px solid var(--danger);
   background: transparent;
-  color: var(--unread);
+  color: var(--danger);
   border-radius: 5px;
   font-size: 11px;
   cursor: pointer;
   transition: background var(--dur-fast), color var(--dur-fast);
 }
-.modal .share-stop-all-btn:hover { background: var(--unread); color: light-dark(#fff, #1a0508); }
+.modal .share-stop-all-btn:hover { background: var(--danger); color: light-dark(#fff, #1a0508); }
 .modal .share-stop-all-btn:disabled { opacity: 0.4; cursor: default; }
 .share-list { list-style: none; padding: 0; margin: 0; }
 .share-list li {
@@ -2794,7 +2789,7 @@ kbd {
 }
 .share-list .share-list-url {
   flex: none;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--text-faint);
   max-width: 180px;
@@ -2813,7 +2808,7 @@ kbd {
   cursor: pointer;
   transition: border-color var(--dur-fast), color var(--dur-fast);
 }
-.share-list .share-list-stop:hover { border-color: var(--unread); color: var(--unread); }
+.share-list .share-list-stop:hover { border-color: var(--danger); color: var(--danger); }
 
 /* 目录浏览器 */
 .dir-picker {
@@ -2843,13 +2838,13 @@ kbd {
 .dir-picker-bar button:hover { background: var(--bg-hover); }
 .dir-current {
   flex: 1;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-input);
   border-radius: 5px;
   color: var(--text);
   padding: 4px 8px;
   outline: none;
-  font-family: ui-monospace, "SF Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 .dir-current:focus { border-color: var(--accent); }
@@ -2948,7 +2943,7 @@ kbd {
 }
 .toast .toast-icon .ico { stroke-width: 2; }
 .toast.success .toast-icon { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
-.toast.error .toast-icon { background: color-mix(in srgb, var(--unread) 16%, transparent); color: var(--unread); }
+.toast.error .toast-icon { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
 .toast.info .toast-icon { background: var(--accent-soft); color: var(--accent); }
 .toast .toast-msg {
   flex: 1;
@@ -3453,9 +3448,9 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
   width: 100%;
   margin-top: 12px;
   padding: 7px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-input);
   border-radius: 7px;
-  background: var(--bg);
+  background: var(--bg-elev-2);
   color: var(--text);
   font-size: 13px;
   font-family: inherit;
@@ -3491,8 +3486,8 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
  * --on-accent），提不亮了，而背景一亮，对比度就往下掉——「清除」这类红底白字
  * 的危险按钮 hover 时文案会明显发虚。改成明确指定更深一档的背景色。 */
 .dialog-actions .dialog-confirm:hover { background: var(--accent-hover); }
-.dialog-actions .dialog-confirm.danger { background: var(--unread); }
-.dialog-actions .dialog-confirm.danger:hover { background: var(--unread-strong); }
+.dialog-actions .dialog-confirm.danger { background: var(--danger); }
+.dialog-actions .dialog-confirm.danger:hover { background: var(--danger-strong); }
 .dialog-actions button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -3513,7 +3508,8 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
   align-items: center;
   gap: 10px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
+  /* #quickopen-input 无边框，这条底线是它的可见边界 */
+  border-bottom: 1px solid var(--border-input);
 }
 .quickopen-icon { color: var(--text-faint); width: 15px; height: 15px; }
 #quickopen-input {
@@ -3539,7 +3535,7 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
   padding: 1px 5px;
   font-size: 10px;
   color: var(--text-faint);
-  font-family: ui-monospace, "SF Mono", monospace;
+  font-family: var(--font-mono);
 }
 .quickopen-list {
   max-height: 46vh;
@@ -3628,7 +3624,7 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   line-height: 1.45;
   color: var(--text-faint);
@@ -3722,7 +3718,7 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
   white-space: nowrap;
 }
 .share-options select {
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-input);
   border-radius: 6px;
   background: var(--bg-elev-2);
   color: var(--text);
@@ -3738,7 +3734,7 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
   color: var(--text-faint);
   white-space: nowrap;
 }
-.share-expiry.expiring { color: var(--unread); }
+.share-expiry.expiring { color: var(--danger); }
 .share-scope-hint {
   margin: 6px 0 0;
   font-size: 11px;
@@ -3791,7 +3787,7 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
   text-overflow: ellipsis;
 }
 .diff-stats .add { color: var(--ok); font-weight: 600; }
-.diff-stats .del { color: var(--unread); font-weight: 600; }
+.diff-stats .del { color: var(--danger); font-weight: 600; }
 .diff-actions {
   display: flex;
   align-items: center;
@@ -3845,12 +3841,12 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
 .diff-ver.hidden, .diff-btn-revert.hidden { display: none; }
 /* 回退会改写用户磁盘上的文件，用描边红标出它和其它按钮不是一类操作 */
 .diff-btn-revert {
-  border-color: color-mix(in srgb, var(--unread) 40%, var(--border));
-  color: var(--unread);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  color: var(--danger);
 }
 .diff-btn-revert:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--unread) 10%, transparent);
-  border-color: var(--unread);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-color: var(--danger);
 }
 .diff-btn-revert:disabled {
   opacity: .45;
@@ -3904,8 +3900,8 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
 .diff-text { flex: 1 1 auto; min-width: 0; padding-right: 14px; }
 .diff-line.add { background: color-mix(in srgb, var(--ok) 12%, transparent); }
 .diff-line.add .diff-sign { color: var(--ok); }
-.diff-line.del { background: color-mix(in srgb, var(--unread) 12%, transparent); }
-.diff-line.del .diff-sign { color: var(--unread); }
+.diff-line.del { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.diff-line.del .diff-sign { color: var(--danger); }
 .diff-empty {
   padding: 40px 24px;
   text-align: center;
@@ -4098,37 +4094,40 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
 }
 .home-hero, .home-feed, .home-rails, .home-tips, .cover-card {
   animation: atlas-rise var(--dur-slow) var(--ease-out) both;
-  animation-delay: calc(var(--i, 0) * 45ms);
+  animation-delay: calc(var(--i, 0) * var(--stagger));
 }
 
-/* ---------- 新鲜未读：呼吸 ----------
- * 只有 24h 内的变更（数量稀少）才呼吸，陈旧未读是静止灰点——呼吸的稀缺性
- * 正是它成为"信号"的原因。 */
+/* ---------- 新鲜未读：呼吸（已停用） ----------
+ * 状态点统一成 6px 实心静态点（侧栏 / 首页 / 封面 / ⌘K），侧栏与封面不再呼吸。
+ * "AI 刚改过"改由 .just-changed 的单次轻闪（atlas-twinkle，见文件末尾动效段）表达。
+ * keyframes 保留给星图画布同周期取值。 */
 @keyframes atlas-breathe {
   0%, 100% { opacity: 1; }
   50%      { opacity: .45; }
 }
-.home-row.unread:not(.stale) .home-row-dot,
-.cover-fresh {
-  animation: atlas-breathe 2.4s var(--ease) infinite;
-}
 
-/* ---------- View Transitions：首页 ↔ 文档 的柔和交叉淡入 ----------
- * 只影响外壳容器的切换观感，iframe 内部不参与。浏览器不支持就自动降级到硬切。 */
-@media (prefers-reduced-motion: no-preference) {
-  ::view-transition-old(root),
-  ::view-transition-new(root) {
-    animation-duration: 240ms;
-    animation-timing-function: var(--ease-out);
-  }
-}
+/* View Transitions 的分场景规则（home / tab / view）见文件末尾「运动需授权」段 */
 
+/* reduced-motion 兜底（旧代码）：系统偏好与应用内开关两路都覆盖。
+ * 新增的动画一律写在「运动需授权」块里，天然静止，不用再往这里加 */
 @media (prefers-reduced-motion: reduce) {
   .home-hero, .home-feed, .home-rails, .home-tips, .cover-card,
-  .home-row.unread:not(.stale) .home-row-dot, .cover-fresh,
-  .home-cheer-badge, .skeleton-card {
+  .home-cheer-badge, .skeleton-card,
+  .actions button.scanning svg, .main-actions button.spinning svg,
+  .update-badge .dot, .update-banner .ub-pulse, .update-banner .ub-progress-bar,
+  .toast.toast-progress .toast-icon, .toast.toast-progress .toast-progress-bar > div,
+  .qo-group-loading .qo-spin, .tb-more-menu {
     animation: none !important;
   }
+}
+:root[data-motion="reduce"] :is(
+  .home-hero, .home-feed, .home-rails, .home-tips, .cover-card,
+  .home-cheer-badge, .skeleton-card,
+  .actions button.scanning svg, .main-actions button.spinning svg,
+  .update-badge .dot, .update-banner .ub-pulse, .update-banner .ub-progress-bar,
+  .toast.toast-progress .toast-icon, .toast.toast-progress .toast-progress-bar > div,
+  .qo-group-loading .qo-spin, .tb-more-menu) {
+  animation: none !important;
 }
 
 /* ---------- 外壳品牌感 ----------
@@ -4184,16 +4183,20 @@ body.md-splitting .md-preview-pane { pointer-events: none; }
  * 只作用在 Atlas 外壳与首页；md / csv 等预览页由服务端渲染，保持中性纸白。
  * ============================================================ */
 :root[data-skin="warm"] {
-  --bg:        light-dark(#faf8f4, #0c0a07);
-  --bg-elev:   light-dark(#fffdf9, #15110c);
-  --bg-elev-2: light-dark(#f2eee6, #1e1912);
-  --bg-hover:  light-dark(#eae4d9, #26211a);
-  --border:        light-dark(#ebe4d8, #241f17);
+  /* 琥珀控制台（深）/ 羊皮纸（浅） */
+  --bg:        light-dark(#faf8f4, #0b0907);
+  --bg-elev:   light-dark(#fffdf9, #13100c);
+  --bg-elev-2: light-dark(#f2eee6, #1c1812);
+  --bg-hover:  light-dark(#eae4d9, #25201a);
+  /* 选中态也要暖：原来沿用冷皮肤的蓝灰，在暖底上发冷 */
+  --bg-active: light-dark(#e6e3f6, #232038);
+  --border:        light-dark(#ebe4d8, #221d16);
   --border-strong: light-dark(#d4cab9, #383025);
+  --border-input:  light-dark(#887d6c, #736a5b);
   --hairline:      light-dark(rgba(60, 45, 20, .05), rgba(255, 250, 240, .05));
   --text:       light-dark(#1b1712, #f6f2ea);
-  --text-dim:   light-dark(#6a6155, #a79e90);
-  --text-faint: light-dark(#948b7d, #766e60);
+  --text-dim:   light-dark(#5c5448, #b0a798);
+  --text-faint: light-dark(#6b6255, #938a7c);
 }
 
 /* ============================================================
@@ -4361,3 +4364,1259 @@ body.no-active-doc .tb-more { display: none; }
 #md-preview table .md-row-grip-head:hover { color: var(--text-faint); background: var(--bg-elev-2); }
 /* 拖拽中的行残影 */
 .md-row-ghost { opacity: 0.5; background: var(--accent-soft) !important; }
+
+/* ============================================================
+ * 「星图 / 任务控制台」外壳基建
+ * ------------------------------------------------------------
+ * 令牌定义在文件顶部 :root；这里是令牌落到组件上的那一层：
+ * 半透明面板、视觉隐藏工具类、控制台读数排版、英雄区星空、状态点、
+ * 「运动需授权」动效段（轻闪 / View Transitions）、桌面版原生化。
+ * ============================================================ */
+
+/* ---------- 半透明面板（--glass-tint，浮在内容之上的面板） ----------
+ * 只有设计清单里的选择器可以用 --glass-tint，其它表面一律实底。
+ * 面板内部有自己底色的控件（hover 行 / 选中行 / 输入框）仍是不透明的。 */
+.modal-panel,
+#match-badge,
+#peek,
+.starmap-view .sm-panel,
+.home-minimap-cap {
+  background: color-mix(in srgb, var(--bg-elev) var(--glass-tint), transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  backdrop-filter: blur(20px) saturate(1.4);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .modal-panel, #match-badge, #peek, .cover-badge, .starmap-view .sm-panel, .home-minimap-cap { background: var(--bg-elev); }
+}
+
+/* ---------- 视觉隐藏（读屏可读） ---------- */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ---------- 控制台式排版 ----------
+ * HUD 分区标题：中文界面不做大写，只把字距收到 .02em（界面文案统一中文）。
+ * 计数 / 时间 / n/m 命中数一律等宽数字，数字变化时不左右跳。 */
+:is(.section-head, .home-hero-eyebrow, .home-rail-head, .qo-group, .qo-section,
+    .sc-group h3, .sort-menu-h, .home-tag-strip-label, .share-url-label, .hud) {
+  letter-spacing: .02em;
+  text-transform: none;
+}
+:is(.section-count, #tree-count, .folder-count, .footer-stats, .file-mtime, .cover-meta,
+    .home-chip, .home-row-time, .home-feed-count, .match-badge, .find-count, .qo-count,
+    .live-status, .home-clock, .home-readout-v, .tag-strip-hits, .tag-chip-count,
+    .hud-readout, .hud-scale, .starmap-filter-status, .starmap-legend, .sm-cluster, .sm-star,
+    .home-river-meta, .river-days, .time-filter-chip) {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 首页英雄区：静态星空 ----------
+ * 只在英雄区背后，不进正文、不进侧栏。不承载信息、不动。
+ * 统一 50% 不透明度：--hero-stars 里最亮的 alpha（.16）× .5 = .08，
+ * 四组合下文字落在星点上 faint 仍 ≥4.5:1（tests/contrast-tokens.spec.js 断言）。 */
+.home-hero::before {
+  content: "";
+  position: absolute; inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: .5;
+  background: var(--hero-stars);
+}
+
+/* ---------- 侧栏底栏：实时更新状态 ----------
+ * data-state 由 connectSSE 维护：live（已连接）/ retry（重连中）/ off（页面在后台，已暂停）。
+ * 点的颜色之外还有文字（实时 / 重连中 / 已暂停），不只靠颜色表达。 */
+.live-status {
+  flex: none;
+  display: inline-flex; align-items: center; gap: 5px;
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.live-status > i { width: 6px; height: 6px; border-radius: 50%; background: var(--signal); flex: none; }
+.live-status[data-state="retry"] > i { background: var(--warn); }
+.live-status[data-state="off"] > i { background: var(--text-dim); }
+
+/* ---------- 状态点：统一 6px 实心、无外环 ----------
+ * 新鲜未读（24h 内）= --unread 满亮度（文件名另有粗体，不只靠颜色）；
+ * 较早未读 = --unread-stale；已读不显示点。各组件里的 .stale 规则照旧生效。 */
+.unread-dot, .folder-unread-dot, .cover-fresh, .home-row-dot, .qo-unread {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  box-shadow: none;
+}
+
+/* ============================================================
+ * 运动需授权
+ * ------------------------------------------------------------
+ * 新增的 animation / 非颜色 transition 只写在下面这个块里：系统没要求减少动态效果、
+ * 且用户没在设置里选「减少」（html[data-motion="reduce"]）时才生效。
+ * 新代码默认就是静止的，不会再出现"加了动画却忘了加进 reduce 列表"。
+ * ============================================================ */
+
+/* 刚变更（本会话经 SSE 收到、不是 Atlas 自己写的）：同一个点做 3 次透明度轻闪。
+ * 不授权时点保持满亮度静止，信息不丢 */
+@keyframes atlas-twinkle {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .35; }
+}
+/* View Transitions：tab 场景的方向性滑移 */
+@keyframes atlas-vt-fade-out { to { opacity: 0; } }
+@keyframes atlas-vt-in-fwd  { from { opacity: 0; transform: translateX(12px); } }
+@keyframes atlas-vt-in-back { from { opacity: 0; transform: translateX(-12px); } }
+
+/* 切主题期间（app.js switchTheme）关掉所有颜色类 transition：颜色一次到终值，由整页交叉淡入负责过渡，
+ * 不再出现各元素 120ms 过渡被主线程卡住后"过一会儿又跳一下"。只在切换的这几帧生效 */
+html.theme-switching *, html.theme-switching *::before, html.theme-switching *::after { transition: none !important; }
+
+/* 参与命名的外壳容器：命名后它们从 root 快照里独立出来，切 Tab 时侧栏不会跟着闪 */
+.preview     { view-transition-name: atlas-preview; }
+#tab-bar     { view-transition-name: atlas-tabbar; }
+.sidebar     { view-transition-name: atlas-sidebar; }
+.main-header { view-transition-name: atlas-header; }
+/* 切主题时整页一起淡入，不需要分组；而命名分组总是画在 root 快照之上，会把 root 里的设置窗、⌘K、
+ * 悬停预览、对比面板这类浮层整个盖住（"设置窗消失一下再回来"）。theme 场景撤掉命名，
+ * 全部留在 root 快照里，浮层按原本的层叠顺序跟着一起淡入 */
+:root[data-vt="theme"] :is(.preview, #tab-bar, .sidebar, .main-header) { view-transition-name: none; }
+
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion="reduce"]) :is(
+    .file.just-changed .unread-dot,
+    .cover-card.just-changed .cover-fresh) {
+    animation: atlas-twinkle var(--dur-twinkle) var(--ease-standard) 3;
+  }
+
+  /* home：回首页 / 从首页进文档，整体交叉淡入 */
+  :root:not([data-motion="reduce"])::view-transition-old(root),
+  :root:not([data-motion="reduce"])::view-transition-new(root),
+  :root:not([data-motion="reduce"])::view-transition-group(*) {
+    animation-duration: var(--dur-med);
+    animation-timing-function: var(--ease-enter);
+  }
+
+  /* theme：切主题时整页（含命名的侧栏 / 顶栏 / 预览）一起交叉淡入，240ms */
+  :root[data-vt="theme"]:not([data-motion="reduce"])::view-transition-group(*),
+  :root[data-vt="theme"]:not([data-motion="reduce"])::view-transition-old(*),
+  :root[data-vt="theme"]:not([data-motion="reduce"])::view-transition-new(*) {
+    animation-duration: 240ms;
+    animation-timing-function: ease;
+  }
+
+  /* tab：只有 .preview 做方向性滑移（新 Tab 在右边就从右侧滑入 12px），其余硬切 */
+  :root[data-vt="tab"]:not([data-motion="reduce"])::view-transition-old(root),
+  :root[data-vt="tab"]:not([data-motion="reduce"])::view-transition-new(root),
+  :root[data-vt="tab"]:not([data-motion="reduce"])::view-transition-group(atlas-tabbar),
+  :root[data-vt="tab"]:not([data-motion="reduce"])::view-transition-old(atlas-tabbar),
+  :root[data-vt="tab"]:not([data-motion="reduce"])::view-transition-new(atlas-tabbar),
+  :root[data-vt="tab"]:not([data-motion="reduce"])::view-transition-group(atlas-sidebar),
+  :root[data-vt="tab"]:not([data-motion="reduce"])::view-transition-old(atlas-sidebar),
+  :root[data-vt="tab"]:not([data-motion="reduce"])::view-transition-new(atlas-sidebar),
+  :root[data-vt="tab"]:not([data-motion="reduce"])::view-transition-group(atlas-header),
+  :root[data-vt="tab"]:not([data-motion="reduce"])::view-transition-old(atlas-header),
+  :root[data-vt="tab"]:not([data-motion="reduce"])::view-transition-new(atlas-header) {
+    animation: none;
+  }
+  :root[data-vt="tab"]:not([data-motion="reduce"])::view-transition-old(atlas-preview) {
+    animation: atlas-vt-fade-out var(--dur-med) var(--ease-exit) both;
+  }
+  :root[data-vt="tab"]:not([data-motion="reduce"])::view-transition-new(atlas-preview) {
+    animation: atlas-vt-in-fwd var(--dur-med) var(--ease-enter) both;
+  }
+  :root[data-vt="tab"][data-vt-dir="back"]:not([data-motion="reduce"])::view-transition-new(atlas-preview) {
+    animation-name: atlas-vt-in-back;
+  }
+
+  /* view：首页封面墙 ↔ 星图，只作用于主区；侧栏 / 顶栏 / 标签栏硬切 */
+  :root[data-vt="view"]:not([data-motion="reduce"])::view-transition-group(atlas-sidebar),
+  :root[data-vt="view"]:not([data-motion="reduce"])::view-transition-old(atlas-sidebar),
+  :root[data-vt="view"]:not([data-motion="reduce"])::view-transition-new(atlas-sidebar),
+  :root[data-vt="view"]:not([data-motion="reduce"])::view-transition-group(atlas-header),
+  :root[data-vt="view"]:not([data-motion="reduce"])::view-transition-old(atlas-header),
+  :root[data-vt="view"]:not([data-motion="reduce"])::view-transition-new(atlas-header),
+  :root[data-vt="view"]:not([data-motion="reduce"])::view-transition-group(atlas-tabbar),
+  :root[data-vt="view"]:not([data-motion="reduce"])::view-transition-old(atlas-tabbar),
+  :root[data-vt="view"]:not([data-motion="reduce"])::view-transition-new(atlas-tabbar) {
+    animation: none;
+  }
+}
+
+/* ============================================================
+ * 桌面版原生化（macOS）
+ * ------------------------------------------------------------
+ * 全部限定在 html[data-desktop="darwin"] 下：属性由 index.html 防闪脚本按
+ * preload 的 atlasDesktop.platform 写入，浏览器版没有它，这里的规则天然不生效。
+ * 专注模式的 #focus-drag / .focus-mode 规则随专注模式一起加。
+ * ============================================================ */
+/* 红绿灯避让宽度：灯组左缘 18 + 组宽 + 12px 留白。macOS 26 起灯组 60pt → 90px；
+ * 主进程按实际系统版本算好经 preload 下发，index.html 防闪脚本首帧写进内联样式覆盖这里的默认值
+ * （见 electron/titlebar.js）。旧值 76px 按 52pt 灯组估算，在 macOS 26 上和第三颗灯重叠 2pt */
+html[data-desktop="darwin"] { --titlebar-inset: 90px; }
+html[data-desktop="darwin"], html[data-desktop="darwin"] body { background: transparent; }
+
+/* 侧栏：半透明着色层叠在原生 vibrancy 材质上；主阅读区保持不透明。
+ * 着色比例单独成令牌（--sidebar-tint-light / -dark，见令牌区），不再借用浮层用的 94% --glass-tint：
+ * 94% 只透出 6% 的材质，实机肉眼看不出毛玻璃（diagnosis §3）。
+ * 侧栏里原本自带实底的分组头 / 搜索框同样改成透明或半透明，否则会在材质上盖出一块块补丁 */
+html[data-desktop="darwin"] { --sidebar-tint: var(--sidebar-tint-light); }
+html[data-desktop="darwin"][data-theme="dark"] { --sidebar-tint: var(--sidebar-tint-dark); }
+@media (prefers-color-scheme: dark) {
+  html[data-desktop="darwin"]:not([data-theme="light"]) { --sidebar-tint: var(--sidebar-tint-dark); }
+}
+html[data-desktop="darwin"] .sidebar {
+  background: color-mix(in srgb, var(--bg-elev) var(--sidebar-tint), transparent);
+  /* 半透明底上最弱的两档前景提一档，保证材质最亮 / 最暗时仍 ≥ 4.5 / 3（contrast-tokens.spec 读这里的映射） */
+  --text-faint: var(--text-dim);
+  --border-input: var(--text-dim);
+}
+html[data-desktop="darwin"] .sidebar-header { background: transparent; }
+/* 顶层分组头静息时透明（:where 归零特异性，悬停 / 拖放的底色照常覆盖）；
+ * 真正吸顶、盖在滚动内容上的那一个由 app.js 标 .is-stuck，换一层高比例着色 + 模糊遮住下方行 */
+html[data-desktop="darwin"] :where(.tree > .folder > .folder-header) { background: transparent; }
+html[data-desktop="darwin"] :where(.tree > .folder > .folder-header.is-stuck) {
+  background: color-mix(in srgb, var(--bg-elev) 90%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+html[data-desktop="darwin"].reduce-transparency :where(.tree > .folder > .folder-header) { background: var(--bg-elev); }
+@media (prefers-reduced-transparency: reduce) {
+  html[data-desktop="darwin"] :where(.tree > .folder > .folder-header) { background: var(--bg-elev); }
+}
+html[data-desktop="darwin"] #search {
+  background: color-mix(in srgb, var(--bg-elev-2) 55%, transparent);
+}
+/* 系统「降低透明度」：侧栏改实底。两条链路任一生效即可——Chromium 上报的媒体查询，
+ * 以及主进程从 nativeTheme 读出后推给前端的 html.reduce-transparency */
+html[data-desktop="darwin"].reduce-transparency .sidebar { background: var(--bg-elev); }
+html[data-desktop="darwin"].reduce-transparency #search { background: var(--bg-elev-2); }
+@media (prefers-reduced-transparency: reduce) {
+  html[data-desktop="darwin"] .sidebar { background: var(--bg-elev); }
+  html[data-desktop="darwin"] #search { background: var(--bg-elev-2); }
+}
+/* 设置里「侧栏透明度」那一节只在桌面版出现 */
+html:not([data-desktop="darwin"]) .desktop-only { display: none !important; }
+
+/* 红绿灯避让：只加内边距，不平移 .sidebar / .main（sidebar.spec 断言其几何）。
+ * 全屏时红绿灯消失 → :not(.is-fullscreen) 让两条顶栏回到原来的内边距 */
+html[data-desktop="darwin"]:not(.is-fullscreen) .sidebar-header { padding-left: var(--titlebar-inset); }
+html[data-desktop="darwin"]:not(.is-fullscreen) body.sidebar-collapsed .main-header,
+html[data-desktop="darwin"].init-sidebar-collapsed:not(.is-fullscreen) .main-header { padding-left: var(--titlebar-inset); }
+/* 收起 / 展开侧栏时主区整体平移（见 app.js toggleSidebar），顶栏左内边距跟着过渡，
+ * 收起按钮从侧栏右侧平滑滑到红绿灯右边，不会先跳到灯下面。只重排顶栏这一小块 */
+html[data-desktop="darwin"] body.tx-ready .main-header { transition: padding-left var(--dur) var(--ease); }
+
+/* 拖动区：两条顶栏整体可拖，只有真正可交互的元素不可拖。
+ * 面包屑容器 #crumbs 是 flex:1、几乎占满主顶栏，以前整块 no-drag，拖动 / 双击缩放只剩 13% 的宽度，
+ * 窗口放大后同一个屏幕点落进面包屑，再双击没反应（"只能放大不能还原"，diagnosis §4）。
+ * 现在面包屑里的纯文字也是拖动区，只有「回到首页」按钮等交互元素 no-drag；顶栏文字不可选中 */
+html[data-desktop="darwin"] :is(.sidebar-header, .main-header) { -webkit-app-region: drag; user-select: none; -webkit-user-select: none; }
+html[data-desktop="darwin"] :is(.sidebar-header, .main-header)
+  :is(button, a, input, select, textarea, [contenteditable], [role="button"], [role="radio"],
+      [tabindex], .brand, .tb-more, .match-badge) { -webkit-app-region: no-drag; }
+
+/* ============================================================
+ * 侧栏瘦身 + 首页顶部标签筛选条 + ⌘K 空状态分段（design §11.B1–B3、§12.3）
+ * ------------------------------------------------------------
+ * 侧栏只剩搜索、树头和目录树。排序与「仅未读」收进树头的 #btn-sort 菜单，
+ * 标签 chip 在首页顶部 #home-tag-strip 与菜单里各渲染一份，读写同一个 state.tagFilter。
+ * ============================================================ */
+
+/* ---------- 树头排序按钮 + 菜单 ---------- */
+.sort-wrap { position: static; margin-left: auto; display: inline-flex; }
+.tree-head .sort-btn {
+  width: auto;
+  gap: 3px;
+  padding: 0 5px;
+}
+.sort-btn-label {
+  font-size: 10.5px;
+  font-weight: var(--fw-medium);
+  letter-spacing: normal;
+  white-space: nowrap;
+}
+/* 有筛选（仅未读 / 标签）生效时按钮用强调色表态：菜单收着也能看出"树被筛过" */
+.tree-head .sort-btn.filtering { color: var(--accent); }
+.tree-head .sort-btn[aria-expanded="true"] { background: var(--bg-active); color: var(--text); }
+.sort-menu {
+  position: absolute; z-index: 30;
+  top: calc(100% - 2px); left: 8px;
+  width: 248px; max-width: calc(100% - 16px);
+  padding: 4px;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--bg-elev) var(--glass-tint), transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  backdrop-filter: blur(20px) saturate(1.4);
+  box-shadow: var(--shadow-3);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-normal);
+  letter-spacing: normal;
+  cursor: default;
+}
+.sort-menu.hidden { display: none; }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .sort-menu { background: var(--bg-elev); }
+}
+.sort-menu-h {
+  padding: 6px 8px 2px;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  color: var(--text-faint);
+}
+.sort-menu-sep { height: 1px; margin: 4px 2px; background: var(--border); }
+/* 排序三项：竖排单选，选中项前面打勾（原 .seg-btn 的下划线在竖排里不合适） */
+.sort-menu-seg { display: flex; flex-direction: column; align-items: stretch; }
+.sort-menu .seg-btn {
+  display: flex; align-items: center; gap: 8px;
+  height: 28px;
+  padding: 0 8px 0 26px;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+}
+.sort-menu .seg-btn[aria-checked="true"] { color: var(--text); font-weight: var(--fw-semi); }
+.sort-menu .seg-btn[aria-checked="true"]::after { content: none; }
+.sort-menu .seg-btn[aria-checked="true"]::before {
+  content: "";
+  position: absolute; left: 9px; top: 50%;
+  width: 9px; height: 5px;
+  margin-top: -4px;
+  border-left: 2px solid var(--accent);
+  border-bottom: 2px solid var(--accent);
+  transform: rotate(-45deg);
+}
+.sort-menu-note {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: var(--fw-normal);
+  color: var(--text-faint);
+}
+.sort-menu .only-unread {
+  display: flex; align-items: center; gap: 8px;
+  height: 28px;
+  padding: 0 8px 0 8px;
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.sort-menu .only-unread:hover { background: var(--bg-hover); }
+.sort-menu .only-unread input { margin: 0 2px 0 1px; accent-color: var(--accent); cursor: pointer; }
+.sort-menu-tags-sec.hidden { display: none; }
+.sort-menu-tags {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  padding: 2px 6px 6px;
+}
+/* 多于 12 个标签：这一段自己滚动，菜单不无限撑高 */
+.sort-menu-tags.scrollable { max-height: 132px; overflow-y: auto; overscroll-behavior: contain; }
+
+/* ---------- 树顶筛选提示 ---------- */
+.tree-filter-note {
+  flex: none;
+  display: flex; align-items: center; gap: 6px;
+  min-height: 26px;
+  margin: 0 8px 6px;
+  padding: 0 4px 0 8px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+.tree-filter-note.hidden { display: none; }
+.tree-filter-note .ico { flex: none; color: var(--accent); }
+.tree-filter-note-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-filter-note-text b { color: var(--text); font-weight: var(--fw-semi); }
+.tree-filter-note-clear {
+  flex: none;
+  height: 20px; padding: 0 6px;
+  border: none; border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--accent);
+  font-family: inherit; font-size: 11.5px;
+  cursor: pointer;
+}
+.tree-filter-note-clear:hover { background: var(--bg-hover); }
+.tree-filter-note-clear:focus-visible { outline: none; box-shadow: var(--ring); }
+
+/* ---------- 首页顶部全局标签筛选条 ---------- */
+.home-tag-strip {
+  display: flex; align-items: center; gap: 10px;
+  min-height: 40px;
+  padding: 0 8px 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-elev);
+}
+.home-tag-strip.hidden { display: none; }
+.home-tag-strip-label {
+  flex: none;
+  font-size: var(--fs-sm); font-weight: var(--fw-semi);
+  color: var(--text-dim);
+}
+.tag-strip-chips {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+.tag-strip-chips::-webkit-scrollbar { display: none; }
+.tag-strip-chips.hidden { display: none; }
+.tag-strip-chips .tag-chip { flex: none; }
+/* 还有更多 chip 在右边：右侧渐隐提示（滚到最右就撤掉） */
+.tag-strip-chips.scrollable:not(.at-end) {
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+          mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+}
+.tag-strip-hits {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.tag-strip-hits b { color: var(--unread); font-family: var(--font-mono); font-weight: 600; }
+@media (max-width: 900px) { .tag-strip-hits { display: none; } }
+.home-tag-strip .tag-bar-clear {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+}
+
+/* ---------- 首页轨道头「清除」（最近打开） ---------- */
+.home-rail-head .home-rail-clear { margin-left: auto; height: 20px; letter-spacing: normal; }
+
+/* ---------- ⌘K 空状态分段 ---------- */
+/* 段头（最近打开 / 收藏 / 全部文档）。和「正文命中」的 .qo-group 同一套视觉层级，
+ * 但类名分开：quickopen-content-search.spec 断言空查询时没有 .qo-group */
+.qo-section {
+  display: flex; align-items: center; gap: 5px;
+  min-height: 26px;
+  padding: 6px 6px 2px 10px;
+  margin-top: 6px;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+}
+.quickopen-list > .qo-section:first-child { margin-top: 0; }
+.qo-section .ico { color: var(--text-faint); }
+.qo-section .qo-section-act { margin-left: auto; height: 20px; }
+/* 收藏超过一屏：这一段自己滚动（约 8 行） */
+.qo-section-scroll {
+  display: flex; flex-direction: column; gap: inherit;
+  max-height: 304px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* ---------- 真实缩略图封面（design §3b） ----------
+ * <img class="cover-thumb"> 插在 .cover-art 最底层：生成式底色与字形水印留作占位与降级，
+ * 截图加载完成后（.loaded）淡入盖住它们；角标与新鲜点仍叠在截图之上。 */
+.cover-art .cover-thumb {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover; object-position: top center;
+  opacity: 0;
+  transition: opacity var(--dur-med) var(--ease-enter);
+  pointer-events: none;
+}
+.cover-art .cover-thumb.loaded { opacity: 1; }
+.cover-art .cover-badge,
+.cover-art .cover-fresh { z-index: 1; }
+/* 截图盖住后不要斜纹；换成一条底部发丝线，白底页面的截图才不会和卡片正文糊成一片 */
+.cover-art:has(.cover-thumb.loaded)::after {
+  background: none;
+  border-bottom: 1px solid var(--border);
+  z-index: 1;
+}
+
+/* ---------- 快速查看（design §3c / §11.B5） ----------
+ * 只"看"：整个浮窗 pointer-events:none，不拦鼠标、不抢焦点。位置由 peek.js 写 left / top。 */
+.peek {
+  position: fixed; left: 0; top: 0;
+  z-index: 160;                 /* 高于 ⌘K（150）：⌘K 空状态里按 Space 也要看得见 */
+  width: 380px;
+  max-width: calc(100vw - 16px);
+  pointer-events: none;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+  overflow: hidden;
+}
+.peek-head { display: grid; gap: 2px; padding: 10px 12px 8px; }
+.peek-label { font-size: var(--fs-xs); color: var(--text-faint); }
+.peek-title {
+  font-size: var(--fs-base); font-weight: var(--fw-semi); color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.peek-meta { display: grid; gap: 1px; font-size: var(--fs-xs); color: var(--text-dim); }
+.peek-meta-l2 { color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); }
+.peek-meta .peek-unread { color: var(--unread); font-weight: var(--fw-semi); }
+.peek-body {
+  position: relative;
+  margin: 0 12px;
+  aspect-ratio: 16 / 10;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--bg-elev-2);
+}
+.peek-img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top center; }
+/* 1280×800 的实时 iframe 用 transform:scale 缩进框里（缩放比由 peek.js 按框宽写） */
+.peek-frame {
+  position: absolute; left: 0; top: 0;
+  border: 0;
+  transform-origin: 0 0;
+  background: #fff;
+  pointer-events: none;
+}
+.peek-empty {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-dim); font-size: var(--fs-sm);
+}
+.peek-foot { padding: 8px 12px 10px; font-size: var(--fs-xs); color: var(--text-faint); }
+.peek.hidden,
+.peek-img.hidden,
+.peek-frame.hidden,
+.peek-empty.hidden { display: none; }
+.modal-section .peek-net-note { margin-top: 8px; }
+@keyframes atlas-peek-in {
+  from { opacity: 0; transform: scale(.96); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion="reduce"]) .peek:not(.hidden) {
+    animation: atlas-peek-in var(--dur-med) var(--ease-spring) both;
+    transform-origin: left center;
+  }
+}
+
+/* ============================================================
+ * 星图视图（design §3a、§10.1–10.3、§11.A、§12.4）
+ * ------------------------------------------------------------
+ * 选中「星图」时 #empty-state 里的 .home 隐藏、#starmap-view 显示，占满主区：
+ * 左侧舞台（主画布 + 动画层 + HUD 面板），右侧 300px 星表（画布的等价替代界面）。
+ * 颜色全部来自令牌：星档 --star-1..4、未读 --unread / --unread-stale、连线 --link-line(-hl)。
+ * ============================================================ */
+.empty.is-map { overflow: hidden; }
+.starmap-view {
+  position: absolute; inset: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  background: var(--bg);
+  color: var(--text);
+}
+.starmap-view.hidden { display: none; }
+.starmap-view.catalog-collapsed { grid-template-columns: minmax(0, 1fr) 44px; }
+.starmap-stage {
+  position: relative;
+  min-width: 0; min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+  isolation: isolate;
+}
+/* 舞台背后的静态星空（同英雄区的 --hero-stars，不承载信息、不动） */
+.starmap-stage::before {
+  content: "";
+  position: absolute; inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: .5;
+  background: var(--hero-stars);
+}
+#starmap-canvas, #starmap-fx {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  display: block;
+}
+#starmap-canvas { cursor: grab; outline: none; }
+#starmap-canvas.panning { cursor: grabbing; }
+#starmap-canvas.on-star { cursor: pointer; }
+#starmap-canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+#starmap-fx { pointer-events: none; }
+.starmap-anchor { position: absolute; pointer-events: none; }
+
+/* HUD 面板：半透明（--glass-tint，见上方毛玻璃清单） */
+.starmap-view .sm-panel {
+  position: absolute; z-index: 3;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+}
+.starmap-hud { left: 16px; top: 14px; padding: 6px 2px; }
+.hud-readout {
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 10px;
+  font: 11.5px var(--font-mono);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.hud-readout .k {
+  margin-right: 5px;
+  font-family: var(--font-ui);
+  font-size: 10.5px; font-weight: var(--fw-semi);
+  color: var(--text-faint);
+}
+.hud-readout b { color: var(--text); font-weight: var(--fw-semi); }
+.hud-readout b.hot { color: var(--unread); }
+.hud-readout .t { color: var(--text-faint); }
+.hud-readout .hud-note { font-family: var(--font-ui); color: var(--warn); }
+.starmap-filter-status {
+  left: 16px; top: 58px;
+  display: flex; align-items: center; gap: 2px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.starmap-filter-status.hidden { display: none; }
+.starmap-filter-status .hud { color: var(--accent); font-weight: var(--fw-semi); }
+.starmap-filter-status b { color: var(--text); font-family: var(--font-mono); font-weight: var(--fw-semi); }
+.starmap-filter-status .sep, .starmap-filter-status .where { color: var(--text-faint); }
+.starmap-lod {
+  right: 16px; top: 14px;
+  display: flex; gap: 10px;
+  padding: 6px 10px;
+  font-size: 11px; font-weight: var(--fw-semi);
+  color: var(--text-faint);
+}
+.starmap-lod [aria-current="true"] { color: var(--accent); }
+.starmap-legend {
+  left: 16px; bottom: 16px;
+  display: grid; gap: 6px;
+  min-width: 200px; max-width: 250px;
+  padding: 10px 12px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.starmap-legend .row { display: flex; align-items: center; gap: 9px; }
+.starmap-legend .lg-n { margin-left: auto; font: 10.5px var(--font-mono); color: var(--text-faint); }
+.starmap-legend .sw { width: 16px; height: 12px; flex: none; display: grid; place-items: center; }
+.starmap-legend .sw i { display: block; border-radius: 50%; }
+.starmap-legend .sw .t1 { width: 7px; height: 7px; background: var(--star-1); box-shadow: 0 0 0 3px var(--star-halo); }
+.starmap-legend .sw .t2 { width: 5.5px; height: 5.5px; background: var(--star-2); box-shadow: 0 0 0 2.5px var(--star-halo); }
+.starmap-legend .sw .t3 { width: 4px; height: 4px; background: var(--star-3); }
+.starmap-legend .sw .t4 { width: 3px; height: 3px; background: var(--star-4); }
+.starmap-legend .sw .un { width: 6px; height: 6px; background: var(--unread); }
+.starmap-legend .sw .jc { width: 6px; height: 6px; background: var(--star-1); outline: 1px solid var(--accent); outline-offset: 1px; }
+.starmap-legend .sw .ln { width: 16px; height: 0; border-radius: 0; border-top: 1.5px solid var(--link-line-hl); opacity: .8; }
+.starmap-legend .sw .arc {
+  width: 16px; height: 8px;
+  border: 1.5px solid var(--link-line-hl);
+  border-color: var(--link-line-hl) transparent transparent;
+  border-radius: 50% 50% 0 0;
+  opacity: .7;
+}
+.starmap-legend .note { font-size: 11px; line-height: 1.45; color: var(--text-faint); }
+.starmap-legend .lg-na { display: none; }
+.starmap-legend.links-na .lg-link { display: none; }
+.starmap-legend.links-na .lg-na { display: block; }
+/* 视口太矮时图例让位，免得压住星团 */
+@media (max-height: 640px) { .starmap-legend { display: none; } }
+.starmap-zoom {
+  right: 16px; bottom: 16px;
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 3px;
+}
+.starmap-zoom button {
+  width: 30px; height: 30px;
+  display: grid; place-items: center;
+  border: 0; border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.starmap-zoom button:hover { background: var(--bg-hover); color: var(--text); }
+.starmap-zoom button:focus-visible { outline: none; box-shadow: var(--ring); }
+.hud-scale {
+  padding: 3px 0 2px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+  font: 10.5px var(--font-mono);
+  color: var(--text-faint);
+}
+.starmap-tip {
+  position: absolute; z-index: 6;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--bg-elev-2);
+  box-shadow: var(--shadow-3);
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(14px, -50%);
+}
+.starmap-tip.hidden { display: none; }
+.starmap-tip .n { font-weight: var(--fw-semi); }
+.starmap-tip .m { margin-top: 1px; font-size: 11.5px; color: var(--text-dim); }
+.starmap-tip .u { color: var(--unread); }
+.starmap-tip .mono { font-family: var(--font-mono); }
+.starmap-empty {
+  position: absolute; left: 50%; top: 50%; z-index: 4;
+  transform: translate(-50%, -50%);
+  padding: 10px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-elev);
+  color: var(--text);
+  font: inherit; font-size: 13px;
+  cursor: pointer;
+}
+.starmap-empty:hover { border-color: var(--accent); }
+.starmap-empty:focus-visible { outline: none; box-shadow: var(--ring); }
+.starmap-empty.hidden, .starmap-nocanvas.hidden { display: none; }
+.starmap-nocanvas { padding: 12px 16px; font-size: 12.5px; color: var(--text-dim); border-bottom: 1px solid var(--border); }
+/* 画不了（getContext 为 null / 布局出错）：只留星表铺满 + 一行提示 */
+.starmap-view.no-canvas,
+.starmap-view.no-canvas.catalog-collapsed { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+.starmap-view.no-canvas .starmap-stage > :not(.starmap-nocanvas) { display: none; }
+.starmap-view.no-canvas .starmap-stage::before { content: none; }
+
+/* ---------- 星表 ---------- */
+.starmap-catalog {
+  min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.starmap-catalog .cat-head {
+  flex: none;
+  display: flex; align-items: center;
+  height: 44px;
+  padding: 0 10px 0 10px;
+  border-bottom: 1px solid var(--border);
+}
+#starmap-catalog-toggle {
+  display: flex; align-items: center; gap: 8px;
+  height: 30px; padding: 0 6px;
+  border: 0; border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit; font-size: 13px; font-weight: var(--fw-semi);
+  cursor: pointer;
+}
+#starmap-catalog-toggle:hover { background: var(--bg-hover); }
+#starmap-catalog-toggle:focus-visible { outline: none; box-shadow: var(--ring); }
+.catalog-collapsed .starmap-catalog .cat-label,
+.catalog-collapsed .starmap-catalog-body,
+.catalog-collapsed .starmap-catalog .cat-tl { display: none; }
+.catalog-collapsed .starmap-catalog .cat-head { justify-content: center; padding: 0; }
+.starmap-catalog-body { flex: 1; min-height: 0; overflow: auto; padding: 6px; }
+.starmap-catalog .cat-title {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px 8px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.starmap-catalog .cat-title b { font-size: 14px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.starmap-catalog .cat-title .cat-sort,
+.starmap-catalog .cat-title .cat-count { margin-left: auto; font-family: var(--font-mono); }
+.starmap-catalog .cat-title .u { color: var(--unread); font-weight: var(--fw-semi); }
+.starmap-catalog :is(.cat-back, .cat-more) {
+  display: flex; width: 100%;
+  padding: 7px 8px;
+  border: 0; border-radius: var(--r-md);
+  background: transparent;
+  color: var(--accent);
+  font: inherit; font-size: 12px; font-weight: var(--fw-semi);
+  text-align: left;
+  cursor: pointer;
+}
+.starmap-catalog .cat-more { justify-content: center; color: var(--text-dim); }
+.starmap-catalog :is(.cat-back, .cat-more):hover { background: var(--bg-hover); }
+.sm-cluster, .sm-star {
+  position: relative;
+  display: grid;
+  width: 100%;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 0; border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sm-cluster:hover, .sm-star:hover, .sm-cluster.hl { background: var(--bg-hover); }
+:is(.sm-cluster, .sm-star, .starmap-catalog .cat-back, .starmap-catalog .cat-more):focus-visible { outline: none; box-shadow: var(--ring); }
+.sm-cluster { grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-items: center; }
+.sm-cluster .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: var(--fw-semi); color: var(--text); }
+.sm-cluster.no-hit .nm { color: var(--text-dim); }
+.sm-cluster .ct { font: 11px var(--font-mono); color: var(--text-faint); text-align: right; }
+.sm-cluster .sub { grid-column: 1 / 3; display: flex; gap: 8px; font-size: 11.5px; color: var(--text-faint); }
+.sm-cluster .sub .u { color: var(--unread); font-weight: var(--fw-semi); }
+.sm-cluster .bar { grid-column: 1 / 3; height: 3px; margin-top: 4px; border-radius: 2px; background: var(--bg-elev-2); overflow: hidden; }
+.sm-cluster .bar i { display: block; height: 100%; background: var(--star-3); }
+.sm-cluster.has-fresh .bar i { background: var(--star-2); }
+.sm-star { grid-template-columns: 14px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; padding: 6px 10px; }
+.sm-star .tdot { width: 14px; height: 14px; display: grid; place-items: center; }
+.sm-star .tdot i { display: block; border-radius: 50%; }
+.sm-star .tdot .t1 { width: 7px; height: 7px; background: var(--star-1); }
+.sm-star .tdot .t2 { width: 5.5px; height: 5.5px; background: var(--star-2); }
+.sm-star .tdot .t3 { width: 4px; height: 4px; background: var(--star-3); }
+.sm-star .tdot .t4 { width: 3px; height: 3px; background: var(--star-4); }
+.sm-star.unread .tdot i { width: 6px; height: 6px; background: var(--unread-stale); }
+.sm-star.fresh .tdot i { background: var(--unread); }
+.sm-star .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--text-dim); }
+.sm-star.unread .nm { color: var(--text); }
+.sm-star.fresh .nm { font-weight: var(--fw-semi); }
+.sm-star .tm { font: 11px var(--font-mono); color: var(--text-faint); }
+.sm-star[aria-current="true"] { background: var(--bg-active); }
+.starmap-catalog .cat-tl {
+  flex: none;
+  display: flex; gap: 10px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* 高对比模式：画布无法保证可见性 → 隐藏两张画布与 HUD 面板，星表铺满作为主界面 */
+@media (forced-colors: active) {
+  #starmap-canvas, #starmap-fx, .starmap-view .sm-panel, .starmap-tip { display: none; }
+  .starmap-view, .starmap-view.catalog-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
+  .catalog-collapsed .starmap-catalog-body, .catalog-collapsed .starmap-catalog .cat-tl { display: block; }
+  .home-minimap { display: none; }
+}
+
+/* ---------- 首页迷你星图（§10.1）：英雄区左栏主体，高 214px ---------- */
+.home-minimap {
+  position: relative;
+  display: block;
+  width: 100%; height: 214px;
+  margin-top: 10px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+}
+.home-minimap:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.home-minimap:focus-visible { outline: none; box-shadow: var(--ring); }
+/* object-fit: cover：位图尺寸和盒子一致时没有任何效果；侧栏动画 / 窗口缩放期间（重画被去抖推迟）
+ * 位图等比放大裁边，而不是被横向拉成椭圆，尺寸稳定后再按新宽度重画一次 */
+.home-minimap canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; object-fit: cover; }
+.home-minimap-cap {
+  position: absolute; left: 10px; top: 10px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.home-minimap-go {
+  position: absolute; right: 10px; bottom: 10px;
+  padding: 5px 11px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 12px; font-weight: var(--fw-semi);
+}
+
+/* ---------- 顶栏：进星图自动收起侧栏的提示（§10.3） ---------- */
+.auto-collapse-note {
+  flex: none;
+  margin: 0 8px;
+  padding: 3px 10px;
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.auto-collapse-note.hidden { display: none; }
+.auto-collapse-note kbd { font: 10.5px var(--font-mono); padding: 0 4px; border: 1px solid var(--border-strong); border-radius: var(--r-xs); }
+@media (max-width: 900px) { .auto-collapse-note { display: none; } }
+/* ============================================================
+ * 时间河流（design §3d）
+ * ------------------------------------------------------------
+ * 英雄区与待看之间的一张卡片：近 7 天 × 每小时 168 根柱（river.js 画进 svg.river-svg，
+ * viewBox 0 0 168 100 拉伸铺满）。柱色按距今：24h 内 --star-2、更早 --star-3、
+ * 只有修改时间可依的区段 --star-4 + 斜线底纹。选区 --accent-soft 填充 + --accent 实边。
+ * 首次出现的升起动画写在本段末尾的「运动需授权」块里。
+ * ============================================================ */
+.home-river-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--bg-elev);
+  padding: 16px 18px 12px;
+}
+.home-river-head {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px;
+  margin-bottom: 14px;
+}
+.home-river-title { margin: 0; font-size: var(--fs-lg); font-weight: var(--fw-bold); letter-spacing: -.01em; color: var(--text); }
+.home-river-hud { font-size: var(--fs-xs); color: var(--text-faint); }
+.home-river-meta { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--text-dim); }
+.home-river-tag {
+  font-size: 10px; color: var(--text-faint);
+  padding: 0 5px; border: 1px solid var(--border); border-radius: var(--r-full);
+  white-space: nowrap;
+}
+.home-river-tag.hidden, .home-river-note.hidden, .river-hatch-tag.hidden, .river-sel.hidden { display: none; }
+.home-river-presets { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.river-preset {
+  height: 26px; padding: 0 10px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit; font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.river-preset:hover:not(:disabled) { color: var(--text); background: var(--bg-hover); }
+.river-preset:focus-visible { outline: none; box-shadow: var(--ring); }
+.river-preset[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.river-preset:disabled { opacity: .5; cursor: default; }
+.home-river-note { margin: -6px 0 10px; font-size: var(--fs-sm); color: var(--text-faint); }
+.home-river {
+  position: relative;
+  height: 112px;
+  margin-top: 18px;   /* 留给「现在」刻线标签 */
+  user-select: none; -webkit-user-select: none;
+  touch-action: none;
+  cursor: crosshair;
+}
+.river-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; display: block; }
+.river-svg .bar { fill: var(--star-3); transform-box: fill-box; transform-origin: bottom; }
+.river-svg .bar.recent { fill: var(--star-2); }
+.river-svg .bar.zero { fill: var(--border-strong); }
+.river-svg .bar.dim { opacity: .28; }
+.river-svg .river-dayline { stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: 2 3; vector-effect: non-scaling-stroke; }
+.river-svg .river-baseline { stroke: var(--border-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.river-svg .river-nowline { stroke: var(--signal); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.river-svg .river-hatch { fill: url(#river-hatch); opacity: .32; }   /* 只做底纹，压低，不和柱子抢 */
+.river-svg .river-hatch-line { fill: var(--border-strong); opacity: .7; }
+.river-hatch-tag {
+  position: absolute; top: 4px; left: 6px;
+  padding: 0 4px;
+  border-radius: var(--r-xs);
+  background: var(--bg-elev);
+  font-size: 10.5px; color: var(--text-faint);
+  pointer-events: auto;
+}
+.river-now-tag {
+  position: absolute; top: -18px;
+  transform: translateX(-50%);
+  font-size: 10.5px; font-weight: var(--fw-bold);
+  color: var(--signal);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.river-sel {
+  position: absolute; top: 0; bottom: 0;
+  background: var(--accent-soft);
+  border-left: 2px solid var(--accent);
+  border-right: 2px solid var(--accent);
+  pointer-events: none;
+}
+.river-handle {
+  position: absolute; top: 50%; z-index: 2;
+  width: 12px; height: 34px;
+  margin: -17px 0 0 -6px;
+  border: 2px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  cursor: ew-resize;
+}
+.river-handle::before {
+  content: ""; position: absolute;
+  left: 3px; right: 3px; top: 11px; bottom: 11px;
+  border-left: 1px solid var(--accent); border-right: 1px solid var(--accent);
+}
+.river-handle:focus-visible { outline: none; box-shadow: var(--ring); }
+.river-days { position: relative; height: 20px; margin-top: 6px; }
+.river-days span {
+  position: absolute; top: 0;
+  padding-left: 6px;
+  font-size: 11px; color: var(--text-dim);
+  white-space: nowrap;
+}
+.river-days span.today { color: var(--text); font-weight: var(--fw-semi); }
+.river-foot {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px;
+  margin-top: 6px;
+  font-size: 11.5px; color: var(--text-dim);
+}
+.river-lg { display: inline-flex; align-items: center; gap: 6px; }
+.river-lg i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.river-lg .lg-recent { background: var(--star-2); }
+.river-lg .lg-older { background: var(--star-3); }
+.river-lg .lg-mtime { background: repeating-linear-gradient(125deg, var(--border-strong) 0 1px, transparent 1px 3px); border: 1px solid var(--border-strong); }
+.river-lg .lg-now { width: 2px; background: var(--signal); }
+.river-lg .lg-peak { background: var(--accent); }
+.river-foot-hint { margin-left: auto; color: var(--text-faint); }
+@media (max-width: 900px) { .river-foot-hint { display: none; } }
+/* 首页封面墙的「该时段改动的文档」模式 */
+.home-feed-all {
+  margin-left: auto;
+  height: 26px; padding: 0 10px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit; font-size: var(--fs-sm); font-weight: var(--fw-normal); letter-spacing: normal;
+  cursor: pointer;
+}
+.home-feed-all:hover { color: var(--text); background: var(--bg-hover); }
+.home-feed-all:focus-visible { outline: none; box-shadow: var(--ring); }
+.home-feed-all.hidden { display: none; }
+.home-feed.is-time .home-feed-hint { display: none; }
+/* 侧栏搜索框下方的时间段 chip */
+.time-filter-chip {
+  flex: none;
+  align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 4px;
+  max-width: calc(100% - 24px);
+  height: 24px;
+  margin: 8px 12px 0;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: inherit; font-size: 11.5px;
+  white-space: nowrap; overflow: hidden;
+  cursor: pointer;
+}
+.time-filter-chip:hover { border-color: var(--accent); }
+.time-filter-chip:focus-visible { outline: none; box-shadow: var(--ring); }
+.time-filter-chip.hidden { display: none; }
+.time-filter-chip-text { overflow: hidden; text-overflow: ellipsis; }
+@keyframes atlas-river-grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion="reduce"]) .river-svg .bar.grow {
+    animation: atlas-river-grow var(--dur-slow) var(--ease-enter) both;
+    animation-delay: calc(var(--i, 0) * 4ms);
+  }
+}
+
+/* ============================================================
+ * 专注阅读模式（design §3f、§3g、§10.11、§11.D）
+ * ------------------------------------------------------------
+ * html.focus-mode 一个类控制全部表现。它是覆盖在原布局之上的一层：
+ * 不碰 body.sidebar-collapsed / atlas:sidebarCollapsed / 侧栏宽度，
+ * 退出后侧栏原来展开还是收起就恢复成什么。不持久化（刷新即正常布局）。
+ * 过渡写在文件末尾的「运动需授权」块里。
+ * ============================================================ */
+.main-actions > #btn-focus[aria-pressed="true"] { color: var(--accent); }
+
+/* 侧栏：复用收起的同一个 translate3d（过渡沿用 body.tx-ready .sidebar） */
+html.focus-mode .sidebar { transform: translate3d(-100%, 0, 0); }
+html.focus-mode .resizer { opacity: 0; pointer-events: none; }
+html.focus-mode .main { margin-left: 0; }
+
+/* 顶栏 / 标签栏 / 升级横幅：高度收到 0 并淡出；visibility:hidden 让它们退出 Tab 序列 */
+html.focus-mode .main-header,
+html.focus-mode #tab-bar,
+html.focus-mode #update-banner {
+  height: 0;
+  min-height: 0;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-bottom-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* 命中导航条属于「正在读的内容」：专注时由 app.js 挪到 .main 下，浮在正文顶部中央 */
+html.focus-mode #match-badge {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 45;
+  margin: 0;
+  padding: 3px 4px 3px 10px;
+  border-radius: var(--r-full);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-2);
+}
+
+/* 退出胶囊：静止 opacity 0；鼠标移动 / 聚焦时淡入（.awake），静止 2 秒后淡出 */
+.focus-exit {
+  position: fixed;
+  top: 14px;
+  right: 18px;
+  z-index: 50;                     /* 高于桌面版拖动条 #focus-drag（40） */
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--bg-elev) var(--glass-tint), transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  backdrop-filter: blur(20px) saturate(1.4);
+  box-shadow: var(--shadow-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0;
+}
+.focus-exit.hidden { display: none; }
+.focus-exit.awake,
+.focus-exit:hover,
+.focus-exit:focus-visible { opacity: 1; }
+.focus-exit:hover { border-color: var(--accent); }
+.focus-exit:focus-visible { outline: none; box-shadow: var(--ring), var(--shadow-2); }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .focus-exit { background: var(--bg-elev); }
+}
+
+/* 阅读进度：.preview 顶部 2px 强调色细条，transform: scaleX(p)（不改 width，不触发布局） */
+.focus-progress {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  z-index: 7;
+  background: var(--signal);
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  pointer-events: none;
+}
+.focus-progress.hidden { display: none; }
+
+/* 桌面版（§3g）：顶栏被隐藏后补一条透明拖动条；正文下移 28px，让拖动条压在空白上 */
+#focus-drag { display: none; }
+html[data-desktop="darwin"].focus-mode #focus-drag {
+  display: block; position: fixed; inset: 0 0 auto 0; height: 28px;
+  -webkit-app-region: drag; z-index: 40;              /* 低于 #focus-exit（z-index: 50） */
+}
+html[data-desktop="darwin"].focus-mode .preview { padding-top: 28px; }
+html[data-desktop="darwin"].focus-mode #focus-exit,
+html[data-desktop="darwin"].focus-mode #match-badge { -webkit-app-region: no-drag; }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* visibility：进入专注时等收起动画走完再 hidden（延迟 --dur），
+     退出时立刻 visible——退出后焦点要马上能回到顶栏的 #btn-focus */
+  :root:not([data-motion="reduce"]) body.tx-ready :is(.main-header, #tab-bar) {
+    transition: height var(--dur) var(--ease-drawer),
+                padding-top var(--dur) var(--ease-drawer), padding-bottom var(--dur) var(--ease-drawer),
+                padding-left var(--dur) var(--ease),   /* 桌面版收起侧栏时让出红绿灯（只在 data-desktop 下变化） */
+                border-bottom-width var(--dur) var(--ease-drawer),
+                opacity var(--dur) var(--ease-drawer), visibility 0s;
+  }
+  :root.focus-mode:not([data-motion="reduce"]) body.tx-ready :is(.main-header, #tab-bar) {
+    transition: height var(--dur) var(--ease-drawer),
+                padding-top var(--dur) var(--ease-drawer), padding-bottom var(--dur) var(--ease-drawer),
+                padding-left var(--dur) var(--ease),   /* 桌面版收起侧栏时让出红绿灯（只在 data-desktop 下变化） */
+                border-bottom-width var(--dur) var(--ease-drawer),
+                opacity var(--dur) var(--ease-drawer), visibility 0s linear var(--dur);
+  }
+  :root:not([data-motion="reduce"]) body.tx-ready #update-banner {
+    transition: max-height var(--dur) var(--ease-drawer), height var(--dur) var(--ease-drawer),
+                opacity var(--dur) var(--ease-drawer), visibility 0s,
+                border-bottom-color var(--dur-fast);
+  }
+  :root.focus-mode:not([data-motion="reduce"]) body.tx-ready #update-banner {
+    transition: max-height var(--dur) var(--ease-drawer), height var(--dur) var(--ease-drawer),
+                opacity var(--dur) var(--ease-drawer), visibility 0s linear var(--dur),
+                border-bottom-color var(--dur-fast);
+  }
+  :root:not([data-motion="reduce"]) .focus-exit {
+    transition: opacity var(--dur-med) var(--ease-standard), border-color var(--dur-fast);
+  }
+}
+
+/* ============================================================
+ * 设置弹窗：固定高度 + 星图视觉语言（client-fix §7）
+ * ------------------------------------------------------------
+ * 以前面板按内容取高、垂直居中，切到内容少的分区高度从 660 掉到 335、顶边上下跳 163px。
+ * 现在面板高度固定为 min(640px, 视口 - 96px)，与当前分区无关；内容区内部滚动。
+ * 外观：实底 --bg-elev（不再是 94% 玻璃压在模糊遮罩上），左栏 --bg，每一节是一张发丝描边的卡片，
+ * 标题 / 说明文字收紧成控制台读数的层级。所有颜色都取令牌，深浅 × 冷暖四组合同一套规则，
+ * 文字令牌的对比度由 contrast-tokens.spec 守护。所有选项、id 与事件绑定不变。
+ * ============================================================ */
+.modal-panel.settings-panel {
+  height: min(640px, calc(100vh - 96px));
+  max-height: none;
+  background: var(--bg-elev);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border-color: var(--border-strong);
+}
+.settings-panel .modal-header { padding: 10px 10px 10px 18px; }
+.settings-panel .modal-header h2 { font-size: 13.5px; font-weight: 650; letter-spacing: .01em; }
+.settings-panel .settings-body { grid-template-columns: 176px minmax(0, 1fr); }
+.settings-panel .settings-nav { padding: 12px 8px; gap: 1px; background: var(--bg); }
+.settings-panel .settings-nav .settings-nav-item { height: 32px; font-size: 12.5px; }
+.settings-panel .settings-nav .settings-nav-item.is-on {
+  background: var(--bg-active);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.settings-panel .settings-content {
+  padding: 14px 16px 18px;
+  display: flex; flex-direction: column; gap: 10px;
+  scrollbar-gutter: stable;
+}
+.settings-panel .settings-content .modal-section {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+.settings-panel .settings-content .modal-section[hidden] { display: none; }
+.settings-panel .settings-content .modal-section:not([hidden]):has(+ .modal-section[hidden]) { border-bottom: 1px solid var(--border); }
+.settings-panel .modal-section h3 { margin: 0 0 4px; font-size: 12.5px; font-weight: 650; color: var(--text); }
+.settings-panel .modal-section .muted { margin: 2px 0 10px; font-size: 11.5px; line-height: 1.55; color: var(--text-dim); max-width: 62ch; }
+.settings-panel .modal-section .muted:last-child { margin-bottom: 0; }
+.settings-panel .theme-choice { gap: 6px; }
+.settings-panel.modal-panel .theme-choice .theme-option { padding: 10px 8px; gap: 5px; background: var(--bg-elev); border-color: var(--border); }
+.settings-panel.modal-panel .theme-choice .theme-option:hover { border-color: var(--border-strong); }
+.settings-panel.modal-panel .theme-choice .theme-option.is-on { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.settings-panel.modal-panel .theme-choice .theme-option.is-on .ico { color: var(--accent); }
+.settings-panel .settings-nav .settings-version { padding-top: 12px; font-family: var(--font-mono); font-size: 10.5px; }
+/* 焦点环只给键盘：鼠标点开设置时自动聚焦的关闭按钮不再挂一圈粗强调色 */
+.modal .modal-close:focus:not(:focus-visible) { outline: none; box-shadow: none; }
+.modal .modal-close:focus-visible { outline: none; box-shadow: var(--ring); }
+
+/* ============================================================
+ * 封面缩略图：裁切 / 放大 / 角标 / 深色压暗（client-fix §12）
+ * ------------------------------------------------------------
+ * 截图现在是 800×500 CSS 视口的"首屏上部"（lib/thumbnail.js）。封面 212×96 里再放大 1.4 倍、
+ * 从左上角裁：标题与第一块内容占满封面，不再是一整页缩成邮票。
+ * 类型角标从左上（正是报告标题的位置）挪到右下，缩小并改实底。
+ * 深色主题：HTML 文档自带白底，截图是白的，在深色卡片上刺眼 → 压暗并降一点对比度；
+ * MD / 其它类型的渲染页本来就按深色主题截图，不处理。
+ * ============================================================ */
+.cover-art .cover-thumb {
+  inset: 0 auto auto 0;
+  width: 140%;
+  height: auto;
+  object-fit: initial;
+}
+.cover-art .cover-badge {
+  top: auto; left: auto; right: 6px; bottom: 6px;
+  height: 16px; padding: 0 6px;
+  font-size: 9.5px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+:root[data-theme="dark"] .cover-card[data-doctype="html"] .cover-thumb.loaded { filter: brightness(.72) contrast(.9); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .cover-card[data-doctype="html"] .cover-thumb.loaded { filter: brightness(.72) contrast(.9); }
+}
+
+/* 时间河流：截顶的尖峰柱在柱顶标注真实次数（river.js riverScale，client-fix §10） */
+.river-peaks { position: absolute; inset: 0; pointer-events: none; }
+.river-peak {
+  position: absolute; top: -15px; transform: translateX(-50%);
+  font-family: var(--font-mono); font-size: 10px; line-height: 13px;
+  color: var(--text-dim); font-variant-numeric: tabular-nums;
+  padding: 0 3px; border-radius: 3px; background: var(--bg-elev);
+}
+.river-svg .bar.peak { fill: var(--accent); }

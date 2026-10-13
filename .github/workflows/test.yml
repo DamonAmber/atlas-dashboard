@@ -70,7 +70,25 @@ jobs:
             search-cn-and-highlight \
             sidebar \
             scroll-stuck \
-            scroll-after-toggle
+            scroll-after-toggle \
+            contrast-tokens \
+            motion-reduced \
+            desktop-chrome \
+            sidebar-tree-alignment \
+            filter-consistency \
+            thumbnail \
+            peek-preview \
+            star-map \
+            link-index \
+            activity-log \
+            time-river \
+            focus-mode \
+            sidebar-row-stability \
+            minimap-layout \
+            river-scale \
+            settings-theme-motion \
+            sidebar-header-narrow \
+            theme-overlay-continuity
           do
             echo "===== $spec ====="
             node "tests/$spec.spec.js"

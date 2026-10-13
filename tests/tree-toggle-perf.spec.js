@@ -58,15 +58,18 @@ const MAX_NODES_PER_ROW = 22;
       actionSvg: row.querySelectorAll('.file-actions svg').length,
       withIcoAttr: row.querySelectorAll('.file-actions button[data-ico]').length,
       hasDataAct: row.querySelectorAll('.file-actions button[data-act]').length,
+      favFirst: !!row.querySelector('.file-actions > .fav-btn:first-child'),
     };
   });
   check(`每行节点数 ≤ ${MAX_NODES_PER_ROW}（防止图标被塞回渲染路径）`,
     rowInfo.nodes <= MAX_NODES_PER_ROW, `实际=${rowInfo.nodes}`);
-  check('行尾 5 个操作按钮都在（data-act 未变，事件绑定与外部查询不受影响）',
-    rowInfo.actionBtns === 5 && rowInfo.hasDataAct === 5,
+  // 0.31 起星标 .fav-btn 也挪进行尾操作组排第一（design §12.2），图标同样延迟注入：
+  // 操作组共 6 个按钮 = 星标 + 原来 5 个带 data-act 的
+  check('行尾 6 个操作按钮都在（星标 + 5 个 data-act 未变，事件绑定与外部查询不受影响）',
+    rowInfo.actionBtns === 6 && rowInfo.hasDataAct === 5 && rowInfo.favFirst,
     `btn=${rowInfo.actionBtns} data-act=${rowInfo.hasDataAct}`);
   check('渲染时行尾按钮里还没有图标 SVG', rowInfo.actionSvg === 0, `svg=${rowInfo.actionSvg}`);
-  check('按钮带 data-ico 待注入标记', rowInfo.withIcoAttr === 5, `带标记=${rowInfo.withIcoAttr}`);
+  check('按钮带 data-ico 待注入标记', rowInfo.withIcoAttr === 6, `带标记=${rowInfo.withIcoAttr}`);
   check('行上有 data-ico-pending 标记', rowInfo.pendingAttr);
 
   // hover 后图标注入
@@ -81,7 +84,7 @@ const MAX_NODES_PER_ROW = 22;
       btns: row.querySelectorAll('.file-actions button[data-act]').length,
     };
   });
-  check('hover 后 5 个图标注入完成', afterHover.actionSvg === 5, `svg=${afterHover.actionSvg}`);
+  check('hover 后 6 个图标注入完成', afterHover.actionSvg === 6, `svg=${afterHover.actionSvg}`);
   check('注入后清掉 data-ico（不重复注入）', afterHover.leftoverAttr === 0);
   check('注入后清掉行上的 pending 标记', !afterHover.pendingAttr);
   check('注入后按钮仍然齐全可用', afterHover.btns === 5);
@@ -95,7 +98,7 @@ const MAX_NODES_PER_ROW = 22;
     await new Promise(r => setTimeout(r, 120));
     return target.querySelectorAll('.file-actions svg').length;
   });
-  check('键盘聚焦某行也会注入图标', focusInjected === 5, `结果=${focusInjected}`);
+  check('键盘聚焦某行也会注入图标', focusInjected === 6, `结果=${focusInjected}`);
 
   // ---------- ② 大分组即时展开 / 小分组仍有动画 ----------
   const bigId = await page.evaluate(() => {

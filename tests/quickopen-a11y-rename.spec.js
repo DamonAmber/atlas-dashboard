@@ -38,8 +38,21 @@ function check(name, actual, expected) {
   // ---- ① 快速打开 ----
   console.log('\n[⌘K 快速打开]');
   check('默认隐藏', await page.isHidden('#quickopen'), true);
+  // 顶栏「快速打开 ⌘K」胶囊（design §10.7）：首页态可见，点击打开、Esc 后焦点回到胶囊
+  check('首页态顶栏有可见的快速打开胶囊', await page.isVisible('.main-header #btn-quickopen[data-open-quickopen]'), true);
+  check('胶囊文案为中文「快速打开」+ ⌘K',
+    (await page.textContent('#btn-quickopen')).replace(/\s+/g, ''), '快速打开⌘K');
+  await page.click('#btn-quickopen');
+  await page.waitForSelector('#quickopen:not(.hidden)');
+  check('点击胶囊打开 #quickopen', await page.isVisible('#quickopen'), true);
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('#quickopen.hidden', { state: 'attached' });
+  check('关闭后焦点回到胶囊', await page.evaluate(() => document.activeElement.id), 'btn-quickopen');
   await page.keyboard.press('Meta+k');
   await page.waitForSelector('#quickopen:not(.hidden)');
+  // pushModal 在下一帧才把焦点送进输入框；负载高时 waitForSelector 可能先返回，等焦点落定再断言
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'quickopen-input',
+    null, { timeout: 2000 }).catch(() => {});
   check('⌘K 打开面板', await page.isVisible('#quickopen'), true);
   check('焦点自动落在输入框', await page.evaluate(() => document.activeElement.id), 'quickopen-input');
   const initialCount = await page.evaluate(() => document.querySelectorAll('.quickopen-item').length);
@@ -82,6 +95,7 @@ function check(name, actual, expected) {
     const c = document.querySelector('#crumbs .crumb-name, #crumbs .crumb-alias');
     return c && c.textContent;
   }), 'deploy-notes.md');
+  check('文档态胶囊隐藏（仍靠 ⌘K）', await page.isHidden('#btn-quickopen'), true);
 
   // Esc 关闭 + ⌘K 再按收起
   await page.keyboard.press('Meta+k');

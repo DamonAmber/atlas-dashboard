@@ -14,11 +14,6 @@ const state = {
   // 故意不持久化，和 onlyUnread 一致——否则刷新后"文档凭空少了一半"很难自查
   tagFilter: new Set(),
   collapsed: new Set(JSON.parse(localStorage.getItem('atlas:collapsed') || '[]')),
-  recentCollapsed: localStorage.getItem('atlas:recentCollapsed') === '1',
-  favCollapsed: localStorage.getItem('atlas:favCollapsed') === '1',
-  // 标签筛选区的折叠态。和 tagFilter 不同，这个要持久化——标签几十个的时候
-  // 用户一般只在需要时展开一次，每次刷新都重新弹开一大片 chip 很烦
-  tagsCollapsed: localStorage.getItem('atlas:tagsCollapsed') === '1',
   notifyEnabled: localStorage.getItem('atlas:notify') === '1',
   // 'name' | 'mtime' | 'custom'：folder.children 排序模式
   // 默认按名称——一系列文档（v1/v2/v3）会自动聚合在一起
@@ -27,7 +22,28 @@ const state = {
   //   'groups' —— 虚拟分组（默认）：可拖拽重排、手工建分组、归档，持久化在 store.tree
   //   'tree'   —— 真实目录树：完全按磁盘上的多级目录结构展示（只读镜像，不持久化、不可拖拽），
   //               解决"深层嵌套目录被压平成一级、多个 README 分不清"的问题
-  viewMode: localStorage.getItem('atlas:viewMode') === 'tree' ? 'tree' : 'groups',
+  //   'map'    —— 星图（design §3a）：占据主区的首页表面；侧栏仍渲染 listView 那种列表
+  // viewMode 是分段控件当前选中项；listView 是侧栏实际渲染的列表（分组 / 目录），
+  // 两者拆开后侧栏一律经 listViewMode() 判断，见下方
+  viewMode: (() => {
+    const v = localStorage.getItem('atlas:viewMode');
+    return v === 'tree' || v === 'map' ? v : 'groups';
+  })(),
+  listView: (() => {
+    const v = localStorage.getItem('atlas:listView');
+    if (v === 'tree' || v === 'groups') return v;
+    // 老用户只有 atlas:viewMode：它就是侧栏列表
+    return localStorage.getItem('atlas:viewMode') === 'tree' ? 'tree' : 'groups';
+  })(),
+  // 进入星图时自动收起了侧栏（内存态，design §10.3）：离开星图时据此恢复，从不写偏好
+  sidebarAutoCollapsed: false,
+  // 时间河流的时间段筛选（design §3d）：{ from: 整点 ms, to: ms | null（开放到现在）} | null。
+  // 只存内存、不持久化：重开 App 总是一个没有时间筛选的看板
+  timeRange: null,
+  // recomputeTimeRange() 同步算出：区间内有至少一个计数事件的文档，及其区间内最后一次事件的 t
+  timeRangePaths: new Set(),
+  timeRangeLatest: new Map(),
+  timeRangeVer: 0,   // 每次重算 +1，进 filterSnapshotKey（区间不变、命中集合变了也要让缓存失效）
   // 目录视图当前这一帧的顶层节点（由 buildDirTree 生成）。缓存供 allFolderIds / collapse-all 复用，
   // 避免它们各自重建一遍
   dirTree: [],
@@ -43,7 +59,30 @@ const state = {
   //   loaded = frame 是否已经导航过一次（懒加载：恢复的 Tab 先建帧、激活时才 set src）
   tabs: [],
   activeTabId: null,
+  // 「AI 刚改过」：本会话经 SSE 收到 add / change、且不是 Atlas 自己写的（负载 self !== true）
+  // 的文档。path → 收到时刻（ms）。JUST_CHANGED_MS 窗口内侧栏行 / 首页封面带 .just-changed
+  // （点做 3 次轻闪），到期由一个共享定时器清理。
+  justChanged: new Map(),
+  // 真实缩略图（design §3b）。available：null = 还不知道，false = 本会话不再请求。
+  // items 的键是 "theme|path"（theme = effectiveTheme()，只会是 light / dark），
+  // 值 { status, k, mtime }，mtime 是请求时的 state.files[path].mtime，用来判断要不要重新请求
+  thumbs: { available: null, browser: null, reason: null, items: new Map() },
 };
+// 「刚变更」信号的持续窗口。侧栏、首页、星图共用这一个常量
+const JUST_CHANGED_MS = 90_000;
+// 时间河流（design §3d）的数据与交互状态。放在这里（而不是河流那一段）是因为 renderHome()
+// 在脚本加载早期就可能被调用。
+//   log：undefined = 还没拉过 /api/activity；null = 拉取失败（只用修改时间兜底）；否则是本地副本
+//        （AtlasRiver.decodeLog 的结果，SSE 事件按同一套合并规则追加进去）
+//   ver：log 每次变化 +1，ensureRiverModel() 据此与 state.files 身份、当前整点判断要不要重算
+const riverState = {
+  log: undefined, failed: false, loading: false, again: false,
+  ver: 0, model: null, drawn: null, grown: false, drag: null,
+};
+// 侧栏实际渲染的列表视图：选中「星图」时沿用切换前的分组 / 目录
+function listViewMode() {
+  return state.viewMode === 'map' ? state.listView : state.viewMode;
+}
 
 // 预览区轻量编辑模式状态
 const editState = {
@@ -65,9 +104,14 @@ const els = {
   search: document.getElementById('search'),
   onlyUnread: document.getElementById('only-unread'),
   stats: document.getElementById('stats'),
-  favCount: document.getElementById('fav-count'),
-  recentCount: document.getElementById('recent-count'),
   treeCount: document.getElementById('tree-count'),
+  treeFilterNote: document.getElementById('tree-filter-note'),
+  btnSort: document.getElementById('btn-sort'),
+  btnSortLabel: document.getElementById('btn-sort-label'),
+  sortWrap: document.getElementById('sort-wrap'),
+  sortMenu: document.getElementById('sort-menu'),
+  sortMenuTags: document.getElementById('sort-menu-tags'),
+  sortMenuTagsSec: document.getElementById('sort-menu-tags-sec'),
   btnCollapseAll: document.getElementById('btn-collapse-all'),
   collapseAllIco: document.getElementById('collapse-all-ico'),
   // preview 不再是页面里的静态元素，而是"当前活动 Tab 的 iframe"。
@@ -77,11 +121,48 @@ const els = {
   previewArea: document.querySelector('.preview'),   // 承载各 Tab iframe 的容器
   tabBar: document.getElementById('tab-bar'),
   emptyState: document.getElementById('empty-state'),
+  // 首页的两个表面：封面墙 .home 与星图 #starmap-view，只经 showHomeSurface() 切换
+  home: document.querySelector('#empty-state > .home'),
+  starmapView: document.getElementById('starmap-view'),
+  starmapStage: document.getElementById('starmap-stage'),
+  starmapCanvas: document.getElementById('starmap-canvas'),
+  starmapFx: document.getElementById('starmap-fx'),
+  starmapReadout: document.getElementById('starmap-readout'),
+  starmapFilterStatus: document.getElementById('starmap-filter-status'),
+  starmapLegend: document.getElementById('starmap-legend'),
+  starmapTip: document.getElementById('starmap-tip'),
+  starmapEmpty: document.getElementById('starmap-empty'),
+  starmapNoCanvas: document.getElementById('starmap-nocanvas'),
+  starmapCatalog: document.getElementById('starmap-catalog'),
+  starmapCatalogBody: document.getElementById('starmap-catalog-body'),
+  starmapCatalogToggle: document.getElementById('starmap-catalog-toggle'),
+  homeMinimap: document.getElementById('home-minimap'),
+  homeMinimapCanvas: document.getElementById('home-minimap-canvas'),
+  autoCollapseNote: document.getElementById('auto-collapse-note'),
   homeSub: document.getElementById('home-sub'),
   homeEyebrow: document.getElementById('home-eyebrow'),
+  homeClock: document.getElementById('home-clock'),
+  homeReadouts: document.getElementById('home-readouts'),
+  homeTagStrip: document.getElementById('home-tag-strip'),
+  tagStripHits: document.getElementById('tag-strip-hits'),
+  homeRecentClear: document.getElementById('home-recent-clear'),
   homeHeroLine: document.getElementById('home-hero-line'),
   homeChips: document.getElementById('home-chips'),
-  homePulse: document.getElementById('home-pulse'),
+  homeRiverCard: document.getElementById('home-river-card'),
+  homeRiver: document.getElementById('home-river'),
+  homeRiverMeta: document.getElementById('home-river-meta'),
+  homeRiverSum: document.getElementById('home-river-sum'),
+  homeRiverFallback: document.getElementById('home-river-fallback'),
+  homeRiverNote: document.getElementById('home-river-note'),
+  riverStart: document.getElementById('river-start'),
+  riverEnd: document.getElementById('river-end'),
+  riverSel: document.getElementById('river-sel'),
+  riverDays: document.getElementById('river-days'),
+  riverHatchTag: document.getElementById('river-hatch-tag'),
+  riverNowTag: document.getElementById('river-now-tag'),
+  timeFilterChip: document.getElementById('time-filter-chip'),
+  homeFeedTitle: document.getElementById('home-feed-title'),
+  homeFeedAll: document.getElementById('home-feed-all'),
   homeFeedCount: document.getElementById('home-feed-count'),
   homeFeedHint: document.getElementById('home-feed-hint'),
   homeGrid: document.getElementById('home-grid'),
@@ -152,25 +233,21 @@ const els = {
   notifyHint: document.getElementById('notify-hint'),
   ignoreInput: document.getElementById('ignore-input'),
   ignoreSaveBtn: document.getElementById('ignore-save-btn'),
-  recentBar: document.getElementById('recent-bar'),
-  recentList: document.getElementById('recent-list'),
-  recentToggle: document.getElementById('recent-toggle'),
-  recentClear: document.getElementById('recent-clear'),
-  favBar: document.getElementById('fav-bar'),
-  favList: document.getElementById('fav-list'),
-  favToggle: document.getElementById('fav-toggle'),
   btnFavorite: document.getElementById('btn-favorite'),
+  // 标签 chip 区（首页顶部筛选条里）。#recent-clear 由 ⌘K 空状态动态渲染，不在这里缓存
   tagBar: document.getElementById('tag-bar'),
-  tagBarChips: document.getElementById('tag-bar-chips'),
   tagBarClear: document.getElementById('tag-bar-clear'),
-  tagBarToggle: document.getElementById('tag-bar-toggle'),
-  tagBarCount: document.getElementById('tag-bar-count'),
   updateBadge: document.getElementById('update-badge'),
   updateBanner: document.getElementById('update-banner'),
   segButtons: document.querySelectorAll('.seg-btn[data-sort]'),
   viewButtons: document.querySelectorAll('.seg-btn[data-view]'),
   matchBadge: document.getElementById('match-badge'),
   matchClose: document.getElementById('match-close'),
+  // 专注阅读（design §3f）
+  btnFocus: document.getElementById('btn-focus'),
+  btnFocusMenu: document.getElementById('btn-focus-menu'),
+  focusExit: document.getElementById('focus-exit'),
+  focusProgress: document.getElementById('focus-progress'),
   findBar: document.getElementById('find-bar'),
   findInput: document.getElementById('find-input'),
   findCount: document.getElementById('find-count'),
@@ -298,6 +375,13 @@ const PREVIEW_SANDBOX = [
   'allow-modals',
   'allow-downloads',
 ].join(' ');
+
+// 快速查看只"看"，不需要预览能提供的任何增强能力。
+// 无论文档类型、无论用户是否信任过它，一律 opaque origin + 只允许脚本（让图表能画出来）。
+const PEEK_SANDBOX = 'allow-scripts';
+function applyPeekSandbox(ifr) {           // 必须在设置 src 之前调用：sandbox 只在导航时生效
+  if (ifr.getAttribute('sandbox') !== PEEK_SANDBOX) ifr.setAttribute('sandbox', PEEK_SANDBOX);
+}
 
 // 文件的文档类型。服务端会给 docType，兜底按扩展名推断
 function docTypeOf(file) {
@@ -555,6 +639,15 @@ function popModal(entry) {
 
 // 用 capture 阶段：要先于其它全局快捷键处理，避免 Esc 同时清掉搜索框
 document.addEventListener('keydown', (e) => {
+  // Esc 分级退出链的第 1 级：关闭快速查看浮窗（design §3f）。放在 capture 层最前，
+  // 这样 ⌘K 里 Space 打开的浮窗按 Esc 只关浮窗、不连带关掉 ⌘K；
+  // 目录树焦点行上按 Esc 也只关浮窗，焦点与 .kbd-focus 留在原行
+  if (e.key === 'Escape' && window.AtlasPeek && AtlasPeek.isOpen()) {
+    e.preventDefault();
+    e.stopPropagation();
+    AtlasPeek.close();
+    return;
+  }
   if (!openModals.length) return;
   const top = openModals[openModals.length - 1];
   if (e.key === 'Escape') {
@@ -678,11 +771,34 @@ function showPrompt({
 // ---------- 侧边栏宽度 / 收起 ----------
 const SIDEBAR_MIN = 220, SIDEBAR_MAX = 800;
 const ANIM_MS = 200;
-
-const savedWidth = parseInt(localStorage.getItem('atlas:sidebarWidth'), 10);
-if (savedWidth && savedWidth >= SIDEBAR_MIN && savedWidth <= SIDEBAR_MAX) {
-  document.documentElement.style.setProperty('--sidebar-w', savedWidth + 'px');
+// 侧栏头放得下「品牌图标 + 操作组」的最窄侧栏宽度（品牌字样此时已由容器查询收起）。
+// 桌面版左侧有红绿灯内边距（macOS 26 为 90px），220 时图标会压到操作按钮上，所以按实际内边距现算：
+// 浏览器 / 全屏 = 220，桌面 inset 90 ≈ 268。只限制生效宽度，不改用户存的偏好
+function sidebarMinWidth() {
+  const head = document.querySelector('.sidebar-header');
+  const brand = head && head.querySelector('.brand');
+  const mark = brand && brand.querySelector('.brand-mark');
+  const actions = head && head.querySelector('.actions');
+  if (!mark || !actions) return SIDEBAR_MIN;
+  // 侧栏头没在布局里（专注模式等）量不出来：返回 null，调用方保持现有宽度，免得按 0 算出 220 把重叠写回去
+  if (!mark.offsetWidth || !actions.offsetWidth) return null;
+  const hs = getComputedStyle(head), bs = getComputedStyle(brand);
+  const px = (v) => parseFloat(v) || 0;
+  const need = px(hs.paddingLeft) + px(hs.paddingRight) + px(hs.columnGap)
+    + px(bs.marginLeft) + px(bs.paddingLeft) + mark.offsetWidth + px(bs.paddingRight)
+    + actions.offsetWidth;
+  return Math.max(SIDEBAR_MIN, Math.ceil(need));
 }
+const savedWidth = parseInt(localStorage.getItem('atlas:sidebarWidth'), 10);
+let sidebarPrefW = (savedWidth && savedWidth >= SIDEBAR_MIN && savedWidth <= SIDEBAR_MAX) ? savedWidth : null;
+// 偏好宽度按当下的最窄宽度兜底后写进 --sidebar-w；进出全屏（红绿灯内边距变了）时重算
+function applySidebarWidth() {
+  if (sidebarPrefW == null) return;   // 没存过：用 CSS 默认 320，任何情形都放得下
+  const minW = sidebarMinWidth();
+  if (minW == null) return;
+  document.documentElement.style.setProperty('--sidebar-w', Math.max(minW, sidebarPrefW) + 'px');
+}
+applySidebarWidth();
 if (localStorage.getItem('atlas:sidebarCollapsed') === '1') {
   document.body.classList.add('sidebar-collapsed');
 }
@@ -697,7 +813,11 @@ requestAnimationFrame(() => requestAnimationFrame(() => {
 // main 实际宽度不一致，用户在锁定期间的操作会被 230ms 的 inline style 干扰，
 // 释放时还有一次"咔哒"般的 layout 跳变。让 iframe 跟随更稳更可预期。
 let sidebarAnimTimer = null;
-function toggleSidebar(force) {
+// 两条调用路径（design §10.3）：
+//   用户操作（⌘B、#btn-toggle-sidebar）—— 写 atlas:sidebarCollapsed；在星图里还会清掉
+//     「自动收起」标志与提示，离开星图时不再自动改（用户的选择优先）
+//   自动（{ auto: true }，进出星图）—— 绝不写 localStorage
+function toggleSidebar(force, { auto = false } = {}) {
   const next = typeof force === 'boolean'
     ? force
     : !document.body.classList.contains('sidebar-collapsed');
@@ -709,15 +829,27 @@ function toggleSidebar(force) {
 
   document.body.classList.add('sidebar-animating');
   document.body.classList.toggle('sidebar-collapsed', next);
-  localStorage.setItem('atlas:sidebarCollapsed', next ? '1' : '0');
+  if (!auto) {
+    localStorage.setItem('atlas:sidebarCollapsed', next ? '1' : '0');
+    if (state.sidebarAutoCollapsed) state.sidebarAutoCollapsed = false;
+    showAutoCollapseNote(false);
+  }
   els.btnToggleSidebar.title = next ? '展开侧边栏（⌘B）' : '收起侧边栏（⌘B）';
 
   sidebarAnimTimer = setTimeout(() => {
     document.body.classList.remove('sidebar-animating');
     sidebarAnimTimer = null;
+    window.dispatchEvent(new Event('atlas:sidebar-settled'));
   }, ANIM_MS + 30);
 }
 els.btnToggleSidebar.addEventListener('click', () => toggleSidebar());
+
+// 主区跟着侧栏：.main 的 margin-left 逐帧过渡（styles.css），内容连续重排。
+// 曾经试过"主区只排一次、靠 transform 平移"：重排次数少了，但动画期间主区宽度和终态不一样，
+// 居中内容在收起首帧 / 展开末帧会横跳约半个侧栏宽、右侧按钮会滑出窗口（client-fix review #1，
+// 实测见 verification §2）。连续重排在首页和预览上的帧数与平移方案相同（主区重排 <1ms），
+// 而真正拖慢动画的两处已经单独处理：迷你星图在动画期间不重画（ResizeObserver 去抖到
+// atlas:sidebar-settled，画布 object-fit: cover 等比缩放、不拉伸），启动初期的后台任务推迟到静默期之后。
 
 // 拖拽 resizer 调整宽度
 // 用 pointer events + setPointerCapture：
@@ -727,6 +859,7 @@ els.btnToggleSidebar.addEventListener('click', () => toggleSidebar());
   let dragging = false;
   let pointerId = null;
   let pendingW = null;
+  let minW = SIDEBAR_MIN;   // 每次按下时现算（全屏与否红绿灯内边距不同）
   let rafId = 0;
   const apply = () => {
     rafId = 0;
@@ -744,6 +877,7 @@ els.btnToggleSidebar.addEventListener('click', () => toggleSidebar());
     document.body.classList.remove('resizing');
     els.resizer.classList.remove('dragging');
     if (pendingW != null) {
+      sidebarPrefW = pendingW;
       localStorage.setItem('atlas:sidebarWidth', String(pendingW));
     }
   }
@@ -751,6 +885,7 @@ els.btnToggleSidebar.addEventListener('click', () => toggleSidebar());
     if (e.button !== 0) return;
     e.preventDefault();
     dragging = true;
+    minW = sidebarMinWidth() ?? SIDEBAR_MIN;
     pointerId = e.pointerId;
     try { els.resizer.setPointerCapture(e.pointerId); } catch {}
     document.body.classList.add('resizing');
@@ -758,7 +893,7 @@ els.btnToggleSidebar.addEventListener('click', () => toggleSidebar());
   });
   els.resizer.addEventListener('pointermove', (e) => {
     if (!dragging) return;
-    pendingW = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, e.clientX));
+    pendingW = Math.min(SIDEBAR_MAX, Math.max(minW, e.clientX));
     if (!rafId) rafId = requestAnimationFrame(apply);
   });
   els.resizer.addEventListener('pointerup', endDrag);
@@ -771,28 +906,54 @@ els.btnToggleSidebar.addEventListener('click', () => toggleSidebar());
 })();
 
 // ---------- 工具 ----------
-// ---------- 侧栏统计 ----------
-// 数当前视图数据模型里"会显示出来"的文件数（底栏「命中 / 总数」计数用）。
-// 折叠分组懒渲染后不能再数 DOM。用缓存的 state.dirTree / state.tree，不重建；
-// nodeMatches 与 render() 的筛选口径完全一致（含未读 / 标签 / 搜索三类）。
-function countVisibleTreeFiles() {
-  const roots = state.viewMode === 'tree' ? (state.dirTree || []) : (state.tree || []);
-  let n = 0;
-  const walk = (nodes) => {
-    for (const node of nodes) {
-      if (node.type === 'file') {
-        if (nodeMatches(node)) n++;
-      } else if (node.type === 'folder' && Array.isArray(node.children)) {
-        walk(node.children);
-      }
-    }
+// ---------- 筛选快照：所有"命中数"的唯一来源 ----------
+// 筛选口径统一（design §13.1）：目录树计数「命中 / 总数」、首页筛选条「命中 n 篇」、
+// 待看（= 未读 ∩ 命中），以及之后的星图 HUD / 时间段，都读同一次 fileMatches() 的结果，
+// 数字才不会互相打架。render() 每次强制重算一次（一个渲染周期只算这一次），
+// 其余读取方按筛选条件 + 数据对象身份命中缓存，不再各自遍历。
+// 底栏 #stats 仍是全量「N 篇文档 · M 未读」，它的 N 就是各处「/总数」的分母。
+let filterSnap = null;
+function filterSnapshotKey() {
+  return [
+    state.search,
+    state.onlyUnread ? 1 : 0,
+    [...state.tagFilter].map(t => t.toLowerCase()).sort().join('\u0001'),
+    // 时间段：区间本身 + 重算版本（区间不变而命中集合变了——新事件 / 窗口滚动——也要失效）
+    state.timeRange ? `${state.timeRange.from}-${state.timeRange.to}-${state.timeRangeVer}` : '',
+  ].join('\u0002');
+}
+function filterSnapshot(force = false) {
+  const key = filterSnapshotKey();
+  if (!force && filterSnap && filterSnap.key === key
+      && filterSnap.files === state.files && filterSnap.contentMatches === state.contentMatches) {
+    return filterSnap;
+  }
+  const all = Object.values(state.files);
+  const active = hasActiveFilter();
+  const hits = new Set();
+  for (const f of all) {
+    if (!active || fileMatches(f)) hits.add(f.path);
+  }
+  filterSnap = {
+    key, files: state.files, contentMatches: state.contentMatches,
+    active, total: all.length, hits, size: hits.size,
   };
-  walk(roots);
-  return n;
+  return filterSnap;
+}
+
+// 筛选条件变化后的统一刷新：树、首页（待看 / 筛选条）、计数、两处 chip、排序按钮小字。
+// 首页 chip、侧栏菜单 chip、#tag-bar-clear、#tree-filter-note 的「清除」、仅未读、搜索都走这里
+function applyFilterChange() {
+  render();
+  renderTagBar();
+  updateStats();
+  renderHome();
+  updateSortLabel();
 }
 
 // 底栏一行说清三件事：一共扫到多少篇、其中多少未读、当前树里正显示多少篇。
 // 原来这行挤在 brand 下面（brand-sub），320px 侧栏里总是被截成「804 个文档 · 377 未…」。
+// 同时刷新所有读筛选快照的计数（树计数、首页筛选条命中数、树顶筛选提示）。
 function updateStats() {
   const total = Object.keys(state.files).length;
   const unread = Object.values(state.files).filter(f => f.unread).length;
@@ -809,16 +970,57 @@ function updateStats() {
       ? `已达收录上限：只纳入了约前 ${total.toLocaleString()} 篇（上限 ${(state.maxIndexFiles || 0).toLocaleString()}）。建议收窄扫描根或增加忽略项。`
       : `共 ${total} 篇文档，其中 ${unread} 篇未读`;
   }
+  const snap = filterSnapshot();
   if (els.treeCount) {
-    // 从数据模型算"当前树里显示多少篇"，不能再数 DOM 里的 .file——折叠分组懒渲染后
-    // 它们的文件行根本不在 DOM 里，数 DOM 会严重少算、把未筛选也显示成 "N/总数"。
-    // 未筛选时显示的就是全部；筛选时数据模型里通过筛选的文件数即命中数。
-    const shown = hasActiveFilter() ? countVisibleTreeFiles() : total;
-    els.treeCount.textContent = shown === total ? String(total) : `${shown}/${total}`;
-    els.treeCount.title = shown === total
-      ? `${total} 篇文档`
-      : `当前筛选命中 ${shown} 篇，共 ${total} 篇`;
+    // 从筛选快照取数，不能数 DOM 里的 .file——折叠分组懒渲染后它们的文件行根本不在 DOM 里。
+    // 未筛选时显示的就是全部；筛选时显示「命中 / 总数」（总数 = #stats 的 N）。
+    const shown = snap.active ? snap.size : total;
+    els.treeCount.textContent = snap.active ? `${shown}/${total}` : String(total);
+    els.treeCount.title = snap.active
+      ? `当前筛选命中 ${shown} 篇，共 ${total} 篇`
+      : `${total} 篇文档`;
   }
+  if (els.tagStripHits) {
+    if (snap.active) {
+      els.tagStripHits.dataset.hits = String(snap.size);
+      els.tagStripHits.innerHTML = `命中 <b>${snap.size}</b> 篇 · 目录树 / 待看 / 星图同步`;
+    } else {
+      delete els.tagStripHits.dataset.hits;
+      els.tagStripHits.textContent = '选中后同时筛选目录树、待看和星图';
+    }
+  }
+  updateTreeFilterNote();
+  updateTimeFilterChip();
+}
+
+// 树顶筛选提示：标签筛选 / 仅未读生效时说清"树被筛过了"，并给一个「清除」。
+// 搜索不在这里提示——搜索框本身就在树的正上方，内容一眼可见。
+function updateTreeFilterNote() {
+  const el = els.treeFilterNote;
+  if (!el) return;
+  const tags = [...state.tagFilter];
+  const parts = [];
+  if (tags.length) parts.push(`已按标签筛选：<b>${tags.map(escapeHtml).join('、')}</b>`);
+  if (state.onlyUnread) parts.push('仅看未读');
+  if (state.timeRange) parts.push(`时间段 <b>${escapeHtml(AtlasRiver.fmtRange(state.timeRange))}</b>`);
+  if (!parts.length) {
+    el.classList.add('hidden');
+    el.innerHTML = '';
+    return;
+  }
+  el.classList.remove('hidden');
+  el.innerHTML = `${ic(tags.length ? 'tag' : (state.onlyUnread ? 'mail-open' : 'clock'), 12)}`
+    + `<span class="tree-filter-note-text">${parts.join(' · ')}</span>`
+    + `<button type="button" class="tree-filter-note-clear" data-act="clear-filter" title="清除提示里列出的筛选（标签 / 仅未读 / 时间段）">清除</button>`;
+}
+// 清掉树顶提示里列出的筛选（标签 + 仅未读 + 时间段）。搜索不动：它有自己的清除方式（Esc / 清空输入框）
+function clearTreeFilters() {
+  if (!state.tagFilter.size && !state.onlyUnread && !state.timeRange) return;
+  state.tagFilter.clear();
+  state.onlyUnread = false;
+  if (els.onlyUnread) els.onlyUnread.checked = false;
+  if (state.timeRange) setTimeRange(null, { render: false });
+  applyFilterChange();
 }
 // ---------- 首页 ----------
 // 「AI 又改了哪些文档」是这个工具存在的理由，首页就直接答这个问题：
@@ -826,31 +1028,153 @@ function updateStats() {
 const HOME_LIST_MAX = 7;   // 最近 / 收藏 两条轨道各取前几条
 const HOME_FEED_MAX = 8;   // 首页封面墙一屏放几张
 
-// 路径 → 稳定色相（0–360）。djb2 哈希，够散、零依赖。同一输入永远同一色，
-// 于是封面和项目色点在整个界面里保持一致。
-function hashStr(s) {
-  let h = 5381;
-  const str = String(s || '');
-  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
-  return Math.abs(h);
+// ---------- 真实缩略图（design §3b） ----------
+// 服务端用本机 Chrome 系浏览器在后台、断网截图；这里只负责：按需请求、记状态、
+// 把 <img class="cover-thumb"> 插到 .cover-art 最底层（生成式封面保留为占位与降级）。
+// 当前生效的外观：钉死的主题，或跟随系统时的系统外观。缩略图的主题键只会是 light / dark
+function effectiveTheme() {
+  const t = forcedTheme();
+  if (t) return t;
+  try { return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+  catch { return 'light'; }
 }
-function hueFor(s) { return hashStr(s) % 360; }
+const THUMB_READY = new Set(['ready', 'stale']);
+const THUMBS_MAX_PER_REQUEST = 48;
+function thumbItem(path, theme = effectiveTheme()) {
+  return state.thumbs.items.get(theme + '|' + path);
+}
+function thumbUrlFor(path, theme = effectiveTheme()) {
+  const it = thumbItem(path, theme);
+  if (!it || !THUMB_READY.has(it.status) || !it.k) return null;
+  return '/api/thumb?path=' + encodeURIComponent(path) + '&theme=' + theme + '&k=' + it.k;
+}
+function coverThumbHtml(url) {
+  return `<img class="cover-thumb" src="${escapeHtml(url)}" alt="" loading="lazy" decoding="async">`;
+}
+// 「需要请求」= 没有条目 / 条目是 stale / 条目记下的 mtime 与当前不同。
+// ready / queued / failed / remote-deps / too-large 都不再问
+function thumbNeedsRequest(path, theme) {
+  const f = state.files[path];
+  if (!f) return false;
+  const it = thumbItem(path, theme);
+  if (!it) return true;
+  if (it.status === 'stale') return true;
+  return it.mtime !== f.mtime;
+}
+// 每个调用方（首页封面 / 快速查看）一份去重签名，互不覆盖
+const thumbReqSig = new Map();
+function requestThumbs(paths, slot = 'home') {
+  // 自动化环境闸门：与 View Transitions 同口径。thumbnail.spec 用 __atlasForceThumbs 打开
+  if (navigator.webdriver && !window.__atlasForceThumbs) return;
+  if (state.thumbs.available === false) return;
+  const theme = effectiveTheme();
+  const need = paths.filter(p => thumbNeedsRequest(p, theme)).slice(0, THUMBS_MAX_PER_REQUEST);
+  if (!need.length) { thumbReqSig.delete(slot); return; }
+  const sig = theme + '\n' + need.map(p => p + '@' + state.files[p].mtime).join('\n');
+  if (thumbReqSig.get(slot) === sig) return;
+  thumbReqSig.set(slot, sig);
+  const mtimes = new Map(need.map(p => [p, state.files[p].mtime]));
+  fetch('/api/thumbs', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ paths: need, theme }),
+  }).then(r => (r.ok ? r.json() : null)).then((data) => {
+    if (!data) return;
+    if (data.available === false) state.thumbs.available = false;
+    for (const [p, it] of Object.entries(data.items || {})) {
+      if (!it || it.status === 'invalid' || it.status === 'unavailable') continue;
+      state.thumbs.items.set(theme + '|' + p, { status: it.status, k: it.k || null, mtime: mtimes.get(p) });
+      if (theme === effectiveTheme()) {
+        updateCoverThumb(p);
+        if (window.AtlasPeek) AtlasPeek.onThumb(p);
+      }
+    }
+  }).catch(() => { thumbReqSig.delete(slot); });
+}
+// 首页可见封面里需要请求的那部分，renderHome() 之后防抖 300ms 发一次
+let thumbReqTimer = null;
+function scheduleThumbRequests() {
+  clearTimeout(thumbReqTimer);
+  thumbReqTimer = setTimeout(() => {
+    thumbReqTimer = null;
+    if (!els.homeGrid) return;
+    const paths = [...els.homeGrid.querySelectorAll('.cover-card[data-path]')].map(el => el.dataset.path);
+    requestThumbs(paths, 'home');
+  }, 300);
+}
+// 只更新这一张卡的 <img>，不重渲染首页、不 fetchState
+function updateCoverThumb(path) {
+  if (!els.homeGrid) return;
+  let card = null;
+  try { card = els.homeGrid.querySelector(`.cover-card[data-path="${CSS.escape(path)}"]`); } catch { return; }
+  const art = card && card.querySelector('.cover-art');
+  if (!art) return;
+  const url = thumbUrlFor(path);
+  const img = art.querySelector('img.cover-thumb');
+  if (!url) { if (img) img.remove(); return; }
+  if (img && img.getAttribute('src') === url) return;
+  if (img) img.remove();
+  art.insertAdjacentHTML('afterbegin', coverThumbHtml(url));
+}
+// 主题变了：可见封面按新主题换图 / 重新请求（签名里含主题，会真的发出去）
+function refreshThumbsForTheme() {
+  if (!els.homeGrid) return;
+  els.homeGrid.querySelectorAll('.cover-card[data-path]').forEach(el => updateCoverThumb(el.dataset.path));
+  scheduleThumbRequests();
+}
+// SSE channel:'thumb'：完成 / 最终失败 / 被挤出队列
+function onThumbReady(data) {
+  if (!data || !data.path || (data.theme !== 'light' && data.theme !== 'dark')) return;
+  const key = data.theme + '|' + data.path;
+  if (data.status === 'dropped') {
+    // 回到"从未请求过"：下次出现在可见封面 / 快速查看里时会重新请求
+    state.thumbs.items.delete(key);
+    return;
+  }
+  const prev = state.thumbs.items.get(key);
+  const f = state.files[data.path];
+  state.thumbs.items.set(key, {
+    status: data.status,
+    k: data.k || null,
+    mtime: prev ? prev.mtime : (f ? f.mtime : 0),
+  });
+  if (data.theme === effectiveTheme()) {
+    updateCoverThumb(data.path);
+    if (window.AtlasPeek) AtlasPeek.onThumb(data.path);
+  }
+}
+// <img> 的 load / error 不冒泡，用 capture 在 document 上统一接
+document.addEventListener('load', (e) => {
+  const t = e.target;
+  if (t && t.classList && t.classList.contains('cover-thumb')) t.classList.add('loaded');
+}, true);
+document.addEventListener('error', (e) => {
+  const t = e.target;
+  if (t && t.classList && t.classList.contains('cover-thumb')) t.remove();
+}, true);
+// 设置 → 外观「封面」一行的状态说明
+function renderThumbsSetting() {
+  const el = document.getElementById('thumbs-status');
+  if (!el) return;
+  const t = state.thumbs;
+  if (t.available) el.textContent = `使用本机 ${t.browser || '浏览器'} 生成真实缩略图`;
+  else if (t.reason === 'disabled') el.textContent = '已用 ATLAS_THUMBS=off 关闭真实缩略图，使用生成式封面';
+  else if (t.reason === 'circuit-open') el.textContent = `暂时无法启动 ${t.browser || '浏览器'}，使用生成式封面（10 分钟后重试）`;
+  else if (t.available === false) el.textContent = '未找到 Chrome、Edge 等浏览器，使用生成式封面';
+  else el.textContent = '正在检测本机浏览器…';
+}
 
-// 生成式封面卡：不截图，用"项目名 → 色相"哈希出的渐变 + 类型字形水印。
-// 用项目名而不是完整路径做色相——同一项目的文档共享一个色系，扫一眼按颜色成堆。
-// S/L 交给 CSS 的 --cover-* 令牌（按主题两套），这里只把 --h 传下去。
+// 封面卡（缩略图还没生成时的兜底）：单色——--bg-elev-2 底 + --text-faint 类型字形。
+// 配色收敛（design §10.8）：全界面只有一个品牌强调色，封面不再按项目名哈希色相。
 function coverCard(file, i = 0) {
   const name = file.alias || stripDocExt(file.name);
-  // 基色相来自项目名（同项目同色系），再按文件路径叠 ±15° 微扰——
-  // 一屏全是同一个项目时不至于死板，但依然明显是一个色族。
-  const base = hueFor(file.projectName || file.path);
-  const jitter = (hashStr(file.path) % 30) - 15;
-  const h = (base + jitter + 360) % 360;
   const fresh = isFreshUnread(file);
+  const thumb = thumbUrlFor(file.path);
   return `
-    <button class="cover-card" type="button" style="--h:${h};--i:${i}"
-            data-path="${escapeHtml(file.path)}" title="${escapeHtml(file.relPath)}">
+    <button class="cover-card${isJustChanged(file.path) ? ' just-changed' : ''}" type="button" style="--i:${i}"
+            data-path="${escapeHtml(file.path)}" data-doctype="${docTypeOf(file)}" title="${escapeHtml(file.relPath)}">
       <span class="cover-art" aria-hidden="true">
+        ${thumb ? coverThumbHtml(thumb) : ''}
         <span class="cover-glyph">${docTypeIcon(file, 30)}</span>
         <span class="cover-badge">${docTypeBadge(file)}</span>
         ${fresh ? '<span class="cover-fresh"></span>' : ''}
@@ -864,24 +1188,6 @@ function coverCard(file, i = 0) {
         </span>
       </span>
     </button>`;
-}
-
-// 活动脉冲：过去 24h 每小时的改动数做成小竖条（最近的在右侧）。
-function homePulseHtml(all) {
-  const now = Date.now();
-  const H = 24, HOUR = 3_600_000;
-  const buckets = new Array(H).fill(0);
-  for (const f of all) {
-    const age = now - (f.mtime || 0);
-    if (age < 0 || age >= H * HOUR) continue;
-    const idx = H - 1 - Math.floor(age / HOUR);
-    if (idx >= 0 && idx < H) buckets[idx]++;
-  }
-  const max = Math.max(1, ...buckets);
-  return buckets.map((c, i) => {
-    const pct = Math.max(8, Math.round((c / max) * 100));
-    return `<span class="home-pulse-bar${c > 0 ? ' on' : ''}" style="height:${pct}%;--i:${i}" title="${c} 篇改动"></span>`;
-  }).join('');
 }
 
 // 单行（最近 / 收藏 轨道复用）
@@ -901,25 +1207,83 @@ function homeRow(file) {
 
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
+// 眉标「今日 · 周X」与旁边的 HH:mm 时钟一起刷新：挂在 60 秒轮询与回前台时，
+// 跨过午夜不刷新页面也会翻到新的一天
+function updateHomeClock() {
+  const d = new Date();
+  if (els.homeEyebrow) els.homeEyebrow.textContent = `今日 · ${WEEKDAYS[d.getDay()]}`;
+  if (els.homeClock) {
+    els.homeClock.textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+}
+
+// 英雄区右栏竖排读数。「近 7 天改动」= 时间河流 7 天内的计数事件总数（日志事件 + mtime 兜底），
+// 与河流卡片头、#home-river-sum 共用同一次 riverTotals()；活动日志不可用时三处都按 mtime 兜底，
+// 这一格带「仅修改时间」小标签
+function homeReadoutsHtml({ total, projects, unread, week, weekFallback }) {
+  const row = (k, v, extra = '', cls = '') =>
+    `<div class="home-readout${cls}" role="listitem"><span class="home-readout-k">${k}${extra}</span><span class="home-readout-v">${v.toLocaleString()}</span></div>`;
+  return row('文档', total)
+    + row('项目', projects)
+    + row('未读', unread, '', unread ? ' is-unread' : '')
+    + row('近 7 天改动', week, weekFallback
+      ? '<span class="home-readout-tag" title="活动日志暂不可用，按每篇文档的修改时间推断">仅修改时间</span>' : '', ' is-signal');
+}
+
+// 首页底部两条轨道（最近打开 / 收藏）。renderRecent / renderFavorites 也走这里：
+// 侧栏的收藏 / 最近块移除后（design §11.B1），这两份数据只在首页轨道与 ⌘K 空状态里出现
+function renderHomeRails() {
+  if (!els.homeRecent) return;
+  if (!Object.keys(state.files).length) {
+    els.homeRecent.innerHTML = '';
+    if (els.homeRecentClear) els.homeRecentClear.classList.add('hidden');
+    if (els.homeFavRail) els.homeFavRail.classList.add('hidden');
+    return;
+  }
+  // 最近打开
+  const recentAll = (state.recent || []).filter(p => state.files[p]);
+  const recent = recentAll.slice(0, HOME_LIST_MAX);
+  if (els.homeRecentClear) els.homeRecentClear.classList.toggle('hidden', recentAll.length === 0);
+  els.homeRecent.innerHTML = recent.length
+    ? recent.map(p => homeRow(state.files[p])).join('')
+    : homeEmpty({
+        icon: 'clock',
+        title: '还没有浏览记录',
+        hint: '打开过的文档会集中在这里',
+        action: { label: '快速打开', icon: 'search', kbd: '⌘K', attr: 'data-open-quickopen' },
+      });
+
+  // 收藏（没有收藏就整条轨道不出现，不占版面）
+  const favs = (state.favorites || []).filter(p => state.files[p]).slice(0, HOME_LIST_MAX);
+  if (els.homeFavRail) els.homeFavRail.classList.toggle('hidden', favs.length === 0);
+  if (els.homeFav) els.homeFav.innerHTML = favs.length ? favs.map(p => homeRow(state.files[p])).join('') : '';
+}
+
 function renderHome() {
   if (!els.homeGrid) return;
   const all = Object.values(state.files);
   const total = all.length;
 
-  if (els.homeEyebrow) els.homeEyebrow.textContent = `今日 · ${WEEKDAYS[new Date().getDay()]}`;
+  updateHomeClock();
 
   if (total === 0) {
     els.homeHeroLine.textContent = '还没有文档';
     els.homeSub.textContent = '到 ⚙ 设置里加一个扫描根目录，Atlas 就会把里面的 HTML / Markdown 都收进来。';
     if (els.homeChips) els.homeChips.innerHTML = '';
-    if (els.homePulse) els.homePulse.innerHTML = '';
+    if (els.homeReadouts) {
+      els.homeReadouts.innerHTML = homeReadoutsHtml({
+        total: 0, projects: 0, unread: 0, week: 0, weekFallback: riverState.failed,
+      });
+    }
+    renderRiverCard();
+    setFeedTimeMode(false);
     els.homeFeedCount.textContent = '';
     if (els.homeFeedHint) els.homeFeedHint.textContent = '';
     els.homeGrid.innerHTML = homeEmpty({
       icon: 'search', title: '空空如也', hint: '添加扫描根目录后，文档会出现在这里',
     });
-    els.homeRecent.innerHTML = '';
-    if (els.homeFavRail) els.homeFavRail.classList.add('hidden');
+    renderHomeRails();
+    renderMinimap();
     return;
   }
 
@@ -934,7 +1298,7 @@ function renderHome() {
     els.homeHeroLine.innerHTML = `今天 AI 改了 <span class="n">${fresh.length}</span> 篇文档`;
     els.homeSub.textContent = unread.length > fresh.length
       ? `另有 ${unread.length - fresh.length} 篇更早的还没看`
-      : '点开封面即可查看，看完自动清除红点';
+      : '点开封面即可查看，看完自动清除未读标记';
   } else if (unread.length) {
     els.homeHeroLine.innerHTML = `还有 <span class="n">${unread.length}</span> 篇待看`;
     els.homeSub.textContent = '今天没有新变动，慢慢看';
@@ -952,16 +1316,52 @@ function renderHome() {
     ].map(c => `<span class="home-chip"><b>${c.v}</b>${c.k}</span>`).join('');
   }
 
-  // 活动脉冲
-  if (els.homePulse) els.homePulse.innerHTML = homePulseHtml(all);
+  // 竖排读数（文档 / 项目 / 未读 / 近 7 天改动）：全量口径，不随筛选变化。
+  // 「近 7 天改动」与河流卡片同一次 riverTotals()
+  const river = ensureRiverModel();
+  if (els.homeReadouts) {
+    els.homeReadouts.innerHTML = homeReadoutsHtml({
+      total, projects: projects.size, unread: unread.length,
+      week: river.totals.total, weekFallback: riverState.failed,
+    });
+  }
+  renderRiverCard();
 
-  // 待看：封面图卡墙
-  els.homeFeedCount.textContent = unread.length ? unread.length : '';
-  if (unread.length) {
+  // 封面墙：有时间段筛选时切成「该时段改动的文档」，否则是待看（未读）
+  const snap = filterSnapshot();
+  if (state.timeRange) renderHomeTimeFeed(snap);
+  else renderHomeUnreadFeed(snap, unread);
+
+  renderHomeRails();
+  renderMinimap();
+  // 从缓存里同步出来的 <img> 可能在监听前就已加载完
+  els.homeGrid.querySelectorAll('img.cover-thumb').forEach((img) => {
+    if (img.complete && img.naturalWidth) img.classList.add('loaded');
+  });
+  scheduleThumbRequests();
+}
+// 待看：封面图卡墙。有筛选时 = 未读 ∩ 筛选命中（与目录树同一次 filterSnapshot），
+// 计数后注明按什么筛的；无筛选时与过去完全一致
+function renderHomeUnreadFeed(snap, unread) {
+  setFeedTimeMode(false);
+  const feed = snap.active ? unread.filter(f => snap.hits.has(f.path)) : unread;
+  const why = [];
+  if (snap.active) {
+    if (state.tagFilter.size) why.push(`已按标签「${[...state.tagFilter].join('、')}」筛选`);
+    if (state.search) why.push(`已按搜索「${state.search}」筛选`);
+  }
+  els.homeFeedCount.textContent = (feed.length || snap.active ? String(feed.length) : '')
+    + (why.length ? ' · ' + why.join(' · ') : '');
+  if (feed.length) {
     if (els.homeFeedHint) {
-      els.homeFeedHint.textContent = unread.length > HOME_FEED_MAX ? '在左侧勾选「仅未读」看全部' : '';
+      els.homeFeedHint.textContent = feed.length > HOME_FEED_MAX ? '在侧栏排序菜单里勾选「仅未读」看全部' : '';
     }
-    els.homeGrid.innerHTML = unread.slice(0, HOME_FEED_MAX).map((f, i) => coverCard(f, i)).join('');
+    els.homeGrid.innerHTML = feed.slice(0, HOME_FEED_MAX).map((f, i) => coverCard(f, i)).join('');
+  } else if (snap.active && unread.length) {
+    if (els.homeFeedHint) els.homeFeedHint.textContent = '';
+    els.homeGrid.innerHTML = homeEmpty({
+      icon: 'search', title: '当前筛选下没有未读文档', hint: '清除筛选后可以看到全部待看',
+    });
   } else {
     if (els.homeFeedHint) els.homeFeedHint.textContent = '';
     els.homeGrid.innerHTML = `<div class="home-cheer">
@@ -970,22 +1370,6 @@ function renderHome() {
       <span class="home-cheer-hint">没有未读文档，AI 一更新就会回到这里</span>
     </div>`;
   }
-
-  // 最近打开
-  const recent = (state.recent || []).filter(p => state.files[p]).slice(0, HOME_LIST_MAX);
-  els.homeRecent.innerHTML = recent.length
-    ? recent.map(p => homeRow(state.files[p])).join('')
-    : homeEmpty({
-        icon: 'clock',
-        title: '还没有浏览记录',
-        hint: '打开过的文档会集中在这里',
-        action: { label: '快速打开', icon: 'search', kbd: '⌘K', attr: 'data-open-quickopen' },
-      });
-
-  // 收藏（没有收藏就整条轨道不出现，不占版面）
-  const favs = (state.favorites || []).filter(p => state.files[p]).slice(0, HOME_LIST_MAX);
-  if (els.homeFavRail) els.homeFavRail.classList.toggle('hidden', favs.length === 0);
-  if (favs.length) els.homeFav.innerHTML = favs.map(p => homeRow(state.files[p])).join('');
 }
 // 首页卡片的空状态。
 // 三件套：图标 + 一句"这里为什么是空的" + 一个能立刻做点什么的按钮。
@@ -1012,23 +1396,120 @@ document.addEventListener('click', (e) => {
   if (row && row.dataset.path) openFile(row.dataset.path);
 });
 
-// 首页 ↔ 文档 的柔和交叉淡入。只包外壳容器的 DOM 变更，iframe 内部不参与。
-// 浏览器不支持 View Transitions（或用户开了 reduce-motion）就直接执行，逻辑不变。
-function withViewTransition(fn) {
-  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (typeof document.startViewTransition === 'function' && !reduce) {
-    try { document.startViewTransition(fn); return; } catch { /* 降级到直接执行 */ }
+// ---------- View Transitions：页面级切换的唯一入口 ----------
+// 整个仓库只有这里调 document.startViewTransition。kind 决定 CSS 走哪套场景规则
+// （styles.css「运动需授权」段，按 :root[data-vt] / [data-vt-dir] 分场景）：
+//   'home' —— 回首页 / 从首页进文档：整体交叉淡入
+//   'tab'  —— 切标签：只有 .preview 做方向性滑移（dir: 'fwd' | 'back'）
+//   'view' —— 首页封面墙 ↔ 星图：只作用于主区
+// 降级规则（命中任一条就直接同步执行 fn，DOM 结果完全一致，只是没有过渡）：
+//   1. 浏览器没有 startViewTransition
+//   2. reduced-motion（系统偏好或设置里的「界面动效：减少」）
+//   3. 上一次过渡还没结束、或距上次调用 < 150ms（连切时一张张慢慢滑只会拖手）——
+//      顺手 skipTransition() 掉进行中的那次
+//   4. 拖拽中 / 行内编辑中 / 编辑器打开：快照期间 DOM 冻结一帧，会打乱 Sortable 落点与光标
+//   5. startViewTransition 抛错
+//   6. 自动化环境（navigator.webdriver，Playwright 即如此）且未设 window.__atlasForceVT：
+//      VT 的更新回调是异步的，大量 spec "点完立刻读 DOM" 的写法依赖同步时序
+// 被后一次切换取代的回调不再执行（"最后一次切换为准"）：skipTransition 后浏览器
+// 仍会异步调用旧回调，若照常执行会把状态拨回上一个 Tab。
+const VT_MIN_GAP_MS = 150;
+let vtActive = null;     // 进行中的 ViewTransition
+let vtLastAt = -Infinity;
+let vtSeq = 0;           // 每次切换 +1，回调执行前比对，过期的不执行
+function withViewTransition(fn, kind = 'home', dir) {
+  const now = performance.now();
+  const tooSoon = now - vtLastAt < VT_MIN_GAP_MS;
+  vtLastAt = now;
+  const seq = ++vtSeq;
+  const root = document.documentElement;
+  const direct = () => {
+    if (vtActive) { try { vtActive.skipTransition(); } catch {} }
+    fn();
+  };
+  if (typeof document.startViewTransition !== 'function') return direct();
+  if (prefersReducedMotion()) return direct();
+  if (navigator.webdriver === true && !window.__atlasForceVT) return direct();
+  if (vtActive || tooSoon) return direct();
+  if (isDragging || isInlineEditing() || editState.active) return direct();
+
+  root.dataset.vt = kind;
+  if (dir) root.dataset.vtDir = dir; else delete root.dataset.vtDir;
+  let t;
+  try {
+    t = document.startViewTransition(() => { if (seq === vtSeq) fn(); });
+  } catch {
+    delete root.dataset.vt; delete root.dataset.vtDir;
+    fn();
+    return;
   }
-  fn();
+  vtActive = t;
+  // 被 skip 时 ready / updateCallbackDone 会 reject，吞掉，免得刷屏 unhandled rejection
+  if (t.ready) t.ready.catch(() => {});
+  if (t.updateCallbackDone) t.updateCallbackDone.catch((e) => console.error(e));
+  const done = () => {
+    if (vtActive === t) vtActive = null;
+    // 之后没有新的过渡接手时才清属性（新过渡已经写了自己的 kind）
+    if (!vtActive) { delete root.dataset.vt; delete root.dataset.vtDir; }
+  };
+  t.finished.then(done, done);
 }
 
 // ---------- 工具 ----------
-// 「新鲜的未读」= 24h 内被改动过。侧栏文件行的红点与粗体、分组红点、
+// 「新鲜的未读」= 24h 内被改动过。侧栏文件行的未读点与粗体、分组未读点、
 // 首页 KPI 的「今天改过」和待看队列里的点，全部共用这一个窗口——
-// 只有稀缺的红色才是警报，几百个常亮红点等于没有信号。
+// 只有稀缺的红色才是警报，几百个常亮未读点等于没有信号。
 function isFreshUnread(file) {
   const FRESH_WINDOW_MS = 86_400_000;
   return !!(file && file.unread && (Date.now() - (file.mtime || 0)) < FRESH_WINDOW_MS);
+}
+
+// ---------- 「AI 刚改过」：state.justChanged ----------
+// SSE 收到非 Atlas 自写的 add / change 时登记；JUST_CHANGED_MS 内侧栏行与首页封面带
+// .just-changed（只追加类名，不改结构）。到期清理用一个共享 setTimeout，按最早到期时刻排程。
+function isJustChanged(p) {
+  const t = state.justChanged.get(p);
+  return t != null && Date.now() - t < JUST_CHANGED_MS;
+}
+// 同一路径的侧栏行 / 封面卡（目录视图与分组视图里各自只有一行；首页可能同时在两处出现）
+function justChangedEls(p) {
+  const sel = `.file[data-path="${CSS.escape(p)}"], .cover-card[data-path="${CSS.escape(p)}"]`;
+  return document.querySelectorAll(sel);
+}
+let justChangedTimer = null;
+function scheduleJustChangedSweep() {
+  if (justChangedTimer) { clearTimeout(justChangedTimer); justChangedTimer = null; }
+  if (!state.justChanged.size) return;
+  const earliest = Math.min(...state.justChanged.values());
+  const wait = Math.max(0, earliest + JUST_CHANGED_MS - Date.now()) + 20;
+  justChangedTimer = setTimeout(() => {
+    justChangedTimer = null;
+    const now = Date.now();
+    for (const [p, t] of [...state.justChanged]) {
+      if (now - t < JUST_CHANGED_MS) continue;
+      state.justChanged.delete(p);
+      jcVersion++;
+      // 只重渲染受影响的行：摘掉类名即可，不必整树重建
+      justChangedEls(p).forEach(el => el.classList.remove('just-changed'));
+    }
+    if (starmapVisible()) refreshStarmap();
+    scheduleJustChangedSweep();
+  }, wait);
+}
+// 刚变更集合的版本号：星图据此判断要不要把 flags 重新推一遍
+let jcVersion = 0;
+function markJustChanged(p) {
+  if (!p) return;
+  state.justChanged.set(p, Date.now());
+  jcVersion++;
+  // 已在屏上的行立刻挂上（随后 fetchState 的整树重建也会按 state.justChanged 带上）。
+  // 先摘再挂，让同一行 90 秒内第二次被改时轻闪重新开始
+  justChangedEls(p).forEach(el => {
+    el.classList.remove('just-changed');
+    void el.offsetWidth;
+    el.classList.add('just-changed');
+  });
+  scheduleJustChangedSweep();
 }
 function fmtMtime(ts) {
   if (!ts) return '';
@@ -1135,6 +1616,14 @@ async function fetchState() {
     state.archivedProjects = Array.isArray(data.archivedProjects) ? data.archivedProjects : [];
     state.trusted = new Set(Array.isArray(data.trusted) ? data.trusted : []);
     state.trustAllHtml = !!data.trustAllHtml;
+    // 缩略图能力：一旦为 false，本会话不再请求（不是错误，是环境能力差异）
+    {
+      const t = data.thumbs || { available: false };
+      if (state.thumbs.available !== false) state.thumbs.available = !!t.available;
+      state.thumbs.browser = t.browser || null;
+      state.thumbs.reason = t.reason || null;
+    }
+    renderThumbsSetting();
     // 索引护栏：撞到收录上限时，底栏常驻一个「已达上限」标记（见 updateStats），
     // 本会话首次出现再额外弹一次 toast 说清原因与建议。
     state.indexTruncated = !!data.indexTruncated;
@@ -1165,7 +1654,15 @@ async function fetchState() {
     restoreTabs();
     // 数据无变化则跳过所有重渲染（大树下这是持续掉帧的主因）。首次(lastStateSig
     // 曾为 null，unchanged=false)与每次真实变化都照常重建。
-    if (!unchanged) {
+    // 时间段筛选（FEAT-005）：文件变了或 60 秒那一拍跨了整点 → 在渲染之前重算一次，
+    // 之后只渲染一次（design-review NIT 1）
+    const needRecompute = (!unchanged && !!state.timeRange) || pendingHourRecompute;
+    if (needRecompute) {
+      pendingHourRecompute = false;
+      recomputeTimeRange({ render: false });
+    }
+    stateLoaded = true;
+    if (!unchanged || needRecompute) {
       renderTagBar();
       render();
       renderRecent();
@@ -1180,10 +1677,16 @@ async function fetchState() {
       if (f && f.mtime !== diffState.mtime) loadDiff();
     }
   } catch (e) {
-    // 被后来的请求主动取代：不是故障，静默退场（重试由接替者负责）
+    // 被后来的请求主动取代：不是故障，静默退场（重试由接替者负责；
+    // pendingHourRecompute 留给接替的那次请求）
     if (ctrl.superseded) return;
     console.error(e);
     setSaveStatus('error');
+    // 拉取失败但这一拍跨了整点：时间段照样按现有数据重算（单独一次）
+    if (pendingHourRecompute) {
+      pendingHourRecompute = false;
+      recomputeTimeRange();
+    }
     stateFailed = true;
     // 作废渲染签名：错误态下 stats 被改成了"加载超时…"，并未正常渲染。若不作废，
     // 重试成功时数据可能与失败前一致(unchanged=true)从而跳过重渲染，stats 会停在
@@ -1276,10 +1779,12 @@ function matchesTagFilter(file) {
 // 是否存在任何"会让部分文件从树里消失"的筛选。render / renderFolder 都要用它做守卫：
 // 没有任何筛选时直接跳过 nodeMatches，几百篇文档下省掉一次全树递归
 function hasActiveFilter() {
-  return !!state.search || state.onlyUnread || state.tagFilter.size > 0;
+  return !!state.search || state.onlyUnread || state.tagFilter.size > 0 || !!state.timeRange;
 }
 
 function fileMatches(file) {
+  // 时间河流的时间段：区间内有计数事件的文档（state.timeRangePaths 由 recomputeTimeRange 预先算好）
+  if (state.timeRange && !state.timeRangePaths.has(file.path)) return false;
   if (state.onlyUnread && !file.unread) return false;
   if (!matchesTagFilter(file)) return false;
   if (!state.search) return true;
@@ -1310,7 +1815,7 @@ function countDescendants(node) {
   if (node.type === 'file') {
     const f = state.files[node.path];
     const unread = f && f.unread ? 1 : 0;
-    // 分组红点靠 fresh 决定用饱和红还是灰（见 .folder-unread-dot.stale）：
+    // 分组未读点靠 fresh 决定用饱和红还是灰（见 .folder-unread-dot.stale）：
     // 一个分组里全是几个月前的旧未读时，它不该和"AI 刚刚动过这里"长得一样。
     return { files: 1, unread, fresh: isFreshUnread(f) ? 1 : 0 };
   }
@@ -1381,7 +1886,7 @@ function buildDirTree() {
 // 当前视图要渲染的顶层节点：目录视图用即时构建的目录树（并缓存到 state.dirTree），
 // 分组视图用持久化的 store.tree
 function currentTreeData() {
-  if (state.viewMode === 'tree') {
+  if (listViewMode() === 'tree') {
     state.dirTree = buildDirTree();
     return state.dirTree;
   }
@@ -1421,11 +1926,13 @@ function render() {
   // 另外 destroySortables 兜底清扫可能已被孤立的克隆（见 sweepDragArtifacts）。
   if (isDragging) { renderSkippedDuringDrag = true; return; }
   renderSkippedDuringDrag = false;
+  // 一个渲染周期只算一次筛选命中集合：树计数、首页筛选条、待看都读这一份
+  filterSnapshot(true);
   bindTreeIconHydration();   // 幂等，只在首次真正绑定
   els.tree.innerHTML = '';
   // 目录视图（只读、无拖拽）给树容器打标：CSS 据此对 .folder 加 layout containment，
   // 让展开 / 折叠时下方兄弟节点只需整体平移、不必深度重排。分组视图不加（拖拽依赖正常布局）。
-  els.tree.classList.toggle('tree-view-mode', state.viewMode === 'tree');
+  els.tree.classList.toggle('tree-view-mode', listViewMode() === 'tree');
   const filtering = hasActiveFilter();
   const nodes = currentTreeData();
   for (const node of nodes) {
@@ -1435,60 +1942,48 @@ function render() {
     els.tree.appendChild(renderNode(node));
   }
   // 拖拽重排只对虚拟分组有意义；目录视图是磁盘的只读镜像，不挂 Sortable。
-  if (state.viewMode === 'tree') destroySortables();
+  if (listViewMode() === 'tree') destroySortables();
   else initSortables();
   updateCollapseAllBtn();
+  scheduleStuckHeader();
   if (state.activeFilePath && state.files[state.activeFilePath]) {
     setActiveFile(state.activeFilePath, false);
   }
+  // 树刚按新快照重建：计数（树头 / 首页筛选条 / 树顶提示）同步刷新，免得各处数字不一致
+  updateStats();
+  // 星图（可见时）跟着同一次筛选快照刷新：命中编码、HUD、星表、筛选状态条
+  if (starmapVisible()) refreshStarmap();
+  // 快速查看的触发行被换掉了：键盘模式下重新定位到同一路径的新行，否则关闭
+  if (window.AtlasPeek) AtlasPeek.reanchor();
 }
 
+// ⌘K 开着且输入为空时，它的「最近打开 / 收藏」分段读的是同一份数据，跟着重画
+function refreshQuickOpenIfEmpty() {
+  if (qoEntry && qoEls.input && !qoEls.input.value.trim()) {
+    const keep = qoActive;
+    qoRender();
+    if (keep) qoSetActive(Math.min(keep, qoResults.length - 1));
+  }
+}
+
+// 最近打开：侧栏的「最近」块已移除（design §11.B1），数据只在首页轨道与 ⌘K 空状态里出现。
+// 函数名与调用点保留（openFile / goHome / fetchState 都在调），只换挂载点。
 function renderRecent() {
-  const list = state.recent || [];
-  // 过滤掉磁盘上已不存在的（state.files 里没有）
-  const usable = list.filter(p => !!state.files[p]);
-  if (usable.length === 0) {
-    els.recentBar.classList.add('hidden');
-    // 连节点一起清掉，不只是把父容器藏起来：清除记录之后 DOM 里还躺着一串
-    // .recent-item，"已清除"就只是视觉上的（下次有记录时 render 会重建，
-    // 所以清空没有额外成本）
-    els.recentList.innerHTML = '';
-    return;
-  }
-  els.recentBar.classList.remove('hidden');
-  els.recentBar.classList.toggle('collapsed', state.recentCollapsed);
-  if (els.recentCount) els.recentCount.textContent = usable.length;
-  if (els.recentToggle) els.recentToggle.setAttribute('aria-expanded', state.recentCollapsed ? 'false' : 'true');
-  els.recentList.innerHTML = '';
-  for (const p of usable) {
-    const file = state.files[p];
-    const div = document.createElement('div');
-    div.className = 'recent-item'
-      + (file.unread ? ' unread' : '')
-      + (file.alias ? ' has-alias' : '')
-      + (p === state.activeFilePath ? ' active' : '');
-    div.dataset.path = p;
-    div.title = file.alias ? `${file.alias}\n${file.relPath}` : file.relPath;
-    div.innerHTML = `
-      <span class="recent-icon">${docTypeIcon(file, 12)}</span>
-      <span class="recent-name">${escapeHtml(file.alias || stripDocExt(file.name))}</span>
-      <span class="recent-project">${escapeHtml(file.projectName)}</span>
-    `;
-    div.addEventListener('click', () => openFile(p));
-    els.recentList.appendChild(div);
-  }
+  renderHomeRails();
+  refreshQuickOpenIfEmpty();
 }
 
 // 清除最近浏览记录。只清 store.recent 这一份列表——已读状态、收藏、标签都不动：
-// 用户点这个按钮想的是"别让侧栏一直摆着我看过什么"，不是"把阅读状态重置"。
+// 用户点这个按钮想的是"别让列表一直摆着我看过什么"，不是"把阅读状态重置"。
 // 先本地清、再打后端，失败就把列表原样放回去（这是个不可撤销的动作，
 // 一次没成功却看着像成功了，比慢半拍难受得多）。
+// 入口两个：⌘K 空状态「最近打开」段头的 #recent-clear、首页轨道头的 #home-recent-clear。
 async function clearRecent() {
   const count = (state.recent || []).filter(p => !!state.files[p]).length;
   if (count === 0) return;
   const ok = await showConfirm({
     title: '清除最近浏览记录？',
-    body: `列表里的 ${count} 条记录会被清空，无法恢复。\n文档本身、未读红点和收藏都不受影响。`,
+    body: `列表里的 ${count} 条记录会被清空，无法恢复。\n文档本身、未读标记和收藏都不受影响。`,
     confirmText: '清除',
     danger: true,
   });
@@ -1497,6 +1992,8 @@ async function clearRecent() {
   state.recent = [];
   renderRecent();
   renderHome();   // 首页那张「最近打开」卡片同一份数据，得一起变
+  // 从 ⌘K 段头点的「清除」：按钮随重画消失了，焦点还回输入框，面板继续可用
+  if (qoEntry && qoEls.input) qoEls.input.focus();
   try {
     const r = await fetch('/api/recent/clear', { method: 'POST' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -1510,106 +2007,60 @@ async function clearRecent() {
 }
 
 // ---------- 收藏夹 ----------
-// 跨文件夹的平铺列表：收藏的意义就是把散落在各个分组里的常看文档聚到一处，
-// 所以这里刻意不体现目录结构，只给「文档名 + 所属项目」。
-//
-// 和 recent-item 一样用普通 click：SortableJS 只挂在 #tree 和 .folder-children 上，
-// 这个列表在 tree 外面，不会被 forceFallback 吞掉 click。
+// 跨文件夹的平铺列表：收藏的意义就是把散落在各个分组里的常看文档聚到一处。
+// 侧栏收藏块已移除（design §11.B1），改由首页「收藏」轨道 + ⌘K 空状态「收藏」段提供；
+// 当前文档用顶栏星标 #btn-favorite。函数名保留，数据逻辑不变（服务端已按收藏时间倒序）。
 function renderFavorites() {
-  if (!els.favBar) return;
-  // 服务端已按收藏时间倒序，这里只过滤掉已经不在 state.files 里的
-  const usable = (state.favorites || []).filter(p => !!state.files[p]);
-  if (usable.length === 0) {
-    els.favBar.classList.add('hidden');
-    els.favList.innerHTML = '';
-    return;
-  }
-  els.favBar.classList.remove('hidden');
-  els.favBar.classList.toggle('collapsed', state.favCollapsed);
-  if (els.favCount) els.favCount.textContent = usable.length;
-  if (els.favToggle) els.favToggle.setAttribute('aria-expanded', state.favCollapsed ? 'false' : 'true');
-  els.favList.innerHTML = '';
-  for (const p of usable) {
-    const file = state.files[p];
-    const div = document.createElement('div');
-    div.className = 'fav-item'
-      + (file.unread ? ' unread' : '')
-      + (file.alias ? ' has-alias' : '')
-      + (p === state.activeFilePath ? ' active' : '');
-    div.dataset.path = p;
-    div.title = file.alias ? `${file.alias}\n${file.relPath}` : file.relPath;
-    div.innerHTML = `
-      <span class="fav-icon">${docTypeIcon(file, 12)}</span>
-      <span class="fav-name">${escapeHtml(file.alias || stripDocExt(file.name))}</span>
-      <span class="fav-project">${escapeHtml(file.projectName)}</span>
-      <button class="fav-remove" type="button" title="取消收藏" aria-label="取消收藏「${escapeHtml(file.alias || stripDocExt(file.name))}」">${ic('x', 11)}</button>
-    `;
-    div.addEventListener('click', (e) => {
-      if (e.target.closest('.fav-remove')) return;   // 由下面的按钮自己处理
-      openFile(p);
-    });
-    div.querySelector('.fav-remove').addEventListener('click', (e) => {
-      e.stopPropagation();
-      setFavorite(p, false);
-    });
-    els.favList.appendChild(div);
-  }
+  renderHomeRails();
+  refreshQuickOpenIfEmpty();
 }
 
-// ---------- 标签筛选区 ----------
-// 只在真的有标签时出现，避免给没用过这功能的用户凭空多一块界面。
+// ---------- 标签筛选 chip ----------
+// 同一份 chip 渲染进两处：首页顶部筛选条 #tag-bar、侧栏排序菜单的 #sort-menu-tags。
+// 两处与 #tag-bar-clear、树顶 #tree-filter-note 的「清除」读写同一个 state.tagFilter。
+// 没有任何标签时首页筛选条整条隐藏、菜单里那一段也隐藏。
+function tagChipEl({ name, count }, on) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'tag-chip' + (on ? ' on' : '');
+  // aria-pressed 而不是 aria-checked：这是一组可独立开关的过滤开关，不是单选项
+  btn.setAttribute('aria-pressed', String(on));
+  btn.dataset.tag = name;
+  btn.title = on ? `取消筛选「${name}」` : `只看带「${name}」标签的文档（多选为「同时具备」）`;
+  btn.innerHTML = `<span class="tag-chip-name"></span><span class="tag-chip-count">${count}</span>`;
+  btn.querySelector('.tag-chip-name').textContent = name;
+  btn.addEventListener('click', () => toggleTagFilter(name));
+  return btn;
+}
 function renderTagBar() {
-  if (!els.tagBar) return;
   const tags = state.allTags || [];
-  if (tags.length === 0) {
-    els.tagBar.classList.add('hidden');
-    els.tagBarChips.innerHTML = '';
-    return;
-  }
-  els.tagBar.classList.remove('hidden');
-  els.tagBar.classList.toggle('collapsed', state.tagsCollapsed);
-  els.tagBar.classList.toggle('filtering', state.tagFilter.size > 0);
-  if (els.tagBarToggle) {
-    els.tagBarToggle.setAttribute('aria-expanded', state.tagsCollapsed ? 'false' : 'true');
-  }
-  els.tagBarChips.innerHTML = '';
+  const has = tags.length > 0;
+  if (els.homeTagStrip) els.homeTagStrip.classList.toggle('hidden', !has);
+  if (els.tagBar) els.tagBar.classList.toggle('hidden', !has);
+  if (els.sortMenuTagsSec) els.sortMenuTagsSec.classList.toggle('hidden', !has);
+  if (els.homeTagStrip) els.homeTagStrip.classList.toggle('filtering', state.tagFilter.size > 0);
   const selectedLower = new Set([...state.tagFilter].map(t => t.toLowerCase()));
-  for (const { name, count } of tags) {
-    const on = selectedLower.has(name.toLowerCase());
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'tag-chip' + (on ? ' on' : '');
-    // aria-pressed 而不是 aria-checked：这是一组可独立开关的过滤开关，不是单选项
-    btn.setAttribute('aria-pressed', String(on));
-    btn.dataset.tag = name;
-    btn.title = on ? `取消筛选「${name}」` : `只看带「${name}」标签的文档（多选为「同时具备」）`;
-    btn.innerHTML = `<span class="tag-chip-name"></span><span class="tag-chip-count">${count}</span>`;
-    btn.querySelector('.tag-chip-name').textContent = name;
-    btn.addEventListener('click', () => toggleTagFilter(name));
-    els.tagBarChips.appendChild(btn);
+  for (const host of [els.tagBar, els.sortMenuTags]) {
+    if (!host) continue;
+    host.innerHTML = '';
+    if (!has) continue;
+    const frag = document.createDocumentFragment();
+    for (const t of tags) frag.appendChild(tagChipEl(t, selectedLower.has(t.name.toLowerCase())));
+    host.appendChild(frag);
   }
-  // 分区头计数：平时是标签总数，筛选中变成「已选 / 总数」。
-  // 收起来之后这就是唯一还能看出"树被过滤了"的地方，所以必须带上已选数
-  if (els.tagBarCount) {
-    const picked = state.tagFilter.size;
-    els.tagBarCount.textContent = picked ? `${picked}/${tags.length}` : String(tags.length);
-    els.tagBarCount.title = picked
-      ? `已选 ${picked} 个标签，共 ${tags.length} 个`
-      : `共 ${tags.length} 个标签`;
-  }
-  els.tagBarClear.classList.toggle('hidden', state.tagFilter.size === 0);
+  if (els.sortMenuTags) els.sortMenuTags.classList.toggle('scrollable', tags.length > 12);
+  if (els.tagBarClear) els.tagBarClear.classList.toggle('hidden', state.tagFilter.size === 0);
   syncTagChipsOverflow();
 }
 
-// chip 区超出 max-height 才挂底部渐隐——无条件挂会把最后一行也淡掉。
-// 折叠 / 隐藏时两个高度都是 0，自然不会误判。
+// 首页筛选条的 chip 横向滚动：只在真的溢出、且还没滚到最右时挂右侧渐隐——
+// 无条件挂会把最后一个 chip 也淡掉，看着像渲染坏了
 function syncTagChipsOverflow() {
-  if (!els.tagBarChips) return;
-  const el = els.tagBarChips;
-  const overflow = el.scrollHeight - el.clientHeight;
+  const el = els.tagBar;
+  if (!el) return;
+  const overflow = el.scrollWidth - el.clientWidth;
   el.classList.toggle('scrollable', overflow > 1);
-  // 滚到底就撤掉渐隐（下面真的没内容了，继续淡着反而像没渲染完）
-  el.classList.toggle('at-end', overflow <= 1 || el.scrollTop >= overflow - 1);
+  el.classList.toggle('at-end', overflow <= 1 || el.scrollLeft >= overflow - 1);
 }
 
 function toggleTagFilter(name) {
@@ -1618,15 +2069,21 @@ function toggleTagFilter(name) {
   const existing = [...state.tagFilter].find(t => t.toLowerCase() === lower);
   if (existing !== undefined) state.tagFilter.delete(existing);
   else state.tagFilter.add(name);
-  renderTagBar();
-  render();
+  // chip 会被整组重建：记下焦点在哪一组的哪个 chip 上，重建后还给同一个位置（键盘用户不丢焦点）
+  const focused = document.activeElement && document.activeElement.closest
+    ? document.activeElement.closest('.tag-chip') : null;
+  const host = focused ? focused.parentElement : null;
+  applyFilterChange();
+  if (host) {
+    const again = [...host.querySelectorAll('.tag-chip')].find(c => c.dataset.tag === name);
+    if (again) again.focus();
+  }
 }
 
 function clearTagFilter() {
   if (!state.tagFilter.size) return;
   state.tagFilter.clear();
-  renderTagBar();
-  render();
+  applyFilterChange();
 }
 
 // ---------- 收藏 / 标签的写入 ----------
@@ -1702,9 +2159,8 @@ async function editTags(file) {
     const data = await r.json();
     file.tags = Array.isArray(data.tags) ? data.tags : [];
     recomputeAllTags();
-    renderTagBar();
-    // 标签影响文件行内容，也可能影响当前筛选下的可见性 → 这里需要全量重绘
-    render();
+    // 标签影响文件行内容，也可能影响当前筛选下的可见性（树 / 待看 / 计数）→ 全量刷新
+    applyFilterChange();
     const removed = before.length && !file.tags.length;
     showToast({
       kind: 'success',
@@ -1767,7 +2223,61 @@ function setSortMode(mode, opts = {}) {
   state.sortMode = mode;
   localStorage.setItem('atlas:sortMode', mode);
   updateSortBar();
+  updateSortLabel();
   if (!opts.noRender) render();
+}
+
+// 树头排序按钮的小字与 tooltip：小字只说排序方式（开了仅未读再加「· 未读」），
+// tooltip 写全排序与筛选两件事
+const SORT_LABELS = { name: '名称', mtime: '时间', custom: '自定义' };
+function updateSortLabel() {
+  if (!els.btnSort) return;
+  const sortName = SORT_LABELS[state.sortMode] || SORT_LABELS.name;
+  if (els.btnSortLabel) els.btnSortLabel.textContent = sortName + (state.onlyUnread ? ' · 未读' : '');
+  const filters = [];
+  if (state.onlyUnread) filters.push('仅未读');
+  if (state.tagFilter.size) filters.push(`标签「${[...state.tagFilter].join('、')}」`);
+  els.btnSort.title = `排序：按${sortName} · 筛选：${filters.length ? filters.join('、') : '全部'}（点击修改）`;
+  els.btnSort.classList.toggle('filtering', filters.length > 0);
+}
+
+// ---------- 排序 / 筛选菜单（#btn-sort → #sort-menu） ----------
+// 菜单里的 [data-sort] / #only-unread 沿用原有事件绑定，这里只管开合。
+// 点菜单外关闭；Esc 关闭并把焦点还给按钮（全局 Esc 阶梯里排在模态之后、其它之前）。
+function isSortMenuOpen() {
+  return !!(els.sortMenu && !els.sortMenu.classList.contains('hidden'));
+}
+function openSortMenu() {
+  if (!els.sortMenu || !els.btnSort) return;
+  els.sortMenu.classList.remove('hidden');
+  els.btnSort.setAttribute('aria-expanded', 'true');
+}
+function closeSortMenu({ restoreFocus = false } = {}) {
+  if (!isSortMenuOpen()) return;
+  els.sortMenu.classList.add('hidden');
+  els.btnSort.setAttribute('aria-expanded', 'false');
+  if (restoreFocus) els.btnSort.focus();
+}
+if (els.btnSort) {
+  els.btnSort.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (isSortMenuOpen()) closeSortMenu();
+    else openSortMenu();
+  });
+}
+// 点菜单以外任何地方都收起。用 composedPath 而不是 target.closest：点标签 chip 会整组重建，
+// 事件冒泡到这里时 target 已经脱离文档，closest 找不到菜单，会被误判成"点了外面"
+document.addEventListener('click', (e) => {
+  if (!isSortMenuOpen() || !els.sortWrap) return;
+  const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+  if (path.includes(els.sortWrap)) return;
+  closeSortMenu();
+});
+// 树顶筛选提示里的「清除」（提示内容由 updateTreeFilterNote 动态渲染，用委托）
+if (els.treeFilterNote) {
+  els.treeFilterNote.addEventListener('click', (e) => {
+    if (e.target.closest && e.target.closest('[data-act="clear-filter"]')) clearTreeFilters();
+  });
 }
 
 els.segButtons.forEach(btn => {
@@ -1778,24 +2288,64 @@ els.segButtons.forEach(btn => {
   });
 });
 updateSortBar();
+updateSortLabel();
 
-// 目录树视图切换：分组（虚拟分组，可拖拽/归档）↔ 目录（磁盘真实多级结构，只读镜像）
+// 视图切换：分组（虚拟分组，可拖拽/归档）/ 目录（磁盘真实多级结构，只读镜像）/ 星图（主区首页表面）
+const VIEW_MODES = ['groups', 'tree', 'map'];
 function updateViewBar() {
   els.viewButtons.forEach(btn => {
     btn.setAttribute('aria-checked', String(btn.dataset.view === state.viewMode));
   });
 }
-function setViewMode(mode, opts = {}) {
-  if (mode !== 'tree' && mode !== 'groups') return;
-  if (mode === state.viewMode) { updateViewBar(); return; }
-  state.viewMode = mode;
-  localStorage.setItem('atlas:viewMode', mode);
+// 只写状态，不碰主区 DOM（design §3a）：主区显示哪个首页表面由 showHomeSurface() 决定
+function setViewMode(next) {
+  if (!VIEW_MODES.includes(next)) return;
+  const prevList = listViewMode();
+  state.viewMode = next;
+  if (next !== 'map') state.listView = next;
+  try {
+    localStorage.setItem('atlas:viewMode', next);
+    if (next !== 'map') localStorage.setItem('atlas:listView', next);
+  } catch {}
   updateViewBar();
-  if (!opts.noRender) render();
+  // 侧栏按 listViewMode() 重画；选星图时列表本身没变，省掉一次整树重建
+  if (listViewMode() !== prevList) render();
+}
+// 分段控件的唯一入口：点击、Enter / Space、←/→ 都走这里（规则表见 design §3a）。
+// 一次用户操作只开一次 View Transition：文档态选星图时由 goHome 自己的 'home' 过渡负责
+async function selectView(next) {
+  if (!VIEW_MODES.includes(next)) return;
+  if (next === state.viewMode) { updateViewBar(); return; }
+  if (next === 'map' && state.activeFilePath) {
+    // 编辑态有未保存改动：用户选了「继续编辑」就什么都不写
+    if (editState.active && !(await confirmDiscardIfDirty())) { updateViewBar(); return; }
+    setViewMode('map');
+    await goHome({ confirmDirty: false });
+    return;
+  }
+  setViewMode(next);
+  // 有活动文档且切的是分组 / 目录：只动侧栏，主区保持当前文档不变
+  if (!state.activeFilePath) withViewTransition(showHomeSurface, 'view');
 }
 els.viewButtons.forEach(btn => {
-  btn.addEventListener('click', () => setViewMode(btn.dataset.view));
+  btn.addEventListener('click', () => selectView(btn.dataset.view));
 });
+// radiogroup：←/→ 在三项间移动并选中
+(function bindViewSegKeys() {
+  const seg = document.querySelector('.view-seg');
+  if (!seg) return;
+  seg.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const btns = [...els.viewButtons];
+    const i = btns.indexOf(document.activeElement);
+    if (i < 0) return;
+    e.preventDefault();
+    const next = btns[(i + (e.key === 'ArrowRight' ? 1 : -1) + btns.length) % btns.length];
+    next.focus();
+    selectView(next.dataset.view);
+  });
+})();
 updateViewBar();
 
 function renderNode(node) {
@@ -1869,7 +2419,7 @@ function renderFolder(folder) {
   header.className = 'folder-header';
   header.innerHTML = `
     <span class="folder-toggle">${ic('chevron-down', 12)}</span>
-    <span class="folder-icon">${ic('folder', 13)}</span>
+    <span class="folder-icon">${ic('folder', 15, 'fi-closed')}${ic('folder-open', 15, 'fi-open')}</span>
     <span class="folder-name" data-folder-id="${folder.id}">${escapeHtml(folder.name)}</span>
     ${counts.unread > 0 ? `<span class="folder-unread-dot${counts.fresh ? '' : ' stale'}" title="${counts.unread} 个未读${counts.fresh ? `，其中 ${counts.fresh} 个今天改过` : '（都超过 24 小时）'}"></span>` : ''}
     <span class="folder-count">${counts.files}</span>
@@ -2006,6 +2556,9 @@ function renderFolder(folder) {
   return folderEl;
 }
 
+// 已收藏文件名后的小实心星（装饰；收藏态的可读信息在行尾星标按钮的 aria-pressed 上）
+const FAV_MARK_HTML = `<span class="fav-mark" aria-hidden="true">${ic('star', 9)}</span>`;
+
 function renderFile(file, node) {
   if (!file) {
     const el = document.createElement('div');
@@ -2026,7 +2579,7 @@ function renderFile(file, node) {
   const contentOnly = !!snippet && !isNameMatch;
   const dtype = docTypeOf(file);
   // 未读点的新鲜度：超过 24h 的变更降级成灰点（.stale）。
-  // 红点的意思是"AI 刚动过这个文件"，可 588 个饱和红点铺满整个侧栏时，
+  // 未读点的意思是"AI 刚动过这个文件"，可 588 个满亮度未读点铺满整个侧栏时，
   // 这个信号就等于不存在了。只有今天动过的才配得上红色。
   const isFresh = isFreshUnread(file);
   fileEl.className = 'file'
@@ -2036,7 +2589,8 @@ function renderFile(file, node) {
     + (file.alias ? ' has-alias' : '')
     + (file.path === state.activeFilePath ? ' active' : '')
     + (file.favorite ? ' favorite' : '')
-    + (contentOnly ? ' content-match' : '');
+    + (contentOnly ? ' content-match' : '')
+    + (isJustChanged(file.path) ? ' just-changed' : '');
   fileEl.dataset.nodeType = 'file';
   fileEl.dataset.path = file.path;
   fileEl.dataset.doctype = dtype;
@@ -2051,7 +2605,7 @@ function renderFile(file, node) {
   if (file.alias) titleParts.push(file.alias);
   titleParts.push(file.name);
   titleParts.push(file.relPath);
-  // 行上只显示前两个标签，剩下的靠 title 补全（悬停能看到完整列表）
+  // 行上只显示第一个标签，剩下的靠 title 补全（悬停能看到完整列表）
   if ((file.tags || []).length) titleParts.push('标签：' + file.tags.join(' · '));
   if (snippet) titleParts.push('内容命中：' + snippet);
   fileEl.title = titleParts.join('\n');
@@ -2064,31 +2618,28 @@ function renderFile(file, node) {
   // 反馈的痛点。目录视图本身已按真实层级展示，不需要这个提示。
   const relSegs = (file.relPath || '').split(/[\\/]/).filter(Boolean);
   const midDirs = relSegs.slice(1, -1);
-  const dirHintHtml = (state.viewMode !== 'tree' && midDirs.length)
-    ? `<span class="file-dir-hint" title="${escapeHtml(file.relPath)}">${escapeHtml(midDirs.join('/'))}</span>`
+  const dirHintHtml = (listViewMode() !== 'tree' && midDirs.length)
+    // 截断时保留末级目录（CSS direction:rtl 让省略号落在开头，<bdi> 保住路径本身的书写顺序）
+    ? `<span class="file-dir-hint" title="${escapeHtml(file.relPath)}"><bdi>${escapeHtml(midDirs.join('/'))}</bdi></span>`
     : '';
-  // 星标是常驻按钮（不在 .file-actions 里）：收藏是高频二元操作，不该藏在 hover
-  // 才出现的那排按钮里。代价是它落在拖拽把手区内，必须同时做两件事——
-  //   ① 加进 initSortables 的 filter，否则按下星标会启动拖拽
-  //   ② 加进本行 pointerdown/pointerup 的守卫，否则点它会顺带打开文档
+  // 星标按钮在行尾悬停操作组 .file-actions 里排第一（design §12.2）：文件行左侧不再留星标列，
+  // 文件名才能和同级文件夹名对齐。已收藏的行在名字后常驻一个 9px 实心星 .fav-mark。
+  // 它仍在拖拽把手区内，所以 initSortables 的 filter 与本行 pointerdown/pointerup 的守卫
+  // 都要排除它：点星不启动拖拽、不顺带打开文档。图标随 .file-actions 一起延迟注入。
   const favLabel = file.favorite ? `取消收藏「${escapeHtml(displayName)}」` : `收藏「${escapeHtml(displayName)}」`;
-  // 行上最多两个标签，超出显示 +N（侧边栏宽度有限，标签不该把文件名挤没）。
-  // 宽度是靠收窄单个 chip（.file-tag max-width 72→56px）省出来的，不减数量。
-  const shownTags = (file.tags || []).slice(0, 2);
-  const restTags = (file.tags || []).length - shownTags.length;
+  // 行上最多一个标签 chip（design §10.5），完整列表在 title 里；
+  // 三层文件夹内（及更深）的文件行不显示，由 styles.css 按 .folder-children 嵌套深度隐藏，
+  // 懒展开渲染的子树也同样生效。
   const tagsHtml = (file.tags || []).length
-    ? `<span class="file-tags">`
-      + shownTags.map(t => `<span class="file-tag">${escapeHtml(t)}</span>`).join('')
-      + (restTags > 0 ? `<span class="file-tag more">+${restTags}</span>` : '')
-      + `</span>`
+    ? `<span class="file-tags"><span class="file-tag">${escapeHtml(file.tags[0])}</span></span>`
     : '';
+  // 前缀是一个 40px 固定列：6px 状态点放在里面，对准同级文件夹图标的位置；
+  // .file-type-icon 保留 DOM（CSS 隐藏），类型只看右侧角标
   fileEl.innerHTML = `
     <span class="unread-dot"></span>
-    <button class="fav-btn" type="button" title="${file.favorite ? '取消收藏' : '收藏'}" aria-label="${favLabel}" aria-pressed="${file.favorite ? 'true' : 'false'}">
-      ${ic('star', 12)}
-    </button>
     <span class="folder-icon file-type-icon">${typeIcon}</span>
     <span class="file-name" data-path="${escapeHtml(file.path)}">${escapeHtml(displayName)}</span>
+    ${file.favorite ? FAV_MARK_HTML : ''}
     ${dirHintHtml}
     ${tagsHtml}
     <span class="file-type-badge type-${dtype}">${docTypeBadge(file)}</span>
@@ -2097,6 +2648,7 @@ function renderFile(file, node) {
     </span>
     <span class="file-mtime">${fmtMtime(file.mtime)}</span>
     <span class="file-actions">
+      <button class="fav-btn" type="button" data-ico="star" data-ico-size="12" title="${file.favorite ? '取消收藏' : '收藏'}" aria-label="${favLabel}" aria-pressed="${file.favorite ? 'true' : 'false'}"></button>
       <button data-act="share" data-ico="share" data-ico-size="12" title="分享到局域网（生成可访问链接 + 二维码）" aria-label="分享「${escapeHtml(displayName)}」到局域网"></button>
       <button data-act="tags" data-ico="tag" data-ico-size="12" title="编辑标签（逗号分隔）" aria-label="编辑「${escapeHtml(displayName)}」的标签"></button>
       <button data-act="rename-file" data-ico="file-pen" data-ico-size="12" title="重命名磁盘上的真实文件名" aria-label="重命名文件「${escapeHtml(file.name)}」"></button>
@@ -2166,9 +2718,13 @@ function renderFile(file, node) {
 function saveCollapsed() {
   localStorage.setItem('atlas:collapsed', JSON.stringify([...state.collapsed]));
 }
-// 是否尊重系统「减少动态效果」
+// 是否减少动效：系统「减少动态效果」或设置里的「界面动效：减少」（html[data-motion="reduce"]）
+// 任一为真。所有 JS 动画（View Transitions、分组展开、之后的星图相机 / 轻闪循环）都先问它。
+// 运行中切换系统设置或应用内开关会派发 window 'atlas:motion-change'（见 applyMotion 一节），
+// 持续循环的模块据此当场停下。
 function prefersReducedMotion() {
-  return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (document.documentElement.getAttribute('data-motion') === 'reduce') return true;
+  return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 }
 
 // 单个分组的展开 / 折叠高度动画。
@@ -2279,7 +2835,7 @@ function toggleFolder(id) {
       // 新渲染出的子容器（含子分组的空容器）需要挂上 Sortable 才能作为拖放目标。
       // 这是用户点击展开（非拖拽途中），initSortables 全量重建是安全的；目录视图
       // 只读、render 已 destroySortables，不挂。
-      if (rendered && state.viewMode !== 'tree') initSortables();
+      if (rendered && listViewMode() !== 'tree') initSortables();
     }
     animateFolderChildren(el, willExpand);
   }
@@ -2288,7 +2844,7 @@ function toggleFolder(id) {
 
 // 在当前视图的数据源里按 id 找 folder 节点（分组视图 = state.tree，目录视图 = state.dirTree）。
 function findFolderNode(id) {
-  const roots = state.viewMode === 'tree' ? (state.dirTree || []) : (state.tree || []);
+  const roots = listViewMode() === 'tree' ? (state.dirTree || []) : (state.tree || []);
   return findFolderById(roots, id);
 }
 
@@ -2313,7 +2869,7 @@ function allFolderIds(nodes, out = []) {
   // 默认取当前视图的数据源：目录视图用即时目录树、分组视图用 store.tree。
   // 目录视图下 state.dirTree 由最近一次 render() 更新，collapse-all 直接复用它，
   // 不必再重建一遍。
-  if (nodes === undefined) nodes = state.viewMode === 'tree' ? state.dirTree : state.tree;
+  if (nodes === undefined) nodes = listViewMode() === 'tree' ? state.dirTree : state.tree;
   for (const n of nodes) {
     if (n && n.type === 'folder') {
       out.push(n.id);
@@ -2670,8 +3226,8 @@ function initSortables() {
       group: 'atlas-nodes',
       animation: 150,
       ghostClass: 'dragging-ghost',
-      // .fav-btn 也要排除：它是常驻按钮、位置就在拖拽把手区里，不排除的话
-      // 按下星标会被当成开始拖这一行
+      // .fav-btn 现在在 .file-actions 里（已被上一条覆盖），仍单独列出：
+      // 万一以后挪出操作组，按下星标也不会被当成开始拖这一行
       filter: '[contenteditable="true"], .folder-actions, .folder-actions *, .file-actions, .file-actions *, .fav-btn, .fav-btn *',
       preventOnFilter: false,
       fallbackOnBody: true,
@@ -2700,7 +3256,7 @@ function initSortables() {
         }
         return true;
       },
-      onStart() { isDragging = true; },
+      onStart() { isDragging = true; if (window.AtlasPeek) AtlasPeek.close(); },
       onEnd() {
         isDragging = false;
         clearDragHover();
@@ -2967,6 +3523,7 @@ function reloadTab(tab) {
 function onPreviewFrameLoad(frame) {
   if (frame !== els.preview) { frame.classList.remove('loading'); return; }
   bindPreviewShortcutBridge();
+  syncFocusFrame();   // 专注中帧导航 / 重载：重新接上进度条与 data-focus（不在专注时是空操作）
   if (editState.active && editState.kind === 'html') {
     bindEditableDoc();
     applyPendingScroll(pendingEditScroll);
@@ -3017,21 +3574,36 @@ function activateTab(id) {
   if (diffState.open) closeDiff();
   if (findState.open) closeFind();
 
-  state.activeTabId = id;
-  state.activeFilePath = tab.path;
-  els.preview = tab.frame;
-  // 兼容层：当前活动帧始终带 id="preview"，其余帧去掉 id（保证唯一）。
-  // 这样 document.getElementById('preview') / #preview 选择器 / activeElement.id
-  // 依旧指向"当前正在看的那篇"，既有代码与测试无需改动。
-  setActivePreviewFrameId(tab.frame);
+  // 过渡方向：新 Tab 在旧 Tab 右边 → 从右侧滑入。从首页进文档（没有旧 Tab）走整体淡入
+  const prevIdx = state.tabs.findIndex(t => t.id === state.activeTabId);
+  const nextIdx = state.tabs.indexOf(tab);
+  const vtKind = prevIdx < 0 ? 'home' : 'tab';
+  const vtDir = prevIdx < 0 ? undefined : (nextIdx >= prevIdx ? 'fwd' : 'back');
 
+  // 状态先同步落定（View Transition 的 DOM 回调是异步的，调用方紧接着读的
+  // activeTabId / activeFilePath / els.preview 必须已经是新值）；显隐等 DOM 变更交给过渡
+  const assignActive = () => {
+    state.activeTabId = id;
+    state.activeFilePath = tab.path;
+    els.preview = tab.frame;
+    // 兼容层：当前活动帧始终带 id="preview"，其余帧去掉 id（保证唯一）。
+    // 这样 document.getElementById('preview') / #preview 选择器 / activeElement.id
+    // 依旧指向"当前正在看的那篇"，既有代码与测试无需改动。
+    setActivePreviewFrameId(tab.frame);
+  };
+  assignActive();
+
+  withViewTransition(() => {
+  assignActive();
   for (const t of state.tabs) t.frame.classList.toggle('hidden', t !== tab);
   els.emptyState.classList.add('hidden');
   els.mdEditor.classList.add('hidden');
   document.body.classList.remove('no-active-doc');
+  syncStarmapPresence();     // 从星图打开文档 = 离开星图：自动收起的侧栏在这里恢复
 
   const wasLoaded = tab.loaded;
   ensureFrameLoaded(tab);
+  if (focusState.on) syncFocusFrame();   // 专注中切 Tab：进度条与 data-focus 换到新帧
   const file = state.files[tab.path];
   if (file) applyActiveDocUI(file);
   markSidebarActive(tab.path);
@@ -3042,6 +3614,7 @@ function activateTab(id) {
   renderTabs();
   persistTabs();
   enforceFrameBudget();   // 激活后若已加载帧数超预算，休眠最久未用的后台帧
+  }, vtKind, vtDir);
 }
 
 // 用户触发的 Tab 切换（点标签 / 快捷键）：切走带脏改动的编辑先确认。
@@ -3091,6 +3664,8 @@ function pruneDeadTabs() {
     const tab = state.tabs[i];
     if (!state.files[tab.path]) {
       if (editState.active && editState.path === tab.path) exitEditMode({ restore: false });
+      // 正在专注阅读的文档没了（删除 / 归档 / 改扫描类型）：自动退出专注
+      if (focusState.on && tab.id === state.activeTabId) exitFocus({ restoreFocus: false });
       removeTab(i);
     }
   }
@@ -3116,6 +3691,7 @@ function renderTabs() {
     el.setAttribute('role', 'tab');
     el.setAttribute('aria-selected', tab.id === state.activeTabId ? 'true' : 'false');
     el.dataset.tabId = tab.id;
+    el.dataset.path = tab.path;   // 快速查看的触发目标（活动 Tab 不触发）
     el.title = tab.path;
     el.innerHTML =
       `<span class="file-type-badge type-${dtype}">${file ? docTypeBadge(file) : 'HTML'}</span>` +
@@ -3249,6 +3825,9 @@ if (window.atlasDesktop && typeof window.atlasDesktop.onMenuCommand === 'functio
       switchTabByOffset(-1);
     } else if (cmd === 'find-in-page') {
       openFind();
+    } else if (cmd === 'toggle-focus') {
+      // 菜单加速键在应用层生效：焦点在沙箱预览帧里（桥绑不上）也能进出专注
+      toggleFocusMode();
     }
   });
 }
@@ -3296,7 +3875,7 @@ async function openExternalPath(rawPath) {
   }
   if (info.status === 'ready') {
     if (info.kind === 'dir') {
-      setViewMode('tree');
+      await selectView('tree');
       await fetchState();
       showToast({ kind: 'success', text: '已在目录视图中打开', secondary: base });
       return;
@@ -3342,7 +3921,7 @@ async function openExternalPath(rawPath) {
     }
     await fetchState();
     if (info.kind === 'dir') {
-      setViewMode('tree');
+      await selectView('tree');
       showToast({ kind: 'success', text: '已添加目录', secondary: info.dir });
     } else {
       await openPathAfterState(info.path, base);
@@ -3365,6 +3944,7 @@ async function openPathAfterState(filePath, base) {
 async function openFile(filePath) {
   const file = state.files[filePath];
   if (!file) return;
+  if (window.AtlasPeek) AtlasPeek.close();
   // 编辑模式下切到别的文件：先确认丢弃改动（真正的退出编辑交给 activateTab，
   // 它会把上一个 Tab 的帧恢复到只读预览，返回时不至于停在编辑文档上）
   if (editState.active && editState.path && editState.path !== filePath) {
@@ -3426,6 +4006,14 @@ function updateFavoriteDecorations() {
     if (btn) {
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
       btn.title = on ? '取消收藏' : '收藏';
+    }
+    // 名字后的小实心星跟着加 / 摘
+    const mark = fileEl.querySelector(':scope > .fav-mark');
+    if (on && !mark) {
+      const nameEl = fileEl.querySelector(':scope > .file-name');
+      if (nameEl) nameEl.insertAdjacentHTML('afterend', FAV_MARK_HTML);
+    } else if (!on && mark) {
+      mark.remove();
     }
   });
   updateFavButton();
@@ -3519,6 +4107,8 @@ function applyActiveDocUI(file) {
   els.btnOpenExternal.disabled = false;
   els.btnCopyPath.disabled = false;
   if (els.btnMore) els.btnMore.disabled = false;
+  if (els.btnFocus) els.btnFocus.classList.remove('hidden');
+  if (els.btnFocusMenu) els.btnFocusMenu.disabled = false;
   els.btnReloadPreview.disabled = false;
   els.btnExportPdf.disabled = false;
   els.btnExportPdf.title = '导出为 PDF 保存到 Downloads';
@@ -3580,7 +4170,13 @@ async function goHome({ confirmDirty = true } = {}) {
   }
   if (diffState.open) closeDiff();
   if (findState.open) closeFind();
+  exitFocus({ restoreFocus: false });   // 回首页（含关掉最后一个 Tab）自动退出专注
+  if (els.btnFocus) els.btnFocus.classList.add('hidden');
+  if (els.btnFocusMenu) els.btnFocusMenu.disabled = true;
 
+  // 状态先同步落定（过渡的 DOM 回调是异步的，调用方 await 之后读到的必须已是首页态）
+  state.activeFilePath = null;
+  state.activeTabId = null;
   withViewTransition(() => {
   state.activeFilePath = null;
   state.activeTabId = null;
@@ -3607,10 +4203,10 @@ async function goHome({ confirmDirty = true } = {}) {
   updateTrustButton();   // 同上：没有当前文档时它自己隐藏
   if (els.preview) updateIframeHighlight();   // 收掉命中角标（帧还在，仅隐藏）
   renderTabs();              // 更新标签的 active 态（此时无活动标签）
-  renderHome();              // 离开首页这段时间里数据可能变过
+  showHomeSurface();         // 封面墙或星图（按 viewMode）；离开首页这段时间里数据可能变过
   renderRecent();            // 重画以清掉列表里的 active 高亮
   renderFavorites();
-  });
+  }, 'home');
   return true;
 }
 
@@ -3626,9 +4222,183 @@ function crumbHomeHtml() {
   return '<button type="button" class="crumb-home" title="回到首页（Esc）" aria-label="回到首页">'
     + ic('home', 12) + '<span>首页</span></button>';
 }
+// 星图态（首页表面换成星图）时占位显示「星图」，用户看得到自己在哪（mock map.html）
 function crumbHomePlaceholderHtml() {
+  if (state.viewMode === 'map' && starmapAvailable()) {
+    return '<span class="placeholder">' + ic('starmap', 12) + '<span>星图</span></span>';
+  }
   return '<span class="placeholder">' + ic('home', 12) + '<span>首页</span></span>';
 }
+
+// ==================== 专注阅读模式（design §3f / §10.11） ====================
+// html.focus-mode 一个类隐藏侧栏、顶栏、标签栏与升级横幅，只留正文。
+// 它是覆盖在原布局上的一层：不碰 body.sidebar-collapsed / atlas:sidebarCollapsed /
+// 侧栏宽度，退出后原样恢复；也不持久化——刷新或重开一律回到正常布局。
+//
+// 入口：⌘.（外壳 keydown + 快捷键桥）、顶栏 #btn-focus、「更多」菜单、桌面菜单「显示 → 专注阅读」。
+// 出口：再按 ⌘.、Esc（分级链第 2 级；专注期间桥额外转发帧内未被文档处理的 Esc）、
+//       右上角 #focus-exit；回首页 / 关掉最后一个 Tab / 活动文档被删除时自动退出。
+const FOCUS_IDLE_MS = 2000;   // 鼠标静止多久后退出胶囊与帧内宽度控件淡出
+const focusState = {
+  on: false,
+  idleTimer: 0,
+  lastWake: 0,
+  raf: 0,
+  frameRoot: null,     // 当前绑定的同源帧 <html>（设 data-focus / data-focus-idle）
+  cleanup: null,       // 解绑当前帧上的 scroll / mousemove 监听
+  badgeAnchor: null,   // #match-badge 在顶栏里的原位置（专注时挪到 .main 下，退出放回）
+};
+
+function toggleFocusMode() {
+  if (focusState.on) exitFocus();
+  else enterFocus();
+}
+
+function enterFocus() {
+  if (focusState.on) return;
+  const file = state.activeFilePath && state.files[state.activeFilePath];
+  if (!file || !els.preview) return;   // 没有活动文档：无效
+  if (editState.active) {
+    // 编辑器的保存 / 取消都在被隐藏的顶栏里，强行进入会让人找不到保存
+    showToast({ kind: 'info', text: '编辑中不能进入专注模式，先保存或取消' });
+    return;
+  }
+  if (diffState.open) closeDiff();
+  if (findState.open) closeFind();
+  closeMoreMenu();
+  if (isSortMenuOpen()) closeSortMenu();
+  if (window.AtlasPeek && AtlasPeek.isOpen()) AtlasPeek.close();
+
+  focusState.on = true;
+  document.documentElement.classList.add('focus-mode');
+  // 命中导航条留在视野里：从（即将隐藏的）顶栏挪到 .main 下，CSS 让它浮在正文顶部中央
+  const badge = els.matchBadge;
+  const main = document.querySelector('.main');
+  if (badge && main && badge.parentNode !== main) {
+    focusState.badgeAnchor = { parent: badge.parentNode, next: badge.nextSibling };
+    main.appendChild(badge);
+  }
+  if (els.focusExit) els.focusExit.classList.remove('hidden');
+  if (els.btnFocus) els.btnFocus.setAttribute('aria-pressed', 'true');
+  syncFocusFrame();
+  wakeFocusChrome(true);
+  // 焦点进正文：空格 / 方向键直接滚动
+  try { els.preview.focus({ preventScroll: true }); } catch {}
+  window.atlasDesktop?.setChromeState?.({ focusMode: true });
+}
+
+// restoreFocus=false：自动退出（回首页 / 文档没了）时 #btn-focus 也会被隐藏，不往那儿送焦点
+function exitFocus({ restoreFocus = true } = {}) {
+  if (!focusState.on) return;
+  focusState.on = false;
+  unbindFocusFrame();
+  clearTimeout(focusState.idleTimer);
+  document.documentElement.classList.remove('focus-mode');
+  const a = focusState.badgeAnchor;
+  if (a && els.matchBadge) {
+    if (a.next && a.next.parentNode === a.parent) a.parent.insertBefore(els.matchBadge, a.next);
+    else a.parent.appendChild(els.matchBadge);
+  }
+  focusState.badgeAnchor = null;
+  if (els.focusExit) { els.focusExit.classList.add('hidden'); els.focusExit.classList.remove('awake'); }
+  if (els.btnFocus) els.btnFocus.setAttribute('aria-pressed', 'false');
+  if (restoreFocus && els.btnFocus && !els.btnFocus.classList.contains('hidden')) {
+    try { els.btnFocus.focus({ preventScroll: true }); } catch {}
+  }
+  window.atlasDesktop?.setChromeState?.({ focusMode: false });
+}
+
+// 鼠标移动 / 聚焦：退出胶囊与帧内宽度控件回到可见，静止 FOCUS_IDLE_MS 后一起淡出
+function wakeFocusChrome(force = false) {
+  if (!focusState.on) return;
+  const now = Date.now();
+  if (!force && now - focusState.lastWake < 100) return;   // mousemove 很密，100ms 内只续一次
+  focusState.lastWake = now;
+  if (els.focusExit) els.focusExit.classList.add('awake');
+  setFocusFrameIdle(false);
+  clearTimeout(focusState.idleTimer);
+  focusState.idleTimer = setTimeout(() => {
+    if (!focusState.on) return;
+    if (els.focusExit) els.focusExit.classList.remove('awake');
+    setFocusFrameIdle(true);
+  }, FOCUS_IDLE_MS);
+}
+function setFocusFrameIdle(idle) {
+  const root = focusState.frameRoot;
+  if (!root) return;
+  try {
+    if (idle) root.setAttribute('data-focus-idle', '1');
+    else root.removeAttribute('data-focus-idle');
+  } catch {}
+}
+
+function unbindFocusFrame() {
+  if (focusState.cleanup) { try { focusState.cleanup(); } catch {} }
+  focusState.cleanup = null;
+  focusState.frameRoot = null;
+  if (focusState.raf) { cancelAnimationFrame(focusState.raf); focusState.raf = 0; }
+  if (els.focusProgress) {
+    els.focusProgress.classList.add('hidden');
+    els.focusProgress.style.transform = '';
+  }
+}
+
+// 把当前活动帧接入专注模式：阅读进度（scroll 监听）、帧内鼠标唤醒、MD 帧的 data-focus。
+// 进入专注、帧加载完成（含导航 / 信任后重载）、切 Tab 时调用；不在专注时只做解绑。
+// 只对同源帧生效：needsSandbox(file) 为真（未信任的 HTML，opaque origin）时
+// 进度条保持 .hidden——不为它开 postMessage 通道，也不放宽沙箱。
+function syncFocusFrame() {
+  unbindFocusFrame();
+  if (!focusState.on) return;
+  const frame = els.preview;
+  const file = state.activeFilePath && state.files[state.activeFilePath];
+  if (!frame || !file || needsSandbox(file)) return;
+  const bar = els.focusProgress;
+  // 与快捷键桥同理：帧里点外链跳到站外时，读 contentDocument 会抛安全错误 → 静默跳过
+  try {
+    const win = frame.contentWindow;
+    const doc = frame.contentDocument;
+    const root = doc && doc.documentElement;
+    if (!win || !root) return;
+    // 宽度控件只存在于 Atlas 渲染的 MD 页里：帧内 CSS 在 data-focus 下把它移到左下角
+    const isMd = docTypeOf(file) === 'md';
+    if (isMd) root.setAttribute('data-focus', '1');
+    const update = () => {
+      focusState.raf = 0;
+      if (!bar) return;
+      try {
+        const sc = doc.scrollingElement || root;
+        // MD 页末尾的 .md-tail-space 是给锚点跳转留的空白，不算正文（同 frameScrollPct）
+        const spacer = doc.querySelector('.md-tail-space');
+        const max = sc.scrollHeight - win.innerHeight - (spacer ? spacer.offsetHeight : 0);
+        if (!(max > 0)) { bar.classList.add('hidden'); return; }
+        const p = Math.min(1, Math.max(0, (win.scrollY || sc.scrollTop || 0) / max));
+        bar.classList.remove('hidden');
+        bar.style.transform = `scaleX(${p})`;
+      } catch { bar.classList.add('hidden'); }
+    };
+    const onScroll = () => { if (!focusState.raf) focusState.raf = requestAnimationFrame(update); };
+    const onMove = () => wakeFocusChrome();
+    win.addEventListener('scroll', onScroll, { passive: true });
+    doc.addEventListener('mousemove', onMove, { passive: true });
+    focusState.frameRoot = root;
+    focusState.cleanup = () => {
+      try { win.removeEventListener('scroll', onScroll); } catch {}
+      try { doc.removeEventListener('mousemove', onMove); } catch {}
+      try { root.removeAttribute('data-focus'); root.removeAttribute('data-focus-idle'); } catch {}
+    };
+    if (els.focusExit && !els.focusExit.classList.contains('awake')) setFocusFrameIdle(true);
+    update();
+  } catch {}
+}
+
+if (els.btnFocus) els.btnFocus.addEventListener('click', () => toggleFocusMode());
+if (els.btnFocusMenu) els.btnFocusMenu.addEventListener('click', () => toggleFocusMode());
+if (els.focusExit) {
+  els.focusExit.addEventListener('click', () => exitFocus());
+  els.focusExit.addEventListener('focus', () => wakeFocusChrome(true));
+}
+document.addEventListener('mousemove', () => { if (focusState.on) wakeFocusChrome(); }, { passive: true });
 
 // ==================== 预览 iframe 的快捷键桥 ====================
 // 预览是一份独立文档，键盘事件不会跨 iframe 边界冒泡到外壳，所以外壳那个
@@ -3645,7 +4415,8 @@ function crumbHomePlaceholderHtml() {
 //
 // 只转发带修饰键的组合。单键的 `/`（聚焦搜索）刻意不转发：不少 HTML 报告
 // 自己就监听 `/` 做站内搜索，抢过来会破坏文档本身的交互。
-const PREVIEW_BRIDGED_KEYS = new Set(['k', 'b', 's']);
+// '.'：⌘. 进入 / 退出专注阅读（design §3f）。
+const PREVIEW_BRIDGED_KEYS = new Set(['k', 'b', 's', '.']);
 // 唯一一个不带修饰键也转发的：? 打开快捷键清单。
 // 破例的理由是它正好服务于"读文档时想知道还能怎么用"这个场景；而它被文档自己
 // 占用的概率远低于 `/`（站内搜索常用 `/`，几乎没人拿 ? 当功能键）。
@@ -3695,6 +4466,14 @@ function bindPreviewShortcutBridge() {
 
     forwardKeyToShell(e);
   }, true);
+
+  // 专注模式下的窄口子：Esc 平时不转发（见上），专注时转发给外壳用来退出。
+  // 挂在冒泡阶段并检查 defaultPrevented——文档自己用 Esc 关了浮层（并 preventDefault）就不抢。
+  doc.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.defaultPrevented) return;
+    if (!document.documentElement.classList.contains('focus-mode')) return;
+    forwardKeyToShell(e);
+  });
 }
 // 在 iframe 侧拦住默认行为，再把等价事件派发给外壳。
 // 两步都必须做：合成事件只影响外壳，管不到原始事件的默认行为。
@@ -5156,7 +5935,7 @@ async function saveEdit() {
     if (resp.ok && data.ok) {
       const savedPath = editState.path;
       showToast({ kind: 'success', text: '已保存到文件' });
-      // 标已读（防止自我写入红点）
+      // 标已读（防止自我写入的未读标记）
       if (state.files[savedPath]) {
         state.files[savedPath].unread = false;
         state.files[savedPath].seenAt = Date.now();
@@ -5246,7 +6025,7 @@ window.addEventListener('beforeunload', (e) => {
 
 
 // ==================== Diff：和上次已读版本对比 ====================
-// 未读红点只回答了"AI 动过这个文件"，但用户真正想知道的是"动了什么"。
+// 未读标记只回答了"AI 动过这个文件"，但用户真正想知道的是"动了什么"。
 // 底本在用户每次打开文件时由 /api/seen 落一份快照，这里做的是把差异呈现出来。
 // version = 用户在面板里选中的那一份历史底本（null 表示交给服务端自动挑）
 const diffState = { open: false, path: null, loading: false, version: null, versions: [] };
@@ -5825,33 +6604,27 @@ els.search.addEventListener('keydown', (e) => {
 
 // ---------- 顶部按钮 ----------
 let searchDebounceTimer = null;
-els.recentToggle.addEventListener('click', () => {
-  state.recentCollapsed = !state.recentCollapsed;
-  localStorage.setItem('atlas:recentCollapsed', state.recentCollapsed ? '1' : '0');
-  els.recentBar.classList.toggle('collapsed', state.recentCollapsed);
-  els.recentToggle.setAttribute('aria-expanded', state.recentCollapsed ? 'false' : 'true');
+// 清除最近：⌘K 空状态段头的 #recent-clear 是每次重画时新建的，用委托；首页轨道头的直接绑
+document.addEventListener('click', (e) => {
+  if (e.target.closest && e.target.closest('#recent-clear')) {
+    e.preventDefault();
+    clearRecent();
+  }
 });
-if (els.recentClear) els.recentClear.addEventListener('click', clearRecent);
-els.favToggle.addEventListener('click', () => {
-  state.favCollapsed = !state.favCollapsed;
-  localStorage.setItem('atlas:favCollapsed', state.favCollapsed ? '1' : '0');
-  els.favBar.classList.toggle('collapsed', state.favCollapsed);
-  els.favToggle.setAttribute('aria-expanded', state.favCollapsed ? 'false' : 'true');
-});
-els.tagBarClear.addEventListener('click', clearTagFilter);
-els.tagBarToggle.addEventListener('click', () => {
-  state.tagsCollapsed = !state.tagsCollapsed;
-  localStorage.setItem('atlas:tagsCollapsed', state.tagsCollapsed ? '1' : '0');
-  els.tagBar.classList.toggle('collapsed', state.tagsCollapsed);
-  els.tagBarToggle.setAttribute('aria-expanded', state.tagsCollapsed ? 'false' : 'true');
-  // 展开的瞬间才第一次量得到真实高度（折叠时 display:none，两个高度都是 0）
-  syncTagChipsOverflow();
-});
-// 侧栏可拖宽：宽度一变 chip 的换行数就变，溢出与否得重新判定
-if (window.ResizeObserver && els.tagBarChips) {
-  new ResizeObserver(syncTagChipsOverflow).observe(els.tagBarChips);
+if (els.homeRecentClear) els.homeRecentClear.addEventListener('click', clearRecent);
+if (els.tagBarClear) els.tagBarClear.addEventListener('click', clearTagFilter);
+// 首页筛选条宽度一变（拖侧栏 / 改窗口），chip 是否溢出得重新判定
+if (els.tagBar) {
+  if (window.ResizeObserver) new ResizeObserver(syncTagChipsOverflow).observe(els.tagBar);
+  els.tagBar.addEventListener('scroll', syncTagChipsOverflow, { passive: true });
+  // 普通鼠标滚轮只有纵向：chip 溢出时把纵向滚动转成横向（触控板横滑原生就行）
+  els.tagBar.addEventListener('wheel', (e) => {
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    if (els.tagBar.scrollWidth <= els.tagBar.clientWidth) return;
+    els.tagBar.scrollLeft += e.deltaY;
+    e.preventDefault();
+  }, { passive: false });
 }
-els.tagBarChips.addEventListener('scroll', syncTagChipsOverflow, { passive: true });
 // 回到首页的两个入口。
 // ① 面包屑最左段——面包屑本来就是导航路径，第一段可点回根是标准语义，
 //    而且它就在当前文档标题的左边，视线不用移动
@@ -5877,7 +6650,7 @@ async function doContentSearch(q) {
     const data = await r.json();
     if (my !== contentSearchSeq) return;
     state.contentMatches = new Map((data.matches || []).map(m => [m.path, m.snippet]));
-    render();
+    applyFilterChange();
   } catch {}
 }
 
@@ -5894,14 +6667,14 @@ els.search.addEventListener('input', (e) => {
     if (state.search === v) return;
     state.search = v;
     state.contentMatches = new Map();   // 先按文件名渲染（即时反馈）
-    render();
+    applyFilterChange();
     if (shouldSearchContent(v)) doContentSearch(v);
     else contentSearchSeq++;             // cancel pending
     // 同步刷新 iframe 内高亮
     updateIframeHighlight();
   }, 80);
 });
-els.onlyUnread.addEventListener('change', (e) => { state.onlyUnread = e.target.checked; render(); });
+els.onlyUnread.addEventListener('change', (e) => { state.onlyUnread = e.target.checked; applyFilterChange(); });
 els.btnRefresh.addEventListener('click', fetchState);
 
 els.btnNewFolder.addEventListener('click', async () => {
@@ -5923,7 +6696,7 @@ els.btnNewFolder.addEventListener('click', async () => {
 els.btnMarkAll.addEventListener('click', async () => {
   const ok = await showConfirm({
     title: '全部标为已读？',
-    body: '所有文档的未读红点都会被清掉。',
+    body: '所有文档的未读标记都会被清掉。',
     confirmText: '全部标为已读',
   });
   if (!ok) return;
@@ -6217,8 +6990,9 @@ const SHORTCUTS = [
       [['/'], '聚焦搜索框'],
       [[MOD, 'B'], '收起 / 展开侧边栏'],
       [[MOD, 'S'], '保存改动到文件（编辑态）'],
+      [[MOD, '.'], '进入 / 退出专注阅读（Safari 请用顶栏按钮）'],
       [['?'], '打开这份快捷键清单'],
-      [['Esc'], '由近及远地退出：关查找/弹窗 → 清空搜索 → 清除文档内高亮 → 收起对比 → 回到首页'],
+      [['Esc'], '由近及远地退出：关快速查看 → 退出专注 → 关查找/弹窗 → 清空搜索 → 清除文档内高亮 → 收起对比 → 回到首页'],
     ],
   },
   {
@@ -6248,8 +7022,29 @@ const SHORTCUTS = [
       [['↓'], '在搜索框里按 ↓ 进入文件列表'],
       [['↑', '↓'], '在列表里上下移动（第一条再按 ↑ 回搜索框）'],
       [['Enter'], '打开当前文件'],
+      [['Space'], '快速查看（目录树焦点行 / ⌘K 空状态）'],
       [['Esc'], '退出列表，回到搜索框'],
       [['双击'], '双击分组名 / 文件名即可重命名'],
+    ],
+  },
+  {
+    group: '星图',
+    items: [
+      [['←', '→'], '视图分段控件上：在分组 / 目录 / 星图间切换'],
+      [['↑', '↓', '←', '→'], '画布获得焦点时平移'],
+      [['+', '-'], '放大 / 缩小（滚轮与触控板捏合同效）'],
+      [['0'], '显示全部'],
+      [['Enter'], '画布上：焦点移到星表；星表里：打开星团 / 文档'],
+      [['Space'], '星表里：快速查看选中的星'],
+    ],
+  },
+  {
+    group: '时间河流',
+    items: [
+      [['←', '→'], '手柄上：移动一小时'],
+      [['Shift', '←', '→'], '手柄上：移动一天'],
+      [['Home', 'End'], '手柄移到最左 / 最右（两手柄在两端 = 不筛选）'],
+      [['Esc'], '首页 / 星图上：清除时间段筛选'],
     ],
   },
   {
@@ -6266,7 +7061,7 @@ const SHORTCUTS = [
     items: [
       [['['], '阅读宽度收窄一档（推荐 → 加宽 → 占满全屏）'],
       [[']'], '阅读宽度放宽一档'],
-      [['点右上角控件'], '同上，三档直选（选择会被记住）'],
+      [['点右上角控件'], '同上，三档直选（选择会被记住；专注阅读时控件在左下角）'],
     ],
   },
   {
@@ -6494,6 +7289,14 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
+  // ⌘. / Ctrl+.：进入 / 退出专注阅读。用 e.key 而不是 e.code，理由同 ?（布局无关）。
+  // 没有活动文档时无效；编辑态下 enterFocus 自己给 toast 并拒绝进入
+  if (mod && e.key === '.' && !e.altKey && !e.shiftKey) {
+    e.preventDefault();
+    toggleFocusMode();
+    return;
+  }
+
   // ⌘K / Ctrl+K：快速打开。在 Markdown 编辑器里让位给"插入链接"
   if (mod && e.key.toLowerCase() === 'k' && !e.altKey && !e.shiftKey) {
     if (isInMdEditor(active)) return;
@@ -6553,19 +7356,27 @@ document.addEventListener('keydown', (e) => {
   }
   // Escape 是一条"由近及远地退出当前语境"的阶梯，从上到下越来越远：
   //   弹窗（在上面那个 capture 层就被吃掉了，走不到这里）
+  //   → 快速查看浮窗 → 专注阅读（§3f 第 2 级）
   //   → 搜索框里的这次搜索
   //   → 对比面板
   //   → 当前文档（回首页）
   // 编辑态整段跳过：那时 Escape 的候选动作是"放弃改动"，不该由一个
   // 顺手按下的键来决定，交给顶栏的「取消」按钮走确认流程。
   if (e.key === 'Escape') {
+    // 第一级：关闭快速查看浮窗（通常已在上面的 capture 层处理，这里兜底）
+    if (window.AtlasPeek && AtlasPeek.isOpen()) { e.preventDefault(); AtlasPeek.close(); return; }
+    // 第二级：退出专注阅读（焦点回到 #btn-focus）
+    if (focusState.on) { e.preventDefault(); exitFocus(); return; }
+    // 模态之后：收起树头的排序 / 筛选菜单，焦点还给 #btn-sort
+    // （菜单里的「仅未读」是 checkbox，所以排在 isTypingTarget 判断之前）
+    if (isSortMenuOpen()) { e.preventDefault(); closeSortMenu({ restoreFocus: true }); return; }
     // 最先：关掉打开着的文档内查找栏（并清掉它的高亮）
     if (findState.open) { e.preventDefault(); closeFind(); return; }
     if (active === els.search) {
       els.search.value = '';
       state.search = '';
       state.contentMatches = new Map();
-      render();
+      applyFilterChange();
       updateIframeHighlight();
       return;
     }
@@ -6579,7 +7390,9 @@ document.addEventListener('keydown', (e) => {
       return;
     }
     if (diffState.open) { e.preventDefault(); closeDiff(); return; }
-    if (state.activeFilePath) { e.preventDefault(); goHome(); }
+    if (state.activeFilePath) { e.preventDefault(); goHome(); return; }
+    // 末级：没有活动文档（首页 / 星图）且有时间段筛选 → 清除时间筛选
+    if (state.timeRange) { e.preventDefault(); clearTimeRange(); }
     return;
   }
 });
@@ -6594,6 +7407,9 @@ const qoEls = {
   count: document.getElementById('quickopen-count'),
 };
 const QO_LIMIT = 50;
+// 空状态「最近打开」段最多几条；「收藏」段列全部，超过 QO_SECTION_SCROLL 条时该段内部滚动
+const QO_RECENT_MAX = 8;
+const QO_SECTION_SCROLL = 8;
 // 正文命中单独限量：它是"补充手段"，不该把名称命中挤出视野
 const QO_CONTENT_LIMIT = 25;
 const QO_CONTENT_DEBOUNCE = 180;
@@ -6653,16 +7469,37 @@ function qoSearch(query) {
   if (!q) {
     // 空查询：最近打开优先，其次按修改时间
     const recentSet = new Map((state.recent || []).map((p, i) => [p, i]));
-    return files
+    const ordered = files
       .slice()
       .sort((a, b) => {
         const ra = recentSet.has(a.path) ? recentSet.get(a.path) : Infinity;
         const rb = recentSet.has(b.path) ? recentSet.get(b.path) : Infinity;
         if (ra !== rb) return ra - rb;
         return (b.mtime || 0) - (a.mtime || 0);
-      })
-      .slice(0, QO_LIMIT)
-      .map(f => ({ file: f, hits: [], label: f.alias || stripDocExt(f.name) }));
+      });
+    const row = (f, section) => ({ file: f, hits: [], label: f.alias || stripDocExt(f.name), section });
+    const recent = (state.recent || []).filter(p => state.files[p]).slice(0, QO_RECENT_MAX);
+    const favs = (state.favorites || []).filter(p => state.files[p]);
+    // 没有最近也没有收藏：和过去完全一样，一段平铺
+    if (!recent.length && !favs.length) return ordered.slice(0, QO_LIMIT).map(f => row(f));
+    // 分段（design §11.B1）：最近打开（≤8）→ 收藏（全部）→ 全部文档（其余，原顺序）。
+    // 每篇只出现一次：已在「最近打开」里的收藏不再重复列
+    const seen = new Set();
+    const out = [];
+    for (const p of recent) { seen.add(p); out.push(row(state.files[p], 'recent')); }
+    for (const p of favs) {
+      if (seen.has(p)) continue;
+      seen.add(p);
+      out.push(row(state.files[p], 'fav'));
+    }
+    let rest = 0;
+    for (const f of ordered) {
+      if (rest >= QO_LIMIT) break;
+      if (seen.has(f.path)) continue;
+      out.push(row(f, 'all'));
+      rest++;
+    }
+    return out;
   }
   const scored = [];
   for (const f of files) {
@@ -6789,7 +7626,7 @@ function qoRender() {
     return;
   }
 
-  const appendRow = (r, idx) => {
+  const appendRow = (r, idx, host = qoEls.list) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'quickopen-item' + (idx === qoActive ? ' active' : '')
@@ -6797,14 +7634,45 @@ function qoRender() {
     btn.setAttribute('role', 'option');
     btn.setAttribute('aria-selected', String(idx === qoActive));
     btn.dataset.idx = String(idx);
+    btn.dataset.path = r.file.path;
+    if (r.section) btn.dataset.section = r.section;
     btn.title = r.file.relPath;
     btn.innerHTML = qoRowHtml(r, query);
     btn.addEventListener('click', () => qoOpen(idx));
     btn.addEventListener('mousemove', () => qoSetActive(idx));
-    qoEls.list.appendChild(btn);
+    host.appendChild(btn);
   };
 
-  nameResults.forEach((r, idx) => appendRow(r, idx));
+  // 空查询的分段（最近打开 / 收藏 / 全部文档）。段头用 .qo-section，
+  // 不用 .qo-group——那是「正文命中」专用的分组头
+  const QO_SECTION_TITLES = { recent: '最近打开', fav: '收藏', all: '全部文档' };
+  if (nameResults.length && nameResults[0].section) {
+    let idx = 0;
+    for (const key of ['recent', 'fav', 'all']) {
+      const rows = nameResults.filter(r => r.section === key);
+      if (!rows.length) continue;
+      const head = document.createElement('div');
+      head.className = 'qo-section';
+      head.dataset.section = key;
+      head.innerHTML = `${ic(key === 'recent' ? 'clock' : key === 'fav' ? 'star' : 'layers', 11)}<span>${QO_SECTION_TITLES[key]}</span>`
+        + (key === 'recent'
+          ? '<button id="recent-clear" class="qo-section-act recent-clear" type="button" title="清除最近浏览记录" aria-label="清除最近浏览记录">清除</button>'
+          : '');
+      qoEls.list.appendChild(head);
+      let host = qoEls.list;
+      // 收藏超过一屏：这一段自己滚动，别把「全部文档」挤出视野
+      if (key === 'fav' && rows.length > QO_SECTION_SCROLL) {
+        host = document.createElement('div');
+        host.className = 'qo-section-scroll';
+        host.setAttribute('role', 'group');
+        host.setAttribute('aria-label', QO_SECTION_TITLES[key]);
+        qoEls.list.appendChild(host);
+      }
+      for (const r of rows) appendRow(r, idx++, host);
+    }
+  } else {
+    nameResults.forEach((r, idx) => appendRow(r, idx));
+  }
 
   // 正文命中单独分组，标题行说清这是"文件名没匹配上、但正文里有"
   if (contentResults.length) {
@@ -6883,6 +7751,14 @@ function qoSetActive(idx) {
   });
 }
 
+// 快速查看开着时，⌘K 里 ↑↓ 换选中项，浮窗内容跟着换
+function qoPeekRetarget() {
+  if (!window.AtlasPeek || !AtlasPeek.isOpen()) return;
+  const item = qoEls.list.querySelector('.quickopen-item.active[data-path]');
+  if (item) AtlasPeek.retarget(item);
+  else AtlasPeek.close();
+}
+
 function qoOpen(idx) {
   const r = qoResults[typeof idx === 'number' ? idx : qoActive];
   if (!r) return;
@@ -6913,6 +7789,7 @@ function openQuickOpen() {
 
 function closeQuickOpen() {
   if (!qoEls.root) return;
+  if (window.AtlasPeek) AtlasPeek.close();
   qoEls.root.classList.add('hidden');
   if (qoEntry) { popModal(qoEntry); qoEntry = null; }
 }
@@ -6926,9 +7803,16 @@ if (qoEls.root) {
     qoScheduleContentSearch();   // 正文组：debounce 后异步追加
   });
   qoEls.input.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowDown') { e.preventDefault(); qoSetActive(qoActive + 1); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); qoSetActive(qoActive - 1); }
-    else if (e.key === 'Enter') { e.preventDefault(); qoOpen(); }
+    // 空状态（还没输入）时 Space = 快速查看当前选中项；输入非空时 Space 照常输入
+    if (e.key === ' ' && !e.isComposing && !qoEls.input.value && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const item = qoEls.list.querySelector('.quickopen-item.active[data-path]')
+        || qoEls.list.querySelector('.quickopen-item[data-path]');
+      if (item) { e.preventDefault(); AtlasPeek.toggleFor(item.dataset.path, item); }
+      return;
+    }
+    if (e.key === 'ArrowDown') { e.preventDefault(); qoSetActive(qoActive + 1); qoPeekRetarget(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); qoSetActive(qoActive - 1); qoPeekRetarget(); }
+    else if (e.key === 'Enter') { e.preventDefault(); AtlasPeek.close(); qoOpen(); }
     else if (e.key === 'Home') { e.preventDefault(); qoSetActive(0); }
     else if (e.key === 'End') { e.preventDefault(); qoSetActive(qoResults.length - 1); }
   });
@@ -6961,17 +7845,37 @@ els.tree.addEventListener('keydown', (e) => {
   if (e.target.isContentEditable) return;
   const focused = e.target.closest('.file');
   if (!focused) return;
+  // 快速查看优先：Space 开关；浮窗开着时 Esc 只关浮窗，焦点留在原行
+  if (e.key === ' ' && focused.classList.contains('kbd-focus')) {
+    e.preventDefault();                       // .file 是 div[tabindex=-1]，默认会滚动 #tree
+    AtlasPeek.toggleFor(focused.dataset.path, focused);
+    return;
+  }
+  if (e.key === 'Escape' && AtlasPeek.isOpen()) {
+    e.preventDefault();
+    e.stopPropagation();                      // 不让 document 层的 Esc 链再处理一次
+    AtlasPeek.close();                        // 不调 setKbdFocus(null)，不移焦点
+    return;
+  }
   const list = visibleFilesInOrder();
   const idx = list.indexOf(focused);
   if (e.key === 'ArrowDown') {
     e.preventDefault();
-    if (idx < list.length - 1) setKbdFocus(list[idx + 1]);
+    if (idx < list.length - 1) {
+      const newEl = list[idx + 1];
+      setKbdFocus(newEl);
+      if (AtlasPeek.isOpen()) AtlasPeek.retarget(newEl);
+    }
   } else if (e.key === 'ArrowUp') {
     e.preventDefault();
-    if (idx > 0) setKbdFocus(list[idx - 1]);
-    else { setKbdFocus(null); els.search.focus(); }
+    if (idx > 0) {
+      const newEl = list[idx - 1];
+      setKbdFocus(newEl);
+      if (AtlasPeek.isOpen()) AtlasPeek.retarget(newEl);
+    } else { AtlasPeek.close(); setKbdFocus(null); els.search.focus(); }
   } else if (e.key === 'Enter') {
     e.preventDefault();
+    AtlasPeek.close();
     openFile(focused.dataset.path);
   } else if (e.key === 'Escape') {
     // 只有真的在用键盘逐行导航（行上有 .kbd-focus）时，Escape 才是"退出列表"。
@@ -7026,6 +7930,7 @@ async function openSettings() {
   const enabled = Array.isArray(cfg.docTypes) && cfg.docTypes.length ? cfg.docTypes : ['html'];
   els.doctypeRadios.forEach(cb => { cb.checked = enabled.includes(cb.value); });
   lastDocTypes = enabled.slice();
+  updateTransparencyNote();
   els.modal.classList.remove('hidden');
   gotoSettingsPane(settingsPane);
   if (!settingsModalEntry) {
@@ -7064,7 +7969,51 @@ document.querySelectorAll('.settings-nav-item').forEach(btn => {
 // 三态：system（不设 data-theme，由 CSS 的 color-scheme: light dark 跟随系统）/ light / dark。
 // 所有配色都写成 light-dark(浅, 深)，所以切换只需要改根节点的 color-scheme——
 // 不用维护两份色板，iframe 里的预览页也会跟着变（used color scheme 会传播给子文档）。
-function applyTheme(mode) {
+// 用户在设置里切主题：整页交叉淡入（View Transition，kind 'theme'，约 240ms）代替一次性硬切。
+//   · 切换期间 html.theme-switching 关掉所有零散的颜色 transition：它们以前各跑各的 120ms，
+//     被主线程卡住后过一会儿"又跳一下"（diagnosis §6）；快照里拿到的必须是终值
+//   · 原生材质（nativeTheme）在过渡开始时同步切，和网页同一时刻变
+//   · 换封面缩略图、重载 MD 预览这类网络 / 重渲染的活放到过渡结束之后，不污染淡入
+//   · reduced-motion / 自动化环境：withViewTransition 自己降级为同步硬切
+let themeSwitchSeq = 0;
+function switchTheme(mode) {
+  crossfadeAppearance(() => applyTheme(mode, { deferHeavy: true }), { theme: mode });
+}
+// 主题 / 界面色调共用：fn 在过渡的更新回调里执行（或降级时同步执行）
+function crossfadeAppearance(fn, detail) {
+  const root = document.documentElement;
+  const seq = ++themeSwitchSeq;
+  root.classList.add('theme-switching');
+  let applied = false;
+  const apply = () => { applied = true; fn(); };
+  withViewTransition(apply, 'theme');
+  const settle = () => {
+    if (seq !== themeSwitchSeq) return;
+    root.classList.remove('theme-switching');
+    themeHeavyRefresh();
+    try { window.dispatchEvent(new CustomEvent('atlas:theme-settled', { detail: detail || {} })); } catch {}
+  };
+  if (vtActive && vtActive.finished) {
+    vtActive.finished.then(settle, settle);
+  } else {
+    if (!applied) apply();
+    // 同步硬切：等两帧（样式已提交、颜色已是终值）再恢复 transition
+    requestAnimationFrame(() => requestAnimationFrame(settle));
+  }
+}
+// 主题切换后才做的重活：可见封面换新主题的缩略图；正在预览的 MD 换带 theme 的 src 重新渲染
+let themeHeavyPending = false;
+function themeHeavyRefresh() {
+  if (!themeHeavyPending) return;
+  themeHeavyPending = false;
+  const f = state.files[state.activeFilePath];
+  if (f && isMdFile(f) && !editState.active) {
+    const url = previewUrlFor(f);
+    if (els.preview.getAttribute('src') !== url) els.preview.src = url;
+  }
+  refreshThumbsForTheme();
+}
+function applyTheme(mode, { deferHeavy = false } = {}) {
   const root = document.documentElement;
   if (mode === 'light' || mode === 'dark') root.setAttribute('data-theme', mode);
   else { root.removeAttribute('data-theme'); mode = 'system'; }
@@ -7074,17 +8023,29 @@ function applyTheme(mode) {
     b.classList.toggle('is-on', on);
     b.setAttribute('aria-checked', on ? 'true' : 'false');
   });
-  // 正在预览 md 时要换 src（theme 在 URL 上），换完预览页才会重新渲染。
+  // 桌面版：主题同步给 nativeTheme.themeSource，vibrancy 材质才跟着 Atlas 主题走
+  // （浏览器里没有这个桥，可选链即 no-op）。启动时下面那次 applyTheme 也会走到这里
+  window.atlasDesktop?.setTheme?.(mode);
+  // 正在预览 md 时要换 src（theme 在 URL 上），换完预览页才会重新渲染；
+  // 缩略图按外观各存一份：可见封面换成新主题的图 / 重新请求。
   // 普通 HTML 文档的配色由文档自己决定，Atlas 不干预，也就不用动。
-  const f = state.files[state.activeFilePath];
-  if (f && isMdFile(f) && !editState.active) {
-    els.preview.src = previewUrlFor(f);
-  }
+  themeHeavyPending = true;
+  if (!deferHeavy) themeHeavyRefresh();
 }
 document.querySelectorAll('[data-theme-pick]').forEach(btn => {
-  btn.addEventListener('click', () => applyTheme(btn.dataset.themePick));
+  btn.addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme') || 'system';
+    if (btn.dataset.themePick === cur) return;
+    switchTheme(btn.dataset.themePick);
+  });
 });
 applyTheme(localStorage.getItem('atlas:theme') || 'system');
+// 跟随系统时，系统外观切换也要换封面缩略图
+try {
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (!forcedTheme()) refreshThumbsForTheme();
+  });
+} catch {}
 
 // ---------- 界面色调（冷 / 暖 中性皮肤） ----------
 // 只切换中性色令牌（[data-skin]），主色 / 品牌 / 封面色不变，和浅/深主题正交。
@@ -7101,9 +8062,105 @@ function applySkin(mode) {
   });
 }
 document.querySelectorAll('[data-skin-pick]').forEach(btn => {
-  btn.addEventListener('click', () => applySkin(btn.dataset.skinPick));
+  btn.addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-skin') === 'warm' ? 'warm' : 'cool';
+    if (btn.dataset.skinPick === cur) return;
+    crossfadeAppearance(() => applySkin(btn.dataset.skinPick), { skin: btn.dataset.skinPick });
+  });
 });
 applySkin(localStorage.getItem('atlas:skin') || 'cool');
+// ---------- 界面动效（跟随系统 / 减少） ----------
+// 「减少」= html[data-motion="reduce"]：CSS 侧所有 --dur-* 与 --stagger 归零、授权块里的动画不生效；
+// JS 侧 prefersReducedMotion() 返回 true。它只能比系统更安静：选「跟随系统」时由系统偏好决定。
+// 防闪由 index.html 顶部内联脚本负责（和主题同理）。
+function notifyMotionChange() {
+  // 切到「减少」时进行中的过渡直接跳到终态
+  if (prefersReducedMotion() && vtActive) { try { vtActive.skipTransition(); } catch {} }
+  try {
+    window.dispatchEvent(new CustomEvent('atlas:motion-change', { detail: { reduce: prefersReducedMotion() } }));
+  } catch {}
+}
+function applyMotion(mode) {
+  const root = document.documentElement;
+  if (mode === 'reduce') root.setAttribute('data-motion', 'reduce');
+  else { root.removeAttribute('data-motion'); mode = 'system'; }
+  try {
+    if (mode === 'reduce') localStorage.setItem('atlas:motion', 'reduce');
+    else localStorage.removeItem('atlas:motion');
+  } catch {}
+  document.querySelectorAll('[data-motion-pick]').forEach(b => {
+    const on = b.dataset.motionPick === mode;
+    b.classList.toggle('is-on', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+  });
+  notifyMotionChange();
+}
+document.querySelectorAll('[data-motion-pick]').forEach(btn => {
+  btn.addEventListener('click', () => applyMotion(btn.dataset.motionPick));
+});
+applyMotion(localStorage.getItem('atlas:motion') === 'reduce' ? 'reduce' : 'system');
+// 运行中切换系统「减少动态效果」：立即生效（进行中的过渡直接跳到终态，持续循环由监听方停下）
+if (window.matchMedia) {
+  const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+  if (mq.addEventListener) mq.addEventListener('change', notifyMotionChange);
+  else if (mq.addListener) mq.addListener(notifyMotionChange);
+}
+// 桌面版：全屏时红绿灯消失，撤掉顶栏的红绿灯避让内边距（见 styles.css 桌面版段）
+// 设置「外观」里的「侧栏透明度」状态行（只在桌面版显示，见 index.html #transparency-section）
+function reduceTransparencyOn() {
+  if (document.documentElement.classList.contains('reduce-transparency')) return true;
+  try { return window.matchMedia('(prefers-reduced-transparency: reduce)').matches; } catch { return false; }
+}
+function updateTransparencyNote() {
+  const el = document.getElementById('transparency-status');
+  if (!el) return;
+  el.textContent = reduceTransparencyOn()
+    ? '当前：系统已开启「降低透明度」，侧栏为实底。'
+    : '当前：未开启「降低透明度」，侧栏透出桌面背景。';
+}
+try {
+  const mqt = window.matchMedia('(prefers-reduced-transparency: reduce)');
+  if (mqt.addEventListener) mqt.addEventListener('change', updateTransparencyNote);
+} catch {}
+
+// 桌面版：标出当前吸顶、盖在滚动内容上的那个顶层分组头（.is-stuck）。侧栏是半透明的，
+// 静息的分组头必须透明（否则在材质上盖出一块块实底补丁），只有吸顶的那一个需要遮住下方行
+var stuckRaf = 0;      // var：render() 可能早于这里执行（避免 TDZ）
+var stuckHeader = null;
+function updateStuckHeader() {
+  stuckRaf = 0;
+  if (!els.tree) return;
+  let hit = null;
+  if (els.tree.scrollTop > 0) {
+    const top = els.tree.getBoundingClientRect().top;
+    for (const f of els.tree.children) {
+      if (!f.classList.contains('folder')) continue;
+      const r = f.getBoundingClientRect();
+      if (r.top < top - 0.5 && r.bottom > top + 1) { hit = f.querySelector(':scope > .folder-header'); break; }
+      if (r.top >= top) break;
+    }
+  }
+  if (hit === stuckHeader) return;
+  if (stuckHeader) stuckHeader.classList.remove('is-stuck');
+  if (hit) hit.classList.add('is-stuck');
+  stuckHeader = hit;
+}
+function scheduleStuckHeader() {
+  if (!document.documentElement.hasAttribute('data-desktop')) return;
+  if (!stuckRaf) stuckRaf = requestAnimationFrame(updateStuckHeader);
+}
+els.tree.addEventListener('scroll', scheduleStuckHeader, { passive: true });
+
+// 系统「降低透明度」由主进程从 nativeTheme 读出推过来（与 CSS 的 prefers-reduced-transparency 互为兜底）
+window.atlasDesktop?.onWindowState?.((s) => {
+  const root = document.documentElement;
+  root.classList.toggle('is-fullscreen', !!(s && s.fullscreen));
+  applySidebarWidth();   // 退出全屏后红绿灯内边距回来，偏好宽度过窄时撑到放得下
+  if (s && typeof s.reducedTransparency === 'boolean') {
+    root.classList.toggle('reduce-transparency', s.reducedTransparency);
+    updateTransparencyNote();
+  }
+});
 
 // ---------- 顶栏「更多」菜单 ----------
 // 菜单项（新标签打开 / 访达 / 复制路径）各自的动作由原按钮监听器处理，
@@ -7271,7 +8328,7 @@ function renderShareList() {
     const metaParts = [];
     if (item.expiresAt) {
       const mins = Math.ceil((item.expiresAt - Date.now()) / 60_000);
-      metaParts.push(mins > 60 ? `${Math.floor(mins / 60)}h 后过期` : (mins > 0 ? `${mins}m 后过期` : '已过期'));
+      metaParts.push(mins > 60 ? `${Math.floor(mins / 60)}时后过期` : (mins > 0 ? `${mins}分后过期` : '已过期'));
     } else {
       metaParts.push('不过期');
     }
@@ -7641,6 +8698,10 @@ function connectSSE() {
       if (window.__handleUpdateSSE) window.__handleUpdateSSE(data);
       return;
     }
+    // 缩略图完成 / 失败 / 被挤出：只更新对应卡片，不当成文件事件（不弹通知、不整包重拉）
+    if (data.channel === 'thumb') { onThumbReady(data); return; }
+    // 引用关系索引版本变了：星图 / 迷你星图用过的话重拉一次 /api/links（不触发 fetchState）
+    if (data.channel === 'links') { onLinksEvent(data); return; }
 
     // 文件系统事件（旧 fs 流，兼容没 channel 的旧 payload）
     if (data.kind === 'add') {
@@ -7648,8 +8709,26 @@ function connectSSE() {
     } else if (data.kind === 'change') {
       notify('✏️ 文档已更新', `${data.projectName} / ${data.name}`);
     }
+    // 「AI 刚改过」：只收不是 Atlas 自己写的（保存 / 还原 / 重命名的负载带 self:true）
+    if ((data.kind === 'add' || data.kind === 'change') && data.self !== true) {
+      markJustChanged(data.path);
+    }
+    // 时间河流：按 data.mtime 追加到活动日志的本地副本（self 事件也追加：'save' 是覆盖标记、
+    // 'rename' 是计数事件，与服务端同一张分类表），然后同步重算时间段
+    if (data.kind === 'add' || data.kind === 'change') onRiverSseEvent(data);
     if (pendingRefresh) clearTimeout(pendingRefresh);
     pendingRefresh = setTimeout(() => { pendingRefresh = null; fetchState(); }, 400);
+  };
+  // 首连与重连成功都会触发
+  es.onopen = () => {
+    if (evtSrc !== es) return;
+    setLiveStatus('live');
+    // 断线期间可能漏掉 thumb ready：把 queued 条目删掉，下次可见时重新问一次状态
+    // （服务端已完成的会直接回 ready，不会重截）
+    for (const [k, it] of state.thumbs.items) {
+      if (it.status === 'queued') state.thumbs.items.delete(k);
+    }
+    thumbReqSig.clear();
   };
   es.onerror = () => {
     // 已被后来的实例取代：这是条僵尸连接，关掉就好，不参与重连排程
@@ -7658,10 +8737,11 @@ function connectSSE() {
     // 避免"浏览器自动重连 + 手动重连"两条连接叠加
     try { es.close(); } catch {}
     evtSrc = null;
-    if (sseRetryTimer) return;   // 已有重连在排队，不重复排
+    if (sseRetryTimer) { setLiveStatus('retry'); return; }   // 已有重连在排队，不重复排
     // 后台 tab 不排重连：连接槽要留给可见 tab，回前台时再由 visibilitychange 统一重连
-    if (document.hidden) return;
+    if (document.hidden) { setLiveStatus('off'); return; }
     sseRetryTimer = setTimeout(() => { sseRetryTimer = null; connectSSE(); }, 3000);
+    setLiveStatus('retry');
   };
 }
 
@@ -7670,6 +8750,26 @@ function connectSSE() {
 function disconnectSSE() {
   if (sseRetryTimer) { clearTimeout(sseRetryTimer); sseRetryTimer = null; }
   if (evtSrc) { try { evtSrc.close(); } catch {} evtSrc = null; }
+  setLiveStatus('off');
+}
+
+// 侧栏底栏 #live-status：live（已连接）/ retry（重连中）/ off（页面在后台，已暂停）。
+// 不加 role="status"，免得断线重连时反复播报；读屏文案写在 .sr-only 里。
+const LIVE_STATUS_TEXT = {
+  live:  { hud: '实时',   title: '实时更新：已连接',             sr: '实时更新已连接' },
+  retry: { hud: '重连中', title: '实时更新：连接中断，正在重连', sr: '实时更新连接中断，正在重连' },
+  off:   { hud: '已暂停', title: '实时更新：页面在后台，已暂停', sr: '实时更新已暂停' },
+};
+function setLiveStatus(s) {
+  const el = document.getElementById('live-status');
+  const t = LIVE_STATUS_TEXT[s];
+  if (!el || !t || el.dataset.state === s) return;
+  el.dataset.state = s;
+  el.title = t.title;
+  const hud = el.querySelector('.hud');
+  const sr = el.querySelector('.sr-only');
+  if (hud) hud.textContent = t.hud;
+  if (sr) sr.textContent = t.sr;
 }
 
 // ---------- 新版本提示：banner + 顶栏小标签 + 桌面通知 ----------
@@ -8002,18 +9102,924 @@ function renderDesktopUpdateStatus(s) {
   }
 }
 
-setInterval(() => { if (!document.hidden) fetchState(); }, 60_000);
+// 唯一的 60 秒定时器：先 tickMinute()（首页时钟 / 星图档位随时间变暗 / 跨整点标记），再 fetchState()
+// 正赶上侧栏收起 / 展开动画时，等动画落定再做：这次整包重拉 + 重渲染曾和 60.1s 那次收起撞在
+// 同一段，掉了 14 帧（client-fix 第 2 轮冷启动探针）。后台兜底刷新晚 ~200ms 无感。
+setInterval(() => {
+  if (document.hidden) return;
+  const run = () => { tickMinute(); fetchState(); };
+  if (document.body.classList.contains('sidebar-animating')) window.addEventListener('atlas:sidebar-settled', run, { once: true });
+  else run();
+}, 60_000);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     // 切到后台：释放 SSE 连接槽，避免后台 tab 一多就把 6 条连接池占满
     disconnectSSE();
     return;
   }
+  tickMinute();
   // 回到前台：没连接就重连，并补拉一次最新状态（补上后台断连期间漏掉的文件系统事件）
   if (!evtSrc) connectSSE();
   fetchState();
 });
 
+// ==================== 星图（design §3a / §10.1–10.3 / §10.9） ====================
+// 星图是第三种视图，但它不在侧栏里：选中「星图」时主区的首页表面从封面墙换成星图，
+// 侧栏照旧渲染 listView 那种列表。星图模块（starmap.js）不读 state，数据由这里喂给它。
+// 这一段的模块级状态用 var：render() / fetchState() 可能在脚本加载早期就被调用
+var stateLoaded = false;            // 第一次 /api/state 成功之后才显示"还没有星星"
+var starmapShown = false;           // 上一次 syncStarmapPresence 看到的可见性
+var starmapFilesRef = null;         // 上次喂给星图的 state.files（对象身份）
+var starmapJcVer = -1;
+var pendingHourRecompute = false;   // 60 秒那一拍跨了整点（只在这条路径上合并）
+var lastHourStamp = Math.floor(Date.now() / 3_600_000);
+var minimapSig = null;
+var minimapFirstDone = false;   // 启动后第一次绘制已完成（之前的那次延后到空闲）
+var minimapIdle = 0;
+var minimapRenders = 0;        // 实际绘制次数（spec 用：侧栏切换一次最多重画一次）
+try { Object.defineProperty(window, '__atlasMinimapRenders', { get: () => minimapRenders }); } catch {}
+var starmapCatalog = { project: null, limit: 200 };
+var starmapLinks = { needed: false, loaded: false, loading: false, again: false, version: -1, tries: 0, timer: null };
+var canvasPeekPath = null;
+
+function starmapAvailable() { return !!window.AtlasStarmap; }
+function starmapCanDraw() { return starmapAvailable() && AtlasStarmap.canDraw(); }
+// 星图此刻是否真的显示在主区上
+function starmapVisible() {
+  return state.viewMode === 'map' && starmapAvailable() && !state.activeFilePath
+    && !!els.starmapView && !els.starmapView.classList.contains('hidden')
+    && !els.emptyState.classList.contains('hidden');
+}
+
+// 首页表面的唯一切换点：goHome 的过渡体、selectView、启动时都调它
+function showHomeSurface() {
+  const map = state.viewMode === 'map' && starmapAvailable();
+  if (els.home) els.home.classList.toggle('hidden', map);
+  if (els.starmapView) els.starmapView.classList.toggle('hidden', !map);
+  els.emptyState.classList.toggle('is-map', map);
+  if (!state.activeFilePath) els.crumbs.innerHTML = crumbHomePlaceholderHtml();
+  if (map) refreshStarmap(true); else renderHome();
+  syncStarmapPresence();
+}
+
+// 可见性变化时：通知星图模块（开 / 停绘制循环），并处理进出星图的侧栏自动收起
+function syncStarmapPresence() {
+  const vis = starmapVisible();
+  if (vis === starmapShown) return;
+  starmapShown = vis;
+  if (starmapAvailable()) AtlasStarmap.setVisible(vis && starmapCanDraw());
+  if (vis) autoCollapseSidebarForStarmap();
+  else restoreSidebarAfterStarmap();
+}
+
+// ---------- 进星图自动收起侧栏（§10.3） ----------
+function showAutoCollapseNote(on) {
+  if (els.autoCollapseNote) els.autoCollapseNote.classList.toggle('hidden', !on);
+}
+function autoCollapseSidebarForStarmap() {
+  if (document.body.classList.contains('sidebar-collapsed')) {
+    // 偏好本来就是收起：保持收起，离开时也不动
+    state.sidebarAutoCollapsed = false;
+    return;
+  }
+  toggleSidebar(true, { auto: true });
+  state.sidebarAutoCollapsed = true;
+  showAutoCollapseNote(true);
+}
+function restoreSidebarAfterStarmap() {
+  showAutoCollapseNote(false);
+  if (!state.sidebarAutoCollapsed) return;
+  state.sidebarAutoCollapsed = false;
+  toggleSidebar(false, { auto: true });
+}
+
+// ---------- 数据 ----------
+// 与侧栏同口径：state.files 已由服务端排除归档分组
+function starmapRows() {
+  const out = [];
+  for (const f of Object.values(state.files)) {
+    out.push({
+      path: f.path,
+      name: f.alias || stripDocExt(f.name),
+      project: f.projectName || '',
+      mtime: f.mtime || 0,
+      unread: !!f.unread,
+      fresh: isFreshUnread(f),
+      justChanged: isJustChanged(f.path),
+    });
+  }
+  return out;
+}
+function starmapTruncNote() {
+  if (!state.indexTruncated) return '';
+  const cap = state.maxIndexFiles || 0;
+  const capText = cap && cap % 10_000 === 0 ? `${cap / 10_000} 万` : cap.toLocaleString();
+  return `（已达 ${capText}篇上限，部分未纳入）`;
+}
+// 把最新的数据 / 筛选推给星图，并刷新 HUD 之外由 app.js 负责的几块（筛选状态、星表、空态）
+function refreshStarmap(force = false) {
+  if (!starmapAvailable() || !els.starmapView) return;
+  if (force || state.files !== starmapFilesRef || jcVersion !== starmapJcVer) {
+    starmapFilesRef = state.files;
+    starmapJcVer = jcVersion;
+    AtlasStarmap.setData(starmapRows());
+  }
+  const snap = filterSnapshot();
+  AtlasStarmap.setFilter(snap.active ? snap.hits : null);
+  AtlasStarmap.setNote(starmapTruncNote());
+  const total = Object.keys(state.files).length;
+  const canDraw = starmapCanDraw();
+  els.starmapView.classList.toggle('no-canvas', !canDraw);
+  if (els.starmapNoCanvas) els.starmapNoCanvas.classList.toggle('hidden', canDraw);
+  if (els.starmapEmpty) els.starmapEmpty.classList.toggle('hidden', !(stateLoaded && total === 0));
+  updateStarmapFilterStatus(snap);
+  renderStarmapCatalog();
+  ensureStarmapLinks();
+}
+function updateStarmapFilterStatus(snap) {
+  const el = els.starmapFilterStatus;
+  if (!el) return;
+  if (!snap.active) {
+    el.classList.add('hidden');
+    el.textContent = '';
+    delete el.dataset.hits;
+    return;
+  }
+  const items = [];
+  if (state.onlyUnread) items.push('只看未读');
+  if (state.tagFilter.size) items.push(`标签「${[...state.tagFilter].join('、')}」`);
+  if (state.search) items.push(`搜索「${state.search}」`);
+  if (state.timeRange) items.push(`⏱ ${AtlasRiver.fmtRange(state.timeRange)}`);
+  const sep = '<span class="sep" aria-hidden="true"> · </span>';
+  el.innerHTML = `<span class="hud">筛选中</span>${sep}`
+    + items.map(t => `<span>${escapeHtml(t)}</span>`).join(sep)
+    + `${sep}<span>命中 <b>${snap.size.toLocaleString()}</b> / ${snap.total.toLocaleString()}</span>`
+    + `${sep}<span class="where">在侧栏中修改</span>`;
+  el.dataset.hits = String(snap.size);
+  el.classList.remove('hidden');
+}
+
+// ---------- 引用关系 ----------
+function ensureStarmapLinks() {
+  starmapLinks.needed = true;
+  if (!starmapLinks.loaded && !starmapLinks.loading && !starmapLinks.timer) loadStarmapLinks();
+}
+async function loadStarmapLinks() {
+  if (!starmapAvailable()) return;
+  if (starmapLinks.loading) { starmapLinks.again = true; return; }
+  starmapLinks.loading = true;
+  let ok = false;
+  try {
+    const res = await fetch('/api/links', { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (res.status === 202) throw new Error('not-ready');   // 首轮解析未完成（服务端 202 { ready:false }）
+    const data = await res.json();
+    starmapLinks.loaded = true;
+    starmapLinks.version = data.version;
+    starmapLinks.tries = 0;
+    AtlasStarmap.setLinks(data);
+    ok = true;
+  } catch {
+    // 未就绪（503）或失败：星图照常渲染、不画线，图例显示「引用关系暂不可用」；
+    // 之后由 SSE 'links' 或有限次重试补上
+    starmapLinks.loaded = false;
+    AtlasStarmap.setLinks(null);
+    if (starmapLinks.tries < 10 && !starmapLinks.timer) {
+      starmapLinks.tries++;
+      starmapLinks.timer = setTimeout(() => { starmapLinks.timer = null; loadStarmapLinks(); }, 2000);
+    }
+  } finally {
+    starmapLinks.loading = false;
+  }
+  if (ok) { minimapSig = null; renderMinimap(); }
+  if (starmapLinks.again) { starmapLinks.again = false; loadStarmapLinks(); }
+}
+function onLinksEvent(data) {
+  if (!starmapLinks.needed) return;
+  if (data && data.version === starmapLinks.version && starmapLinks.loaded) return;
+  if (starmapLinks.timer) { clearTimeout(starmapLinks.timer); starmapLinks.timer = null; }
+  starmapLinks.tries = 0;
+  loadStarmapLinks();
+}
+
+// ---------- 首页迷你星图（§10.1） ----------
+function renderMinimap() {
+  const btn = els.homeMinimap;
+  if (!btn || !els.homeMinimapCanvas) return;
+  const total = Object.keys(state.files).length;
+  const ok = starmapCanDraw() && total > 0;
+  btn.classList.toggle('hidden', !ok);
+  if (!ok) return;
+  // 不在屏上（星图模式 / 文档态）时不画；回到封面墙时 renderHome 会再来
+  if ((els.home && els.home.classList.contains('hidden')) || els.emptyState.classList.contains('hidden')) return;
+  ensureStarmapLinks();
+  const rows = starmapRows();
+  const sig = AtlasStarmap.signature(rows) + '|' + starmapLinks.version + '|' + els.homeMinimapCanvas.clientWidth;
+  if (sig === minimapSig) return;
+  // 启动后的第一次延后到浏览器空闲（最多 1.2s）：首个 /api/state 已经要同步建整棵树和首页，
+  // 迷你星图（全量布局 + 画布）与它挤在同一帧会把启动期的长帧再拉长（diagnosis §2）
+  if (minimapSig === null && !minimapFirstDone) {
+    if (!minimapIdle) {
+      const run = () => { minimapIdle = 0; minimapFirstDone = true; renderMinimap(); };
+      minimapIdle = typeof requestIdleCallback === 'function'
+        ? requestIdleCallback(run, { timeout: 1200 }) : setTimeout(run, 300);
+    }
+    return;
+  }
+  minimapSig = sig;
+  minimapRenders++;
+  // 与主星图同一份布局：先把数据交给星图模块（不可见时只布局、不绘制）
+  starmapFilesRef = state.files;
+  starmapJcVer = jcVersion;
+  AtlasStarmap.setData(rows);
+  AtlasStarmap.renderThumbnail(els.homeMinimapCanvas, rows);
+}
+if (els.homeMinimap) {
+  els.homeMinimap.addEventListener('click', () => selectView('map'));
+  if (typeof ResizeObserver === 'function') {
+    // 尺寸变了才重画（签名里带画布宽度），并且去抖到尺寸稳定：侧栏收起 / 展开动画期间不画，
+    // 动画结束（atlas:sidebar-settled）后最多画一次。以前每帧都触发、每次全量重布局 2,000+ 颗星
+    let minimapRoTimer = 0;
+    const minimapResized = () => {
+      clearTimeout(minimapRoTimer);
+      minimapRoTimer = setTimeout(() => {
+        if (document.body.classList.contains('sidebar-animating')) return;   // settled 事件会再来
+        if (!els.homeMinimap.classList.contains('hidden')) renderMinimap();
+      }, 120);
+    };
+    new ResizeObserver(minimapResized).observe(els.homeMinimap);
+    window.addEventListener('atlas:sidebar-settled', minimapResized);
+  }
+}
+
+// ---------- 星表（§3a「可访问性」：画布的等价替代界面） ----------
+function relShortTime(ts) {
+  const d = Date.now() - (ts || 0);
+  if (d < 3_600_000) return Math.max(1, Math.floor(d / 60_000)) + '分';
+  if (d < 86_400_000) return Math.floor(d / 3_600_000) + '时';
+  return Math.floor(d / 86_400_000) + '天';
+}
+function starmapTier(ts) {
+  return AtlasStarmap.tierOf(ts || 0, Date.now());
+}
+function catalogOpenPref() {
+  const v = localStorage.getItem('atlas:starmapCatalog');
+  if (v === 'open') return true;
+  if (v === 'closed') return false;
+  return window.innerWidth >= 1100;
+}
+function applyCatalogOpen(open) {
+  if (!els.starmapView) return;
+  els.starmapView.classList.toggle('catalog-collapsed', !open);
+  if (els.starmapCatalogToggle) els.starmapCatalogToggle.setAttribute('aria-expanded', String(open));
+}
+if (els.starmapCatalogToggle) {
+  applyCatalogOpen(catalogOpenPref());
+  els.starmapCatalogToggle.addEventListener('click', () => {
+    const open = els.starmapView.classList.contains('catalog-collapsed');
+    try { localStorage.setItem('atlas:starmapCatalog', open ? 'open' : 'closed'); } catch {}
+    applyCatalogOpen(open);
+  });
+}
+if (els.starmapEmpty) {
+  els.starmapEmpty.addEventListener('click', async () => {
+    await openSettings();
+    gotoSettingsPane('scan');
+  });
+}
+
+function catalogGroups(snap) {
+  const groups = new Map();
+  for (const f of Object.values(state.files)) {
+    const p = f.projectName || '';
+    let g = groups.get(p);
+    if (!g) { g = { name: p, files: [], hits: 0, unread: 0, fresh: 0, latest: 0 }; groups.set(p, g); }
+    g.files.push(f);
+    if (!snap.active || snap.hits.has(f.path)) g.hits++;
+    if (f.unread) g.unread++;
+    if (isFreshUnread(f)) g.fresh++;
+    if ((f.mtime || 0) > g.latest) g.latest = f.mtime || 0;
+  }
+  return groups;
+}
+function catalogFocusKey() {
+  const a = document.activeElement;
+  if (!a || !els.starmapCatalogBody || !els.starmapCatalogBody.contains(a)) return null;
+  if (a.dataset.path) return { sel: `.sm-star[data-path="${CSS.escape(a.dataset.path)}"]` };
+  if (a.dataset.project != null) return { sel: `.sm-cluster[data-project="${CSS.escape(a.dataset.project)}"]` };
+  if (a.classList.contains('cat-back')) return { sel: '.cat-back' };
+  return null;
+}
+function renderStarmapCatalog() {
+  const body = els.starmapCatalogBody;
+  if (!body || !starmapAvailable()) return;
+  const snap = filterSnapshot();
+  const groups = catalogGroups(snap);
+  const focusKey = catalogFocusKey();
+  if (starmapCatalog.project != null && !groups.has(starmapCatalog.project)) {
+    starmapCatalog.project = null;
+    AtlasStarmap.focusPath(null);
+  }
+  let html = '';
+  if (starmapCatalog.project == null) {
+    const list = [...groups.values()].sort((a, b) =>
+      ((b.hits > 0) - (a.hits > 0)) || (b.latest - a.latest) || (a.name < b.name ? -1 : 1));
+    const max = Math.max(1, ...list.map(g => g.files.length));
+    html = `<div class="cat-title"><span class="hud">星团 · ${list.length}</span><span class="cat-sort">按最近改动</span></div>`
+      + list.map((g, i) => {
+        const noHit = snap.active && !g.hits;
+        const cnt = snap.active ? `${g.hits}/${g.files.length}` : String(g.files.length);
+        const label = `${g.name}，${g.files.length} 篇，${g.unread} 篇未读，最近改动 ${fmtMtime(g.latest)}`
+          + (snap.active ? (noHit ? '，无命中' : `，命中 ${g.hits} 篇`) : '');
+        const sub = noHit
+          ? '<span>无命中</span>'
+          : `${g.unread ? `<span class="u">${g.unread} 未读</span>` : ''}<span>最近 ${escapeHtml(fmtMtime(g.latest))}</span>`;
+        return `<button class="sm-cluster${g.fresh ? ' has-fresh' : ''}${noHit ? ' no-hit' : ''}" type="button"
+          data-project="${escapeHtml(g.name)}" tabindex="${i ? -1 : 0}" aria-label="${escapeHtml(label)}">
+          <span class="nm">${escapeHtml(g.name)}</span><span class="ct">${cnt}</span>
+          <span class="sub">${sub}</span>
+          <span class="bar" aria-hidden="true"><i style="width:${Math.max(2, Math.round(g.files.length / max * 100))}%"></i></span>
+        </button>`;
+      }).join('');
+  } else {
+    const g = groups.get(starmapCatalog.project);
+    const stars = g.files.filter(f => !snap.active || snap.hits.has(f.path))
+      .sort((a, b) => (b.mtime || 0) - (a.mtime || 0) || (a.path < b.path ? -1 : 1));
+    const shown = stars.slice(0, starmapCatalog.limit);
+    html = `<button class="cat-back" type="button">← 全部星团</button>`
+      + `<div class="cat-title"><b>${escapeHtml(g.name)}</b><span class="cat-count">${snap.active ? `${g.hits}/${g.files.length}` : g.files.length} 篇</span>`
+      + `${g.unread ? `<span class="u">${g.unread} 未读</span>` : ''}</div>`
+      + shown.map((f, i) => {
+        const name = f.alias || stripDocExt(f.name);
+        const lc = AtlasStarmap.linkCounts(f.path);
+        const fresh = isFreshUnread(f);
+        const label = `${name}，${fmtMtime(f.mtime)}${f.unread ? '，未读' : ''}，引用 ${lc.out} 篇、被 ${lc.in} 篇引用`;
+        return `<button class="sm-star${f.unread ? ' unread' : ''}${fresh ? ' fresh' : ''}" type="button"
+          data-path="${escapeHtml(f.path)}" tabindex="${i ? -1 : 0}" aria-label="${escapeHtml(label)}">
+          <span class="tdot" aria-hidden="true"><i class="t${starmapTier(f.mtime)}"></i></span>
+          <span class="nm">${escapeHtml(name)}</span><span class="tm">${relShortTime(f.mtime)}</span>
+        </button>`;
+      }).join('')
+      + (stars.length > shown.length ? `<button class="cat-more" type="button">再显示 200 条</button>` : '');
+  }
+  body.innerHTML = html;
+  if (focusKey) {
+    const el = body.querySelector(focusKey.sel);
+    if (el) { setCatalogRoving(el); el.focus({ preventScroll: true }); }
+  }
+  if (window.AtlasPeek) AtlasPeek.reanchor();
+}
+function catalogItems() {
+  return [...els.starmapCatalogBody.querySelectorAll('.sm-cluster, .sm-star')];
+}
+function setCatalogRoving(el) {
+  for (const it of catalogItems()) it.tabIndex = it === el ? 0 : -1;
+}
+function activateCatalogCluster(name, { focus = false, fly = true } = {}) {
+  starmapCatalog.project = name;
+  starmapCatalog.limit = 200;
+  renderStarmapCatalog();
+  if (fly) AtlasStarmap.flyToProject(name);
+  if (focus) {
+    const first = els.starmapCatalogBody.querySelector('.sm-star') || els.starmapCatalogBody.querySelector('.cat-back');
+    if (first) first.focus();
+  }
+}
+function showCatalogClusters({ focusProject = null } = {}) {
+  starmapCatalog.project = null;
+  AtlasStarmap.focusPath(null);
+  renderStarmapCatalog();
+  AtlasStarmap.fit();
+  if (focusProject != null) {
+    const el = els.starmapCatalogBody.querySelector(`.sm-cluster[data-project="${CSS.escape(focusProject)}"]`);
+    if (el) { setCatalogRoving(el); el.focus(); }
+  }
+}
+if (els.starmapCatalogBody) {
+  const body = els.starmapCatalogBody;
+  body.addEventListener('click', (e) => {
+    const c = e.target.closest('.sm-cluster');
+    if (c) { activateCatalogCluster(c.dataset.project, { focus: e.detail === 0 }); return; }
+    const st = e.target.closest('.sm-star');
+    if (st) { if (window.AtlasPeek) AtlasPeek.close(); openFile(st.dataset.path); return; }
+    if (e.target.closest('.cat-back')) { showCatalogClusters({ focusProject: starmapCatalog.project }); return; }
+    if (e.target.closest('.cat-more')) {
+      const before = body.querySelectorAll('.sm-star').length;
+      starmapCatalog.limit += 200;
+      renderStarmapCatalog();
+      const next = body.querySelectorAll('.sm-star')[before];
+      if (next) { setCatalogRoving(next); next.focus(); }
+    }
+  });
+  // 星表 roving tabindex：先处理快速查看（与目录树一致），再处理 ↑/↓ / Enter
+  body.addEventListener('keydown', (e) => {
+    const item = e.target.closest && e.target.closest('.sm-cluster, .sm-star');
+    if (!item || e.metaKey || e.ctrlKey || e.altKey) return;
+    const isStar = item.classList.contains('sm-star');
+    if (isStar && e.key === ' ') {
+      e.preventDefault();
+      if (window.AtlasPeek) AtlasPeek.toggleFor(item.dataset.path, item);
+      return;
+    }
+    if (e.key === 'Escape' && window.AtlasPeek && AtlasPeek.isOpen()) {
+      e.preventDefault();
+      e.stopPropagation();
+      AtlasPeek.close();          // 焦点留在原处
+      return;
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const items = catalogItems();
+      const i = items.indexOf(item);
+      const next = items[Math.max(0, Math.min(items.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))];
+      if (next && next !== item) {
+        setCatalogRoving(next);
+        next.focus();
+        next.scrollIntoView({ block: 'nearest' });
+        if (isStar && window.AtlasPeek && AtlasPeek.isOpen()) AtlasPeek.retarget(next);
+      }
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (isStar) { if (window.AtlasPeek) AtlasPeek.close(); openFile(item.dataset.path); }
+      else activateCatalogCluster(item.dataset.project, { focus: true });
+    }
+  });
+  // 聚焦星 → 画布相机平移过去并画焦点环
+  body.addEventListener('focusin', (e) => {
+    const st = e.target.closest && e.target.closest('.sm-star');
+    body.querySelectorAll('.sm-star[aria-current]').forEach(x => x.removeAttribute('aria-current'));
+    if (st) {
+      st.setAttribute('aria-current', 'true');
+      setCatalogRoving(st);
+      AtlasStarmap.focusPath(st.dataset.path);
+    }
+  });
+}
+// 画布悬停 / 点击星团 → 星表滚到对应项
+function highlightCatalogCluster(name) {
+  if (!els.starmapCatalogBody) return;
+  els.starmapCatalogBody.querySelectorAll('.sm-cluster').forEach((b) => {
+    const on = name != null && b.dataset.project === name;
+    b.classList.toggle('hl', on);
+    if (on) b.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+// ---------- tickMinute（design §3a 数据流，按 design-review NIT 1 的结构） ----------
+// 挂在唯一的 60 秒定时器上（先于 fetchState），回前台时也先补一次
+function hourChanged() {
+  const h = Math.floor(Date.now() / 3_600_000);
+  if (h === lastHourStamp) return false;
+  lastHourStamp = h;
+  return true;
+}
+function tickMinute() {
+  updateHomeClock();                                         // 首页眉标的周X与 HH:mm
+  if (starmapVisible()) AtlasStarmap.retier(Date.now());    // 新鲜度档位随时间变暗
+  const hc = hourChanged();
+  if (hc && state.timeRange) pendingHourRecompute = true;   // 跨整点：只标记，由紧随其后的 fetchState() 统一重算
+  else if (hc) renderRiverCard();                             // 没有时间筛选：只让 168 根柱的窗口往后挪一格
+}
+// ==================== 时间河流（design §3d） ====================
+// 数据 = 活动日志（GET /api/activity，7 天）+ SSE 追加的本地副本 + 修改时间兜底，合并 / 分桶 /
+// 区间命中全在 river.js 的纯函数里；这里负责拉取时机、渲染接线、刷选交互与 state.timeRange。
+const RIVER_REFRESH_MS = 10 * 60_000;
+const RIVER_TIMEOUT_MS = 15_000;
+function riverAvailable() { return !!window.AtlasRiver; }
+
+// 河流模型：合并后的事件、168 个桶、总数。state.files 身份 / 日志版本 / 当前整点不变时直接复用
+function ensureRiverModel() {
+  const now = Date.now();
+  if (!riverAvailable()) {
+    return { events: [], buckets: null, totals: { total: 0, busiest: -1, busiestCount: 0 }, windowStart: now, logStart: null };
+  }
+  const hour = AtlasRiver.floorHour(now);
+  const m = riverState.model;
+  if (m && m.files === state.files && m.ver === riverState.ver && m.hour === hour) return m;
+  const log = riverState.log || null;
+  const events = AtlasRiver.mergeWithFallback(log, Object.values(state.files), now);
+  const buckets = AtlasRiver.bucketize(events, now);
+  riverState.model = {
+    files: state.files, ver: riverState.ver, hour,
+    events, buckets, totals: AtlasRiver.riverTotals(buckets),
+    windowStart: buckets.start, logStart: log ? log.logStart : null,
+  };
+  return riverState.model;
+}
+
+// 时间段重算（design-review NIT 1 约定）：始终同步执行，调用方在同一同步段内即可读到新的
+// state.timeRangePaths。opts.render === false 时只重算，渲染由调用方负责。
+// 窗口滚动：from 早于窗口起点时夹到起点；选中的区段整个滑出窗口时清除并提示
+function recomputeTimeRange(opts = {}) {
+  if (!riverAvailable()) return;
+  const had = !!state.timeRange;
+  const m = ensureRiverModel();
+  if (state.timeRange) {
+    const c = AtlasRiver.clampRange(state.timeRange, m.windowStart);
+    state.timeRange = c.range;
+    if (c.cleared) showToast({ kind: 'info', text: '所选时段已超出 7 天范围，已清除时间筛选' });
+  }
+  if (state.timeRange) {
+    state.timeRangeLatest = AtlasRiver.timeRangeLatest(m.events, state.timeRange);
+    state.timeRangePaths = new Set(state.timeRangeLatest.keys());
+  } else {
+    state.timeRangeLatest = new Map();
+    state.timeRangePaths = new Set();
+  }
+  state.timeRangeVer++;
+  if (opts.render === false) return;
+  if (had || state.timeRange) {
+    // 命中集合变了：整条筛选管线刷新（render 末尾顺带刷新可见的星图与计数）
+    render();
+    renderHome();
+  } else {
+    renderRiverCard();
+  }
+}
+
+// 用户改时间段（刷选 / 手柄 / 预设 / 清除 / Esc / chip）。range 为 null = 不筛选
+function setTimeRange(range, { render: doRender = true } = {}) {
+  const same = (!range && !state.timeRange)
+    || (range && state.timeRange && range.from === state.timeRange.from && range.to === state.timeRange.to);
+  state.timeRange = range || null;
+  recomputeTimeRange({ render: false });
+  if (doRender) {
+    if (same) updateRiverSelection();
+    else applyFilterChange();
+  }
+}
+function clearTimeRange() { if (state.timeRange) setTimeRange(null); }
+
+async function loadActivity() {
+  if (!riverAvailable()) return;
+  if (riverState.loading) { riverState.again = true; return; }
+  riverState.loading = true;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), RIVER_TIMEOUT_MS);
+  try {
+    const res = await fetch('/api/activity', { cache: 'no-store', signal: ctrl.signal });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const log = AtlasRiver.decodeLog(await res.json());
+    if (!log) throw new Error('bad payload');
+    riverState.log = log;
+    riverState.failed = false;
+  } catch {
+    // 从没拿到过日志：退化为只用修改时间，并显示一行说明。之前成功过的话保留那份副本
+    //（SSE 仍在往里追加），下次定时重拉再试
+    if (!riverState.log) { riverState.log = null; riverState.failed = true; }
+  } finally {
+    clearTimeout(timer);
+    riverState.loading = false;
+  }
+  riverState.ver++;
+  recomputeTimeRange();
+  if (riverState.again) { riverState.again = false; loadActivity(); }
+}
+setInterval(() => { if (!document.hidden && riverState.log !== undefined) loadActivity(); }, RIVER_REFRESH_MS);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && riverState.log !== undefined) loadActivity();
+});
+
+// SSE fs 事件：追加到本地副本（不重新请求），河流实时长出新柱
+function onRiverSseEvent(data) {
+  if (!riverAvailable() || !riverState.log) return;
+  if (!AtlasRiver.appendSseEvent(riverState.log, data, riverState.log.mergeWindowMs, Date.now())) return;
+  riverState.ver++;
+  recomputeTimeRange();
+}
+
+// ---------- 渲染 ----------
+function renderRiverCard() {
+  if (!els.homeRiver || !riverAvailable()) return;
+  if (stateLoaded && riverState.log === undefined && !riverState.loading) loadActivity();
+  const m = ensureRiverModel();
+  const loading = riverState.log === undefined;
+  if (riverState.drawn !== m || riverState.drawnLoading !== loading) {
+    const hasDocs = Object.keys(state.files).length > 0;
+    AtlasRiver.renderRiverSvg(els.homeRiver, {
+      ...m.buckets,
+      // 还没拿到日志时不画「仅修改时间」底纹（马上就有结果，免得闪一下）
+      logStart: loading ? m.buckets.start : m.logStart,
+    }, {
+      grow: hasDocs && !riverState.grown,
+      daysEl: els.riverDays,
+      hatchTagEl: els.riverHatchTag,
+      nowTagEl: els.riverNowTag,
+      peaksEl: document.getElementById('river-peaks'),
+    });
+    if (hasDocs) riverState.grown = true;
+    riverState.drawn = m;
+    riverState.drawnLoading = loading;
+  }
+  const t = m.totals;
+  if (els.homeRiverMeta) {
+    els.homeRiverMeta.textContent = AtlasRiver.metaText(m.buckets, t);
+    els.homeRiverMeta.dataset.total = String(t.total);
+  }
+  if (els.homeRiverSum) els.homeRiverSum.textContent = AtlasRiver.summaryText(m.buckets, t);
+  if (els.homeRiverFallback) els.homeRiverFallback.classList.toggle('hidden', !riverState.failed);
+  // 说明条：日志不可用时说"全部按修改时间推断"；日志刚开始记录（窗口里有一大段只有修改时间）时
+  // 写明日志从何时起记录——首启没有历史，每篇只能按最后一次修改时间算一次，更早的改动补不回来
+  if (els.homeRiverNote) {
+    const ls = m.logStart;
+    const partial = !riverState.failed && !loading && ls != null && ls - m.windowStart >= 12 * AtlasRiver.HOUR;
+    els.homeRiverNote.classList.toggle('hidden', !riverState.failed && !partial);
+    els.homeRiverNote.textContent = riverState.failed
+      ? '活动日志暂不可用，河流按每篇文档的修改时间推断（每篇只算最后一次改动）'
+      : (partial ? `活动日志自 ${AtlasRiver.fmtShort(ls)} 起记录；在那之前（斜纹底）每篇文档只按最后一次修改时间算一次，更早的改动无法补回` : '');
+  }
+  // 读数「近 7 天改动」与这里同一次 riverTotals()
+  const cell = els.homeReadouts && els.homeReadouts.querySelector('.home-readout.is-signal');
+  if (cell) {
+    const v = cell.querySelector('.home-readout-v');
+    if (v) v.textContent = t.total.toLocaleString();
+    const k = cell.querySelector('.home-readout-k');
+    const tag = cell.querySelector('.home-readout-tag');
+    if (riverState.failed && !tag && k) {
+      k.insertAdjacentHTML('beforeend', '<span class="home-readout-tag" title="活动日志暂不可用，按每篇文档的修改时间推断">仅修改时间</span>');
+    } else if (!riverState.failed && tag) tag.remove();
+  }
+  updateRiverSelection();
+}
+
+// 选区矩形、两个手柄、柱子淡化、预设按下态。刷选拖动时只走这里（rAF 节流），不重建 SVG
+function updateRiverSelection() {
+  if (!els.homeRiver || !riverAvailable()) return;
+  const m = ensureRiverModel();
+  const ws = m.windowStart;
+  const BARS = AtlasRiver.BARS;
+  const [a, b] = riverState.drag ? riverState.drag.sel : AtlasRiver.handlesFromRange(state.timeRange, ws);
+  const full = a <= 0 && b >= BARS;
+  if (els.riverSel) {
+    els.riverSel.classList.toggle('hidden', full);
+    els.riverSel.style.left = (a / BARS * 100) + '%';
+    els.riverSel.style.width = ((b - a) / BARS * 100) + '%';
+  }
+  for (const [el, v] of [[els.riverStart, a], [els.riverEnd, b]]) {
+    if (!el) continue;
+    el.style.left = (v / BARS * 100) + '%';
+    el.setAttribute('aria-valuenow', String(v));
+    el.setAttribute('aria-valuetext', v >= BARS ? '现在' : AtlasRiver.fmtValueText(ws + v * AtlasRiver.HOUR));
+  }
+  els.homeRiver.classList.toggle('has-sel', !full);
+  els.homeRiver.querySelectorAll('rect.bar').forEach((r) => {
+    const i = +r.dataset.i;
+    r.classList.toggle('dim', !full && (i < a || i >= b));
+  });
+  const now = Date.now();
+  document.querySelectorAll('[data-river-preset]').forEach((btn) => {
+    const v = btn.dataset.riverPreset;
+    if (v === 'clear') { btn.disabled = !state.timeRange; return; }
+    const p = AtlasRiver.presetRange(Number(v), now);
+    const on = !!state.timeRange && state.timeRange.to === null && state.timeRange.from === p.from;
+    btn.setAttribute('aria-pressed', String(on));
+  });
+}
+
+// 侧栏搜索框下方的时间段 chip（updateStats 里刷新）
+function updateTimeFilterChip() {
+  const el = els.timeFilterChip;
+  if (!el) return;
+  if (!state.timeRange || !riverAvailable()) {
+    el.classList.add('hidden');
+    el.textContent = '';
+    return;
+  }
+  const label = AtlasRiver.fmtRange(state.timeRange);
+  el.innerHTML = `<span aria-hidden="true">⏱</span> <span class="time-filter-chip-text">${escapeHtml(label)}</span> <span aria-hidden="true">✕</span>`;
+  el.setAttribute('aria-label', `时间段筛选 ${label}，点击清除`);
+  el.classList.remove('hidden');
+}
+
+// 首页封面墙的两种模式：待看（默认）/ 该时段改动的文档
+function setFeedTimeMode(on) {
+  if (els.homeFeedAll) els.homeFeedAll.classList.toggle('hidden', !on);
+  if (!on && els.homeFeedTitle) els.homeFeedTitle.textContent = '待看';
+  const feed = document.getElementById('home-feed');
+  if (feed) feed.classList.toggle('is-time', on);
+}
+// 有时间段筛选时：命中（时间段 ∩ 其余筛选，同一次 filterSnapshot）按区间内最后一次事件倒序，至多 8 张
+function renderHomeTimeFeed(snap) {
+  setFeedTimeMode(true);
+  const latest = state.timeRangeLatest;
+  const list = [...snap.hits].map(p => state.files[p]).filter(Boolean)
+    .sort((x, y) => (latest.get(y.path) || 0) - (latest.get(x.path) || 0));
+  const r = state.timeRange;
+  const label = `${AtlasRiver.fmtShort(r.from)} – ${r.to === null ? '现在' : AtlasRiver.fmtShort(r.to)}`;
+  if (els.homeFeedTitle) els.homeFeedTitle.textContent = `${label} 改动了 ${list.length} 篇`;
+  const why = [];
+  if (state.tagFilter.size) why.push(`已按标签「${[...state.tagFilter].join('、')}」筛选`);
+  if (state.onlyUnread) why.push('仅看未读');
+  if (state.search) why.push(`已按搜索「${state.search}」筛选`);
+  els.homeFeedCount.textContent = why.join(' · ');
+  if (els.homeFeedHint) els.homeFeedHint.textContent = '';
+  els.homeGrid.innerHTML = list.length
+    ? list.slice(0, HOME_FEED_MAX).map((f, i) => coverCard(f, i)).join('')
+    : homeEmpty({ icon: 'clock', title: '这个时段没有改动的文档', hint: '换一个时段，或点「清除」看全部' });
+}
+
+// ---------- 刷选交互 ----------
+(function bindRiver() {
+  const river = els.homeRiver;
+  if (!river || !riverAvailable()) return;
+  const BARS = AtlasRiver.BARS;
+  const posAt = (clientX) => {
+    const r = river.getBoundingClientRect();
+    return r.width > 0 ? (clientX - r.left) / r.width * BARS : 0;
+  };
+  const barAt = (clientX) => Math.max(0, Math.min(BARS - 1, Math.floor(posAt(clientX))));
+  const edgeAt = (clientX) => Math.max(0, Math.min(BARS, Math.round(posAt(clientX))));
+  let raf = 0;
+  let lastX = 0;
+  const step = () => {
+    raf = 0;
+    const d = riverState.drag;
+    if (!d) return;
+    if (d.mode === 'new') {
+      const j = barAt(lastX);
+      d.sel = j >= d.from ? [d.from, j + 1] : [j, d.from + 1];
+    } else if (d.mode === 'a') {
+      d.sel = [Math.min(edgeAt(lastX), d.sel[1] - 1), d.sel[1]];
+    } else {
+      d.sel = [d.sel[0], Math.max(edgeAt(lastX), d.sel[0] + 1)];
+    }
+    updateRiverSelection();
+  };
+  river.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    const m = ensureRiverModel();
+    const cur = AtlasRiver.handlesFromRange(state.timeRange, m.windowStart);
+    const handle = e.target.closest && e.target.closest('.river-handle');
+    if (handle) {
+      riverState.drag = { mode: handle === els.riverStart ? 'a' : 'b', sel: cur };
+      handle.focus();
+    } else {
+      const i = barAt(e.clientX);
+      riverState.drag = { mode: 'new', from: i, sel: [i, i + 1] };
+    }
+    try { river.setPointerCapture(e.pointerId); } catch {}
+    e.preventDefault();
+    updateRiverSelection();
+  });
+  river.addEventListener('pointermove', (e) => {
+    if (!riverState.drag) return;
+    lastX = e.clientX;
+    if (!raf) raf = requestAnimationFrame(step);
+  });
+  const end = (commit) => {
+    const d = riverState.drag;
+    if (!d) return;
+    if (raf) { cancelAnimationFrame(raf); raf = 0; step(); }
+    riverState.drag = null;
+    if (!commit) { updateRiverSelection(); return; }
+    setTimeRange(AtlasRiver.rangeFromHandles(d.sel[0], d.sel[1], ensureRiverModel().windowStart));
+  };
+  river.addEventListener('pointerup', (e) => { lastX = e.clientX; end(true); });
+  river.addEventListener('pointercancel', () => end(false));
+  river.addEventListener('lostpointercapture', () => end(true));
+  river.addEventListener('dblclick', (e) => { e.preventDefault(); setTimeRange(null); });
+
+  // 键盘：两个 role=slider 手柄。←/→ 一小时、Shift+←/→ 一天、Home/End 到两端
+  const onKey = (isStart) => (e) => {
+    let delta = null;
+    if (e.key === 'ArrowLeft') delta = e.shiftKey ? -24 : -1;
+    else if (e.key === 'ArrowRight') delta = e.shiftKey ? 24 : 1;
+    else if (e.key !== 'Home' && e.key !== 'End') return;
+    e.preventDefault();
+    e.stopPropagation();
+    const ws = ensureRiverModel().windowStart;
+    let [a, b] = AtlasRiver.handlesFromRange(state.timeRange, ws);
+    if (isStart) {
+      const v = e.key === 'Home' ? 0 : e.key === 'End' ? BARS : a + delta;
+      a = Math.max(0, Math.min(v, b - 1));
+    } else {
+      const v = e.key === 'Home' ? 0 : e.key === 'End' ? BARS : b + delta;
+      b = Math.min(BARS, Math.max(v, a + 1));
+    }
+    setTimeRange(AtlasRiver.rangeFromHandles(a, b, ws));
+  };
+  if (els.riverStart) els.riverStart.addEventListener('keydown', onKey(true));
+  if (els.riverEnd) els.riverEnd.addEventListener('keydown', onKey(false));
+
+  document.querySelectorAll('[data-river-preset]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const v = btn.dataset.riverPreset;
+      setTimeRange(v === 'clear' ? null : AtlasRiver.presetRange(Number(v), Date.now()));
+    });
+  });
+  if (els.timeFilterChip) els.timeFilterChip.addEventListener('click', clearTimeRange);
+  // 「在侧栏中列出全部」：侧栏收起时展开，并把目录树滚回顶部
+  if (els.homeFeedAll) {
+    els.homeFeedAll.addEventListener('click', () => {
+      if (document.body.classList.contains('sidebar-collapsed')) toggleSidebar(false);
+      if (els.tree) {
+        els.tree.scrollTop = 0;
+        const first = els.tree.querySelector('.file');
+        if (first) first.scrollIntoView({ block: 'nearest' });
+      }
+    });
+  }
+})();
+
+if (starmapAvailable()) {
+  AtlasStarmap.init({
+    fmtRel: (ts) => fmtMtime(ts),
+    onOpen: (p) => { if (window.AtlasPeek) AtlasPeek.close(); openFile(p); },
+    onPeek: (p, anchor) => {
+      if (!window.AtlasPeek) return;
+      canvasPeekPath = p;
+      AtlasPeek.openFor(p, anchor, { via: 'hover' });
+    },
+    onPeekClose: () => {
+      if (window.AtlasPeek && AtlasPeek.isOpen() && AtlasPeek.currentPath() === canvasPeekPath) AtlasPeek.close();
+      canvasPeekPath = null;
+    },
+    onClusterHover: (name) => { if (starmapCatalog.project == null) highlightCatalogCluster(name); },
+    onClusterActivate: (name) => activateCatalogCluster(name, { fly: false }),
+    onEnterCatalog: () => {
+      applyCatalogOpen(true);
+      const el = els.starmapCatalogBody && els.starmapCatalogBody.querySelector('[tabindex="0"]');
+      if (el) el.focus();
+    },
+    onThemeChange: () => { minimapSig = null; renderMinimap(); },
+    onUnavailable: () => {
+      minimapSig = null;
+      if (els.homeMinimap) els.homeMinimap.classList.add('hidden');
+      if (starmapVisible()) refreshStarmap(true);
+    },
+  });
+}
+
+// ==================== 快速查看（悬停预览，design §3c / §11.B5） ====================
+// 设置 → 外观「悬停预览：开 / 关」（localStorage atlas:peek，默认开）。只影响悬停触发；
+// Space 是明确的主动操作，始终可用。关掉时 peek.js 完全不碰触发元素的 title。
+function peekHoverEnabled() {
+  try { return localStorage.getItem('atlas:peek') !== 'off'; } catch { return true; }
+}
+function applyPeekSetting(mode) {
+  const on = mode !== 'off';
+  try {
+    if (on) localStorage.removeItem('atlas:peek');
+    else localStorage.setItem('atlas:peek', 'off');
+  } catch {}
+  document.querySelectorAll('[data-peek-pick]').forEach((b) => {
+    const sel = (b.dataset.peekPick === 'on') === on;
+    b.classList.toggle('is-on', sel);
+    b.setAttribute('aria-checked', sel ? 'true' : 'false');
+  });
+  if (!on && window.AtlasPeek && AtlasPeek.isOpen()) AtlasPeek.close();
+}
+document.querySelectorAll('[data-peek-pick]').forEach((btn) => {
+  btn.addEventListener('click', () => applyPeekSetting(btn.dataset.peekPick));
+});
+applyPeekSetting(peekHoverEnabled() ? 'on' : 'off');
+
+if (window.AtlasPeek) {
+  AtlasPeek.init({
+    getFile: (p) => state.files[p],
+    pathOf: (el) => (el && el.dataset ? el.dataset.path : null) || null,
+    hoverEnabled: peekHoverEnabled,
+    // 不弹出：目标不在看板里（始终）；悬停另外让位给拖拽 / 行内编辑 / 任何模态（含 ⌘K）/
+    // 当前活动文档 / 窄视口 / 设置关闭
+    canPeek(path, el, via) {
+      if (!path || !state.files[path]) return false;
+      if (via === 'hover') {
+        if (!peekHoverEnabled()) return false;
+        if (isDragging || isInlineEditing() || openModals.length || qoEntry) return false;
+        if (path === state.activeFilePath) return false;
+        if (window.innerWidth < 700) return false;
+      }
+      return true;
+    },
+    thumbUrl: (p) => thumbUrlFor(p),
+    requestThumb: (p) => requestThumbs([p], 'peek'),
+    frameUrl: (file) => previewUrlFor(file),
+    applySandbox: applyPeekSandbox,
+    titleFor: (file) => file.alias || stripDocExt(file.name),
+    // 第一行：类型 · 项目 · 多久前更新 · 未读；第二行：原 title 里的信息（完整相对路径 / 标签）
+    metaFor(file) {
+      const parts = [escapeHtml(docTypeBadge(file))];
+      if (file.projectName) parts.push(escapeHtml(file.projectName));
+      if (file.mtime) parts.push(escapeHtml(fmtMtime(file.mtime)) + '更新');
+      if (file.unread) parts.push('<span class="peek-unread">未读</span>');
+      const line2 = [file.relPath || file.path];
+      if ((file.tags || []).length) line2.push('标签：' + file.tags.join(' · '));
+      return { line1Html: parts.join(' · '), line2: line2.join(' · ') };
+    },
+    findAnchor(p) {
+      try {
+        return els.tree.querySelector(`.file[data-path="${CSS.escape(p)}"]`)
+          || (els.starmapCatalogBody && els.starmapCatalogBody.querySelector(`.sm-star[data-path="${CSS.escape(p)}"]`));
+      } catch { return null; }
+    },
+  });
+}
+
+// 启动时停在星图：第一帧就把主区换成星图（并同步收起侧栏，赶在防闪类移除之前）；
+// 数据到了之后 fetchState → render() 会再把星图刷新一遍
+if (state.viewMode === 'map') showHomeSurface();
 fetchState();
 connectSSE();
 checkForUpdate();

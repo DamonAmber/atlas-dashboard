@@ -108,16 +108,34 @@ function check(name, ok, detail = '') {
     afterEsc.focused === 'search' && !afterEsc.hasKbd);
 
   // ========== 最近打开 ==========
-  console.log('\n[2] 最近打开');
+  // 0.31 起侧栏的「最近」块（#recent-bar / .recent-item / #recent-toggle）随 design §11.B1 移除，
+  // 最近打开改由 ⌘K 空状态的「最近打开」段（.quickopen-item[data-section="recent"]）与首页轨道提供。
+  // 断言意图不变：列表出现、新打开的排到最前、点条目能打开；原「折叠 / 展开」随块一起移除，
+  // 换成段头「清除」（#recent-clear，行为同原清除最近）。
+  console.log('\n[2] 最近打开（⌘K 空状态）');
   // 之前 Enter 打开了 kbd2 所指文件，所以 recent 应该至少有它
   await page.evaluate(() => fetchState());
   await page.waitForTimeout(300);
-  const recentInit = await page.evaluate(() => ({
-    barVisible: !document.getElementById('recent-bar').classList.contains('hidden'),
-    items: [...document.querySelectorAll('.recent-item')].map(i => i.dataset.path),
+  const openQo = async () => {
+    await page.keyboard.press('Control+k');
+    await page.waitForSelector('#quickopen:not(.hidden) .quickopen-item');
+  };
+  const closeQo = async () => {
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#quickopen.hidden', { state: 'attached' });
+  };
+  const readRecent = () => page.evaluate(() => ({
+    head: !!document.querySelector('#quickopen-list .qo-section[data-section="recent"]'),
+    clearBtn: !!document.querySelector('#quickopen-list .qo-section[data-section="recent"] #recent-clear'),
+    items: [...document.querySelectorAll('#quickopen-list .quickopen-item[data-section="recent"]')]
+      .map(i => i.dataset.path),
   }));
+  await openQo();
+  const recentInit = await readRecent();
+  await closeQo();
   console.log('  ', recentInit);
-  check('recent-bar 已显示', recentInit.barVisible);
+  check('⌘K 空状态出现「最近打开」段', recentInit.head);
+  check('段头右侧有「清除」#recent-clear', recentInit.clearBtn);
   check('recent 至少含一个最近打开的文件', recentInit.items.length >= 1);
 
   // 再点一个文件看是否进 recent 顶部
@@ -127,26 +145,39 @@ function check(name, ok, detail = '') {
   });
   await page.locator(`.file[data-path="${otherPath.replace(/(["\\])/g, '\\$1')}"]`).first().click();
   await page.waitForTimeout(400);
-  const recentAfterClick = await page.evaluate(() => {
-    return [...document.querySelectorAll('.recent-item')].map(i => i.dataset.path);
-  });
+  await openQo();
+  const recentAfterClick = (await readRecent()).items;
   check('点击新文件后，新文件出现在 recent 顶部', recentAfterClick[0] === otherPath);
 
-  // 点击 recent 中的项可以打开
-  await page.locator(`.recent-item[data-path="${otherPath.replace(/(["\\])/g, '\\$1')}"]`).click();
-  await page.waitForTimeout(300);
+  // 点击 recent 中的项可以打开：点第二条（不是当前文档的那一条），确实切过去了
+  const target = recentAfterClick[1] || recentAfterClick[0];
+  await page.locator(`#quickopen-list .quickopen-item[data-section="recent"][data-path="${target.replace(/(["\\])/g, '\\$1')}"]`).click();
+  await page.waitForTimeout(400);
   const fromRecent = await page.evaluate(() => document.querySelector('.file.active')?.dataset.path);
-  check('点击 recent 项能打开对应文件', fromRecent === otherPath);
+  check('点击 recent 项能打开对应文件', fromRecent === target);
+  check('点开后 ⌘K 自动关闭', await page.locator('#quickopen.hidden').count() === 1);
 
-  // 折叠/展开
-  await page.locator('#recent-toggle').click();
-  await page.waitForTimeout(150);
-  const collapsedRecent = await page.evaluate(() =>
-    document.getElementById('recent-bar').classList.contains('collapsed')
-  );
-  check('recent 折叠按钮可用', collapsedRecent);
-  await page.locator('#recent-toggle').click();
-  await page.waitForTimeout(150);
+  // 清除最近：段头「清除」→ 确认 → 段消失，首页轨道的「清除」也随之隐藏
+  await openQo();
+  await page.click('#recent-clear');
+  await page.waitForSelector('.atlas-dialog .dialog-confirm');
+  await page.click('.atlas-dialog .dialog-confirm');
+  await page.waitForSelector('.atlas-dialog', { state: 'detached' });
+  await page.waitForTimeout(300);
+  const afterClear = await readRecent();
+  check('清除后 ⌘K 里不再有「最近打开」段', !afterClear.head && afterClear.items.length === 0);
+  check('清除后焦点回到 ⌘K 输入框', await page.evaluate(() => document.activeElement?.id) === 'quickopen-input');
+  await closeQo();
+  check('清除后首页轨道的「清除」按钮隐藏',
+    await page.locator('#home-recent-clear.hidden').count() === 1);
+  check('服务端 recent 已清空',
+    (await page.evaluate(async () => (await (await fetch('/api/state')).json()).recent.length)) === 0);
+  // 再打开一篇：记录重新开始（下面的隔离性用例也依赖 store.recent 非空）
+  await page.locator(`.file[data-path="${otherPath.replace(/(["\\])/g, '\\$1')}"]`).first().click();
+  await page.waitForTimeout(400);
+  await openQo();
+  check('清除后再打开文档，⌘K「最近打开」重新出现', (await readRecent()).items[0] === otherPath);
+  await closeQo();
 
   // ========== 全文搜索 ==========
   console.log('\n[3] 全文搜索');

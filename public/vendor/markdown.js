@@ -1343,10 +1343,16 @@
   // --toc-rail 是层级轨道线（比 border 再淡一档，只需"隐约看得出有一列"）
   var tocVarsLight = '--toc-bg:#fff;--toc-border:#e6e8eb;--toc-title:#818b98;--toc-fg:#57606a;'
     + '--toc-fg-strong:#101113;--toc-hover:#f0f1f3;--toc-active:#5b5bd6;--toc-caret:#c9cdd4;'
-    + '--toc-rail:rgba(16,24,40,.09);--toc-active-soft:rgba(91,91,214,.09);';
+    + '--toc-rail:rgba(16,24,40,.09);--toc-active-soft:rgba(91,91,214,.09);'
+    // 专注阅读时左下角宽度控件的实底配色（design §11.D）：取外壳冷色令牌
+    // --bg-elev-2 / --border-strong / --text-dim / --accent 的值，按钮与标签对底 ≥4.5:1
+    + '--fw-bg:#edf0f5;--fw-border:#c5cbd6;--fw-fg:#4d5767;--fw-accent:#5151cf;'
+    + '--fw-accent-soft:rgba(81,81,207,.10);--fw-shadow:0 8px 24px -6px rgba(16,24,40,.22);';
   var tocVarsDark = '--toc-bg:#0f1013;--toc-border:#1f2023;--toc-title:#6f747c;'
     + '--toc-fg:#9ea2a8;--toc-fg-strong:#f7f8f8;--toc-hover:#1f2024;--toc-active:#8d8df0;--toc-caret:#3a3b40;'
-    + '--toc-rail:rgba(255,255,255,.10);--toc-active-soft:rgba(141,141,240,.14);';
+    + '--toc-rail:rgba(255,255,255,.10);--toc-active-soft:rgba(141,141,240,.14);'
+    + '--fw-bg:#121620;--fw-border:#2c3243;--fw-fg:#a3abbc;--fw-accent:#8d8df0;'
+    + '--fw-accent-soft:rgba(141,141,240,.16);--fw-shadow:0 10px 28px -6px rgba(0,0,0,.6);';
   var tocCss = [
     'body{', tocVarsLight, '}',
     '@media (prefers-color-scheme: dark){body{', tocVarsDark, '}}',
@@ -1428,6 +1434,26 @@
     '.md-width-switch button[aria-pressed="true"]{background:var(--toc-active-soft);color:var(--toc-active);}',
     '.md-width-switch button:focus-visible{outline:2px solid var(--toc-active);outline-offset:1px;}',
     '.md-width-switch svg{width:16px;height:16px;}',
+    // 「宽度 [ ]」小标签：只在专注阅读时出现（普通预览态的控件在右上角，保持三段胶囊）
+    '.md-width-lbl{display:none;}',
+    // 专注阅读（外壳给 <html> 设 data-focus="1"，design §10.11 / §11.D）：控件移到左下角，
+    // 实底 + 强边框 + 阴影，第一次进入就看得见；鼠标静止 2 秒后外壳设 data-focus-idle，
+    // 与「退出专注」胶囊一起淡出到 0（只改 opacity，不 visibility:hidden——键盘仍能 Tab 到）；
+    // 鼠标移动、聚焦、悬停时回到 1
+    ':root[data-focus="1"] .md-width-switch{top:auto;right:auto;bottom:18px;left:18px;align-items:center;',
+    'background:var(--fw-bg);border-color:var(--fw-border);box-shadow:var(--fw-shadow);opacity:1;}',
+    ':root[data-focus="1"][data-focus-idle="1"] .md-width-switch{opacity:0;}',
+    ':root[data-focus="1"] .md-width-switch:hover,:root[data-focus="1"] .md-width-switch:focus-within{opacity:1;}',
+    ':root[data-focus="1"] .md-width-lbl{display:flex;align-items:center;padding:0 6px 0 5px;',
+    'font:11px/1 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;',
+    'color:var(--fw-fg);white-space:nowrap;}',
+    ':root[data-focus="1"] .md-width-switch button{color:var(--fw-fg);}',
+    ':root[data-focus="1"] .md-width-switch button[aria-pressed="true"]{background:var(--fw-accent-soft);color:var(--fw-accent);}',
+    ':root[data-focus="1"] .md-width-switch button:focus-visible{outline-color:var(--fw-accent);}',
+    // 控件压在目录栏左下角：给目录底部留出控件高度（18px 边距 + ~32px 控件 + 余量），
+    // 长目录滚到底时最后几项不被遮住
+    ':root[data-focus="1"] .md-toc{padding-bottom:72px;}',
+    '@media (prefers-reduced-motion:reduce){.md-width-switch{transition:none;}}',
     // 底部留白：保证最后几个标题也能滚到视口顶部（锚点跳转不失效）
     '.md-tail-space{height:70vh;}',
     '.md-body h1,.md-body h2,.md-body h3,.md-body h4,.md-body h5,.md-body h6{scroll-margin-top:20px;}',
@@ -1459,7 +1485,8 @@
         + '<path d="' + m.bar + '" fill="currentColor" stroke="none" opacity=".85"/>'
         + '</svg></button>';
     }).join('');
-    return '<div class="md-width-switch" role="group" aria-label="阅读宽度">' + btns + '</div>';
+    return '<div class="md-width-switch" role="group" aria-label="阅读宽度">'
+      + '<span class="md-width-lbl" aria-hidden="true">宽度 [ ]</span>' + btns + '</div>';
   }
 
   // head 里的防闪脚本：在首次绘制前就把档位落到 <html> 上。
@@ -2035,6 +2062,9 @@
     // 有无目录只影响侧栏那部分 DOM，正文外壳（.md-content > .md-inner）两种情况
     // 完全一致——否则同一篇文档因为标题多了两个就换一套行宽和一套增强逻辑，
     // 读起来会明显不适，也容易出「只有一种情况下才有的 bug」。
+    // 缩略图（opts.forThumb，800px 宽的首屏截图）：不要目录栏 / 宽度胶囊。900px 以下目录栏是浮层，
+    // 会盖住正文列的起点，封面上只剩标题尾巴（client-fix review #2）；封面要的是标题和正文开头
+    if (opts.forThumb) hasToc = false;
     var tocParts = hasToc
       ? '<button class="md-toc-toggle" id="mdTocToggle" type="button" title="展开 / 收起目录" aria-label="展开或收起目录">' + toggleSvg + '</button>'
         + '<nav class="md-toc" id="mdToc" aria-label="文档目录"><div class="md-toc-title">目录</div>' + tocListHtml(items) + '</nav>'
@@ -2055,7 +2085,7 @@
       + '<style>' + pageCss + tocCss + markdownCss + forced + '</style></head>'
       + '<body' + (hasToc ? '' : ' class="md-no-toc"') + '>'
       + tocParts
-      + widthSwitchHtml()
+      + (opts.forThumb ? '' : widthSwitchHtml())
       + '<div class="md-content"><div class="md-inner md-body">' + body + '<div class="md-tail-space" aria-hidden="true"></div></div></div>'
       + (hasToc ? '<script>' + tocScript + '</script>' : '')
       + '<script>' + enhanceScript + '</script>'
