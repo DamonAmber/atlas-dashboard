@@ -23,7 +23,7 @@ window.ATLAS_CHANGELOG = [
   },
   {
     version: '0.31.0',
-    date: '2026-10-10',
+    date: '2026-10-13',
     entries: [
       {
         type: 'feature',

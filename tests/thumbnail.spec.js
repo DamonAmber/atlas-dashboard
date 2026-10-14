@@ -567,6 +567,9 @@ async function interfaceAndFrontend() {
       await page.evaluate((p) => { onThumbReady({ path: p, theme: 'light', status: 'dropped' }); renderHome(); }, target);
       await waitFor(() => posts.length > n, 3000);
       check('dropped 后重新请求只含该路径', posts[n] && posts[n].paths, [target]);
+      // 同上：等这次重请求的响应（status: queued）落进 state 再注入 ready。posts 只说明请求发出了，
+      // 慢 runner 上响应可能晚到，把下面注入的 ready 覆盖回 queued、<img> 被移除（CI 79559d5 那次失败）
+      await page.waitForFunction((p) => state.thumbs.items.has('light|' + p), target, { timeout: 3000 });
 
       // 模拟 HTML 两个主题收到同一个 k 的 ready：<img> 的 theme 跟随当前主题
       const k = 'abcdef0123456789';
