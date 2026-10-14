@@ -88,7 +88,11 @@ jobs:
             river-scale \
             settings-theme-motion \
             sidebar-header-narrow \
-            theme-overlay-continuity
+            theme-overlay-continuity \
+            icloud-unit \
+            icloud-watcher \
+            icloud-api \
+            icloud-ui
           do
             echo "===== $spec ====="
             node "tests/$spec.spec.js"

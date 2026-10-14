@@ -67,6 +67,13 @@ const state = {
   // items 的键是 "theme|path"（theme = effectiveTheme()，只会是 light / dark），
   // 值 { status, k, mtime }，mtime 是请求时的 state.files[path].mtime，用来判断要不要重新请求
   thumbs: { available: null, browser: null, reason: null, items: new Map() },
+  // iCloud 云盘（design §7.1）：GET /api/icloud 的结果。首次 fetchState 之后取一次、打开设置时再取一次；
+  // null = 还不知道（按「不能下载」处理）
+  icloud: null,
+  // /api/state 顶层：与 scanRoots 下标对齐的友好名（iCloud 根是「iCloud 云盘」）、
+  // 自动分组的显示名映射（只在显示层用，不写 store，design §3.7）
+  rootLabels: [],
+  autoFolderLabels: {},
 };
 // 「刚变更」信号的持续窗口。侧栏、首页、星图共用这一个常量
 const JUST_CHANGED_MS = 90_000;
@@ -341,8 +348,13 @@ function forcedTheme() {
 //   csv/json/txt/svg → /api/render-doc
 // 后两类都是 Atlas 自己渲染的页面，所以要带上 theme：iframe 里的
 // prefers-color-scheme 读系统设置、不继承父文档，主题钉死时它得跟着钉
+//
+// 云端文件（只在 iCloud 里、没下载到本机）返回 null：这是预览导航的唯一闸门（design §7.1）。
+// 所有给预览帧设 src / 打开文档 URL 的地方都经过这里，拿到 null 就不导航、改调 syncCloudPanel()。
+// 服务端对云端文件的内容路由一律 409，这一层保证连请求都不发，也不让 409 页面盖住占位面板。
 function previewUrlFor(file) {
   if (!file) return '';
+  if (isCloudFile(file)) return null;
   const th = forcedTheme();
   const themeQs = th ? '&theme=' + th : '';
   if (isMdFile(file)) {
@@ -352,6 +364,58 @@ function previewUrlFor(file) {
     return '/api/render-doc?path=' + encodeURIComponent(file.path) + themeQs;
   }
   return file.url;
+}
+
+// ==================== iCloud 云盘：状态与工具（design §7.1） ====================
+// f.cloud：'dataless'（系统已把内容移出本机）| 'placeholder'（旧系统的 .xxx.icloud 占位文件）。
+// 本地文件没有这个字段。服务端只对云端文件追加 cloud / cloudBusy / size / cloudLabel。
+function isCloudFile(f) { return !!(f && f.cloud); }
+// 能不能由 Atlas 发起下载：取决于本机能力（brctl / 读取回退），按云端类型分别看
+function canCloudDownload(f) {
+  const cap = state.icloud && state.icloud.capability;
+  return !!(cap && isCloudFile(f) && cap[f.cloud] === true);
+}
+function cloudText(f) {
+  if (f && f.cloudBusy) return '正在从 iCloud 下载…';
+  return '未下载 · ' + ((f && f.cloudLabel) || '在 iCloud 中');
+}
+const CLOUD_DISABLED_TITLE = '文件在 iCloud 中，下载后可用';
+// 自动分组的显示名：用户没改过名的自动分组（name === autoFor）按服务端给的友好名显示
+// （iCloud 根 → 「iCloud 云盘」）；store 里的 name / autoFor 不变（design §3.7）
+function folderDisplayName(folder) {
+  if (!folder) return '';
+  const label = folder.autoFor && folder.name === folder.autoFor
+    && state.autoFolderLabels && state.autoFolderLabels[folder.autoFor];
+  return label || folder.name;
+}
+// 文件所属「项目」的显示名：扫描根下直属的文件（relPath 不含分隔符）用根的友好名
+function projectLabel(f) {
+  if (!f) return '';
+  const label = state.rootLabels && state.rootLabels[f.rootIndex];
+  if (label && !/[\\/]/.test(f.relPath || '')) return label;
+  return f.projectName;
+}
+function fmtBytes(n) {
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+let icloudRequested = false;      // 首次 fetchState 之后取一次 /api/icloud
+const cloudErrors = new Map();    // path → 最近一次下载失败的说明（占位面板显示，重试时清掉）
+let icloudFetch = null;
+async function refreshICloud() {
+  if (icloudFetch) return icloudFetch;
+  icloudFetch = (async () => {
+    try {
+      const r = await fetch('/api/icloud', { cache: 'no-store' });
+      if (r.ok) state.icloud = await r.json();
+    } catch {}
+    icloudFetch = null;
+    return state.icloud;
+  })();
+  return icloudFetch;
 }
 
 // ==================== 预览沙箱与信任分级 ====================
@@ -451,6 +515,11 @@ function updateTrustButton() {
     : trusted
       ? '已信任：以同源方式预览，可用预览内编辑 / 正文高亮 / 快捷键转发。点击撤销'
       : '在沙箱中预览：文档脚本碰不到 Atlas 的数据。点击信任以启用编辑与正文高亮';
+  // 云端文件没有在显示的预览，切信任没有意义（design §7.4）
+  if (isCloudFile(file)) {
+    btn.disabled = true;
+    btn.title = CLOUD_DISABLED_TITLE;
+  }
 }
 
 // 切换信任态。改完必须重新导航一次预览，sandbox 才会真的换挡。
@@ -465,7 +534,11 @@ async function toggleTrust(force) {
   else state.trusted.delete(file.path);
   updateTrustButton();
   applyPreviewSandbox(file);
-  if (!editState.active) reloadPreviewSandboxed(previewUrlFor(file));
+  if (!editState.active) {
+    const url = previewUrlFor(file);
+    if (url) reloadPreviewSandboxed(url);
+    else syncCloudPanel();   // 云端文件：不导航，留在占位面板
+  }
   try {
     const res = await fetch('/api/trust', {
       method: 'POST',
@@ -1068,7 +1141,8 @@ function requestThumbs(paths, slot = 'home') {
   if (navigator.webdriver && !window.__atlasForceThumbs) return;
   if (state.thumbs.available === false) return;
   const theme = effectiveTheme();
-  const need = paths.filter(p => thumbNeedsRequest(p, theme)).slice(0, THUMBS_MAX_PER_REQUEST);
+  // 云端文件不截图（截图要读内容，会触发下载）
+  const need = paths.filter(p => !isCloudFile(state.files[p]) && thumbNeedsRequest(p, theme)).slice(0, THUMBS_MAX_PER_REQUEST);
   if (!need.length) { thumbReqSig.delete(slot); return; }
   const sig = theme + '\n' + need.map(p => p + '@' + state.files[p].mtime).join('\n');
   if (thumbReqSig.get(slot) === sig) return;
@@ -1109,7 +1183,7 @@ function updateCoverThumb(path) {
   try { card = els.homeGrid.querySelector(`.cover-card[data-path="${CSS.escape(path)}"]`); } catch { return; }
   const art = card && card.querySelector('.cover-art');
   if (!art) return;
-  const url = thumbUrlFor(path);
+  const url = isCloudFile(state.files[path]) ? null : thumbUrlFor(path);
   const img = art.querySelector('img.cover-thumb');
   if (!url) { if (img) img.remove(); return; }
   if (img && img.getAttribute('src') === url) return;
@@ -1169,9 +1243,11 @@ function renderThumbsSetting() {
 function coverCard(file, i = 0) {
   const name = file.alias || stripDocExt(file.name);
   const fresh = isFreshUnread(file);
-  const thumb = thumbUrlFor(file.path);
+  // 云端文件（design §7.3）：不插缩略图（也不请求），封面去色，正文多一行「在 iCloud 中」
+  const cloud = isCloudFile(file);
+  const thumb = cloud ? null : thumbUrlFor(file.path);
   return `
-    <button class="cover-card${isJustChanged(file.path) ? ' just-changed' : ''}" type="button" style="--i:${i}"
+    <button class="cover-card${isJustChanged(file.path) ? ' just-changed' : ''}${cloud ? ' is-cloud' : ''}" type="button" style="--i:${i}"
             data-path="${escapeHtml(file.path)}" data-doctype="${docTypeOf(file)}" title="${escapeHtml(file.relPath)}">
       <span class="cover-art" aria-hidden="true">
         ${thumb ? coverThumbHtml(thumb) : ''}
@@ -1182,10 +1258,11 @@ function coverCard(file, i = 0) {
       <span class="cover-body">
         <span class="cover-name">${escapeHtml(name)}</span>
         <span class="cover-meta">
-          <span class="cover-proj">${escapeHtml(file.projectName || '未分组')}</span>
+          <span class="cover-proj">${escapeHtml(projectLabel(file) || '未分组')}</span>
           <span class="cover-dot"></span>
           <span>${fmtMtime(file.mtime)}</span>
         </span>
+        ${cloud ? `<span class="cover-cloud">${ic(file.cloudBusy ? 'cloud-download' : 'cloud', 11)}${escapeHtml(file.cloudBusy ? '正在下载…' : (file.cloudLabel || '在 iCloud 中'))}</span>` : ''}
       </span>
     </button>`;
 }
@@ -1200,7 +1277,7 @@ function homeRow(file) {
       <span class="home-row-dot" aria-hidden="true"></span>
       <span class="home-row-ico">${docTypeIcon(file, 13)}</span>
       <span class="home-row-name">${escapeHtml(name)}</span>
-      <span class="home-row-proj">${escapeHtml(file.projectName || '')}</span>
+      <span class="home-row-proj">${escapeHtml(projectLabel(file) || '')}</span>
       <span class="home-row-time">${fmtMtime(file.mtime)}</span>
     </button>`;
 }
@@ -1616,6 +1693,8 @@ async function fetchState() {
     state.archivedProjects = Array.isArray(data.archivedProjects) ? data.archivedProjects : [];
     state.trusted = new Set(Array.isArray(data.trusted) ? data.trusted : []);
     state.trustAllHtml = !!data.trustAllHtml;
+    state.rootLabels = Array.isArray(data.rootLabels) ? data.rootLabels : [];
+    state.autoFolderLabels = data.autoFolderLabels && typeof data.autoFolderLabels === 'object' ? data.autoFolderLabels : {};
     // 缩略图能力：一旦为 false，本会话不再请求（不是错误，是环境能力差异）
     {
       const t = data.thumbs || { available: false };
@@ -1671,6 +1750,17 @@ async function fetchState() {
       renderHome();
       updateFavButton();
     }
+    // iCloud 能力（design §7.1）：第一次拿到状态之后取一次 /api/icloud。下载按钮要看它，
+    // 拿到之后只在确实有云端文件时补渲染一次
+    if (!icloudRequested) {
+      icloudRequested = true;
+      refreshICloud().then(() => {
+        if (Object.values(state.files).some(isCloudFile)) { render(); renderHome(); }
+        syncCloudPanel();
+      });
+    }
+    // 活动文档在这次拉取里变成了本地 / 云端（重连校正、手动刷新）：按新状态加载或换成占位面板
+    reconcileActiveCloudState();
     // 对比面板开着的时候，如果当前文件在磁盘上又被改了，自动刷新差异
     if (diffState.open && diffState.path) {
       const f = state.files[diffState.path];
@@ -1866,7 +1956,8 @@ function buildDirTree() {
     let idKey = 'dir:' + f.rootIndex;
 
     if (multiRoot) {
-      const rootName = curAbs.split(/[\\/]/).filter(Boolean).pop() || curAbs;
+      const rootName = (state.rootLabels && state.rootLabels[f.rootIndex])
+        || curAbs.split(/[\\/]/).filter(Boolean).pop() || curAbs;
       const rootFolder = mkDir(idKey + ':@root', rootName, curAbs, container);
       container = rootFolder.children;
     }
@@ -2414,22 +2505,23 @@ function renderFolder(folder) {
   folderEl.dataset.folderId = folder.id;
 
   const counts = countDescendants(folder);
+  const fname = folderDisplayName(folder);   // 显示名（iCloud 根的自动分组 →「iCloud 云盘」）
 
   const header = document.createElement('div');
   header.className = 'folder-header';
   header.innerHTML = `
     <span class="folder-toggle">${ic('chevron-down', 12)}</span>
     <span class="folder-icon">${ic('folder', 15, 'fi-closed')}${ic('folder-open', 15, 'fi-open')}</span>
-    <span class="folder-name" data-folder-id="${folder.id}">${escapeHtml(folder.name)}</span>
+    <span class="folder-name" data-folder-id="${folder.id}">${escapeHtml(fname)}</span>
     ${counts.unread > 0 ? `<span class="folder-unread-dot${counts.fresh ? '' : ' stale'}" title="${counts.unread} 个未读${counts.fresh ? `，其中 ${counts.fresh} 个今天改过` : '（都超过 24 小时）'}"></span>` : ''}
     <span class="folder-count">${counts.files}</span>
     <span class="folder-actions">
       ${isDir
-        ? `<button data-act="reveal-dir" title="在访达中显示这个目录" aria-label="在访达中显示「${escapeHtml(folder.name)}」">${ic('folder-open', 12)}</button>`
-        : `${folder.autoFor ? `<button data-act="reveal-folder" title="在访达中显示这个目录" aria-label="在访达中显示「${escapeHtml(folder.name)}」">${ic('folder-open', 12)}</button>` : ''}`
-          + `<button data-act="new-sub" title="在此分组内新建子分组" aria-label="在「${escapeHtml(folder.name)}」内新建子分组">${ic('plus', 12)}</button>`
-          + `<button data-act="rename" title="重命名" aria-label="重命名分组「${escapeHtml(folder.name)}」">${ic('pencil', 11)}</button>`
-          + `<button data-act="delete" title="删除分组（文件下次扫描会回到所属项目）" aria-label="删除分组「${escapeHtml(folder.name)}」">${ic('x', 12)}</button>`}
+        ? `<button data-act="reveal-dir" title="在访达中显示这个目录" aria-label="在访达中显示「${escapeHtml(fname)}」">${ic('folder-open', 12)}</button>`
+        : `${folder.autoFor ? `<button data-act="reveal-folder" title="在访达中显示这个目录" aria-label="在访达中显示「${escapeHtml(fname)}」">${ic('folder-open', 12)}</button>` : ''}`
+          + `<button data-act="new-sub" title="在此分组内新建子分组" aria-label="在「${escapeHtml(fname)}」内新建子分组">${ic('plus', 12)}</button>`
+          + `<button data-act="rename" title="重命名" aria-label="重命名分组「${escapeHtml(fname)}」">${ic('pencil', 11)}</button>`
+          + `<button data-act="delete" title="删除分组（文件下次扫描会回到所属项目）" aria-label="删除分组「${escapeHtml(fname)}」">${ic('x', 12)}</button>`}
     </span>
   `;
   folderEl.appendChild(header);
@@ -2478,7 +2570,7 @@ function renderFolder(folder) {
     e.stopPropagation();
     const name = await showPrompt({
       title: '新建子分组',
-      body: `新分组会建在「${folder.name}」里面。`,
+      body: `新分组会建在「${fname}」里面。`,
       label: '分组名称',
       value: '新分组',
       confirmText: '创建',
@@ -2591,6 +2683,13 @@ function renderFile(file, node) {
     + (file.favorite ? ' favorite' : '')
     + (contentOnly ? ' content-match' : '')
     + (isJustChanged(file.path) ? ' just-changed' : '');
+  // iCloud（design §7.2）：灰显 + 云朵徽标；下载中徽标换成下载图标并轻轻呼吸
+  const cloud = isCloudFile(file);
+  const cloudBusy = cloud && !!file.cloudBusy;
+  const cloudDl = cloud && canCloudDownload(file);
+  if (cloud) fileEl.classList.add('is-cloud');
+  if (cloudBusy) fileEl.classList.add('is-downloading');
+  if (cloudDl) fileEl.classList.add('can-cloud-dl');
   fileEl.dataset.nodeType = 'file';
   fileEl.dataset.path = file.path;
   fileEl.dataset.doctype = dtype;
@@ -2602,6 +2701,7 @@ function renderFile(file, node) {
   fileEl.dataset.icoPending = '1';
   fileEl.tabIndex = -1;  // 可被 JS focus，但不出现在 Tab 序列中
   let titleParts = [];
+  if (cloud) titleParts.push(cloudText(file));
   if (file.alias) titleParts.push(file.alias);
   titleParts.push(file.name);
   titleParts.push(file.relPath);
@@ -2635,10 +2735,24 @@ function renderFile(file, node) {
     : '';
   // 前缀是一个 40px 固定列：6px 状态点放在里面，对准同级文件夹图标的位置；
   // .file-type-icon 保留 DOM（CSS 隐藏），类型只看右侧角标
+  const ct = cloud ? escapeHtml(cloudText(file)) : '';
+  const cloudBadgeHtml = cloud
+    ? `<span class="cloud-badge" role="img" aria-label="${ct}" title="${ct}">${ic(cloudBusy ? 'cloud-download' : 'cloud', 12)}</span>`
+    : '';
+  // 云端文件：分享、改磁盘文件名都要碰内容 / 真实文件，禁用并说明原因
+  const cloudOff = cloud ? ` disabled aria-disabled="true"` : '';
+  const shareTitle = cloud ? CLOUD_DISABLED_TITLE : '分享到局域网（生成可访问链接 + 二维码）';
+  const renameTitle = cloud ? CLOUD_DISABLED_TITLE : '重命名磁盘上的真实文件名';
+  const dlBtnHtml = cloudDl
+    ? (cloudBusy
+      ? `<button data-act="cloud-download" data-ico="download" data-ico-size="12" disabled aria-busy="true" title="下载中…" aria-label="正在下载「${escapeHtml(displayName)}」"></button>`
+      : `<button data-act="cloud-download" data-ico="download" data-ico-size="12" title="下载到本机" aria-label="下载「${escapeHtml(displayName)}」到本机"></button>`)
+    : '';
   fileEl.innerHTML = `
     <span class="unread-dot"></span>
     <span class="folder-icon file-type-icon">${typeIcon}</span>
     <span class="file-name" data-path="${escapeHtml(file.path)}">${escapeHtml(displayName)}</span>
+    ${cloudBadgeHtml}
     ${file.favorite ? FAV_MARK_HTML : ''}
     ${dirHintHtml}
     ${tagsHtml}
@@ -2648,10 +2762,11 @@ function renderFile(file, node) {
     </span>
     <span class="file-mtime">${fmtMtime(file.mtime)}</span>
     <span class="file-actions">
+      ${dlBtnHtml}
       <button class="fav-btn" type="button" data-ico="star" data-ico-size="12" title="${file.favorite ? '取消收藏' : '收藏'}" aria-label="${favLabel}" aria-pressed="${file.favorite ? 'true' : 'false'}"></button>
-      <button data-act="share" data-ico="share" data-ico-size="12" title="分享到局域网（生成可访问链接 + 二维码）" aria-label="分享「${escapeHtml(displayName)}」到局域网"></button>
+      <button data-act="share" data-ico="share" data-ico-size="12" title="${shareTitle}" aria-label="分享「${escapeHtml(displayName)}」到局域网"${cloudOff}></button>
       <button data-act="tags" data-ico="tag" data-ico-size="12" title="编辑标签（逗号分隔）" aria-label="编辑「${escapeHtml(displayName)}」的标签"></button>
-      <button data-act="rename-file" data-ico="file-pen" data-ico-size="12" title="重命名磁盘上的真实文件名" aria-label="重命名文件「${escapeHtml(file.name)}」"></button>
+      <button data-act="rename-file" data-ico="file-pen" data-ico-size="12" title="${renameTitle}" aria-label="重命名文件「${escapeHtml(file.name)}」"${cloudOff}></button>
       <button data-act="alias" data-ico="pencil" data-ico-size="11" title="备注名（不改源文件名）" aria-label="给「${escapeHtml(displayName)}」起备注名"></button>
       <button data-act="reveal" data-ico="folder-open" data-ico-size="12" title="在访达中显示" aria-label="在访达中显示「${escapeHtml(displayName)}」"></button>
     </span>
@@ -2711,6 +2826,11 @@ function renderFile(file, node) {
   fileEl.querySelector('.fav-btn').addEventListener('click', (e) => {
     e.stopPropagation();
     setFavorite(file.path);
+  });
+  const dlBtn = fileEl.querySelector('[data-act="cloud-download"]');
+  if (dlBtn) dlBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    startCloudDownload(file.path);
   });
   return fileEl;
 }
@@ -3022,13 +3142,16 @@ function restoreCaret(el, offset) {
 
 function startRenameFolder(folder, nameEl) {
   const folderId = folder.id;
-  startInlineEdit(nameEl, folder.name, (next) => {
+  // 以显示名作默认值（iCloud 根的自动分组显示「iCloud 云盘」，design §3.7）
+  startInlineEdit(nameEl, folderDisplayName(folder), (next) => {
     // 按 id 重新定位，不用渲染时闭包捕获的那个对象引用：万一编辑期间
     // state.tree 被整体替换过（fetchState 的 `state.tree = data.tree`），
     // 闭包里的 folder 就是个游离对象，改它不会进入接下来要保存的那棵树。
     const target = findFolderById(state.tree, folderId) || folder;
-    if (!next || next === target.name) {
-      nameEl.textContent = target.name;
+    // 没改（含原样确认显示名）不写 store：行内编辑分不清「确认」和「失焦」，
+    // 把友好名写进 name 会让这个自动分组从此被当成「用户改过名」
+    if (!next || next === target.name || next === folderDisplayName(target)) {
+      nameEl.textContent = folderDisplayName(target);
       return;
     }
     target.name = next;
@@ -3494,6 +3617,14 @@ function ensureFrameLoaded(tab) {
   const file = state.files[tab.path];
   if (!file) return;
   els.preview = tab.frame;
+  // 云端文件：不设 src（帧留在 about:blank），由占位面板接管，不发 /raw、render 请求
+  const url = previewUrlFor(file);
+  if (!url) {
+    tab.loaded = false;
+    tab.frame.classList.remove('loading');
+    syncCloudPanel();
+    return;
+  }
   applyPreviewSandboxTo(tab.frame, file);
   // 从休眠中唤醒：重载后按休眠前的滚动百分比复位（由 onPreviewFrameLoad 兑现）
   if (tab.sleptScrollPct != null) {
@@ -3501,7 +3632,7 @@ function ensureFrameLoaded(tab) {
     tab.sleptScrollPct = null;
   }
   tab.frame.classList.add('loading');
-  tab.frame.src = previewUrlFor(file);
+  tab.frame.src = url;
   tab.loaded = true;
 }
 
@@ -3510,8 +3641,16 @@ function ensureFrameLoaded(tab) {
 function reloadTab(tab) {
   const file = tab && state.files[tab.path];
   if (!file) return;
-  applyPreviewSandboxTo(tab.frame, file);
   const url = previewUrlFor(file);
+  if (!url) {
+    // 云端文件：帧回 about:blank，不再导航
+    try { if (tab.frame.getAttribute('src') && tab.frame.getAttribute('src') !== 'about:blank') tab.frame.src = 'about:blank'; } catch {}
+    tab.frame.classList.remove('loading');
+    tab.loaded = false;
+    if (tab.id === state.activeTabId) syncCloudPanel();
+    return;
+  }
+  applyPreviewSandboxTo(tab.frame, file);
   tab.frame.classList.add('loading');
   tab.frame.src = 'about:blank';
   requestAnimationFrame(() => { tab.frame.src = url; });
@@ -3955,7 +4094,15 @@ async function openFile(filePath) {
   // 更新 recent（即时本地，server 端会通过 /api/seen 同步）
   state.recent = [filePath, ...(state.recent || []).filter(p => p !== filePath)].slice(0, 10);
 
-  if (file.unread) {
+  if (isCloudFile(file)) {
+    // 云端文件：内容没看到，不算已读（Q7）。仍然发 /api/seen —— 服务端只更新「最近打开」，
+    // 不写 seen、不记底本；下载完成后第一次真正打开时再补已读（design §7.4，completeCloudOpen）
+    fetch('/api/seen', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: filePath }),
+    }).catch(() => {});
+  } else if (file.unread) {
     file.unread = false;
     file.seenAt = Date.now();
     await fetch('/api/seen', {
@@ -3974,6 +4121,247 @@ async function openFile(filePath) {
   }
   renderRecent();
   renderFavorites();   // 同 recent：active 高亮靠整体重画同步
+}
+
+// ==================== iCloud：占位面板与下载（design §7.4 / §7.6） ====================
+const cloudPanelEls = {
+  panel: document.getElementById('cloud-panel'),
+  title: document.getElementById('cloud-panel-title'),
+  meta: document.querySelector('#cloud-panel .cloud-panel-meta'),
+  dl: document.getElementById('cloud-download-btn'),
+  reveal: document.getElementById('cloud-reveal-btn'),
+  hint: document.getElementById('cloud-panel-hint'),
+  status: document.getElementById('cloud-panel-status'),
+};
+// 活动文档是云端文件时显示占位面板（盖住预览区；帧不导航，留在 about:blank）
+function syncCloudPanel() {
+  const E = cloudPanelEls;
+  if (!E.panel) return;
+  const f = state.activeTabId && state.activeFilePath ? state.files[state.activeFilePath] : null;
+  const show = isCloudFile(f) && !editState.active;
+  E.panel.classList.toggle('hidden', !show);
+  if (!show) { delete E.panel.dataset.path; return; }
+  E.panel.dataset.path = f.path;
+  E.title.textContent = f.alias || stripDocExt(f.name);
+  const meta = [];
+  if (f.cloud === 'dataless' && Number.isFinite(f.size)) meta.push(fmtBytes(f.size));
+  if (f.mtime) meta.push('修改于 ' + fmtMtime(f.mtime));
+  if (f.cloudLabel) meta.push(f.cloudLabel);
+  E.meta.textContent = meta.join(' · ');
+  const can = canCloudDownload(f);
+  const busy = !!f.cloudBusy;
+  E.dl.hidden = !can;
+  // 能力还没拿到（state.icloud 为 null）时两者都不显示，免得先闪一下「不支持」
+  E.hint.hidden = can || !state.icloud;
+  E.dl.disabled = busy;
+  if (busy) E.dl.setAttribute('aria-busy', 'true'); else E.dl.removeAttribute('aria-busy');
+  E.dl.textContent = busy ? '下载中…' : '下载到本机';
+  const err = cloudErrors.get(f.path);
+  E.status.textContent = busy ? '正在从 iCloud 下载…' : (err ? '下载失败：' + err : '');
+}
+if (cloudPanelEls.dl) {
+  cloudPanelEls.dl.addEventListener('click', () => {
+    const p = cloudPanelEls.panel.dataset.path;
+    if (p) startCloudDownload(p);
+  });
+}
+if (cloudPanelEls.reveal) {
+  cloudPanelEls.reveal.addEventListener('click', async () => {
+    const p = cloudPanelEls.panel.dataset.path;
+    if (!p) return;
+    // 占位文件：服务端打开它所在的目录（design §4.2 /api/reveal）
+    await fetch('/api/reveal', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: p }),
+    }).catch(() => {});
+  });
+}
+// 活动帧对应的文件变成了云端：帧回 about:blank、标记未加载，由占位面板接管
+function markActiveFrameCloud() {
+  const tab = getActiveTab();
+  if (tab) {
+    try { if (tab.frame.getAttribute('src') !== 'about:blank') tab.frame.src = 'about:blank'; } catch {}
+    tab.frame.classList.remove('loading');
+    tab.loaded = false;
+  }
+  syncCloudPanel();
+}
+// fetchState 之后：活动文档的云端状态可能在这次拉取里变了（重连校正、手动刷新）
+function reconcileActiveCloudState() {
+  const tab = getActiveTab();
+  const f = tab && state.files[tab.path];
+  if (!f || editState.active) return;
+  if (isCloudFile(f) && tab.loaded) markActiveFrameCloud();
+  else if (!isCloudFile(f) && !tab.loaded) { ensureFrameLoaded(tab); syncCloudPanel(); }
+}
+// 「下载后第一次真正打开」（M9）：活动 Tab 上的文档从云端变成本地、帧换成真实内容时，
+// 按 openFile 的已读逻辑补一次（服务端此前因为是云端没有写 seen、没有记底本）
+function completeCloudOpen(f) {
+  if (f.unread) {
+    f.unread = false;
+    f.seenAt = Date.now();
+    updateUnreadDecorations();
+  }
+  fetch('/api/seen', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: f.path }),
+  }).catch(() => {});
+}
+// 侧栏里这一行就地重建（不整树重渲染）；保留 active / kbd-focus，焦点挪到新行对应的控件上
+function refreshFileRow(p) {
+  const f = state.files[p];
+  if (!f || !els.tree) return;
+  let old = null;
+  try { old = els.tree.querySelector(`.file[data-path="${CSS.escape(p)}"]`); } catch { return; }
+  if (!old) return;
+  const focused = old.contains(document.activeElement) ? document.activeElement : null;
+  const focusKey = !focused ? null
+    : focused === old ? 'row'
+      : focused.classList.contains('fav-btn') ? 'fav' : (focused.dataset.act || 'row');
+  const next = renderFile(f, { type: 'file', path: p });
+  if (old.classList.contains('active')) next.classList.add('active');
+  if (old.classList.contains('kbd-focus')) next.classList.add('kbd-focus');
+  const wasHydrated = !old.dataset.icoPending;
+  old.replaceWith(next);
+  if (wasHydrated) hydrateRowIcons(next);   // 指针还停在这一行上时不会再有 mouseover
+  if (focusKey) {
+    let target = focusKey === 'row' ? next
+      : focusKey === 'fav' ? next.querySelector('.fav-btn') : next.querySelector(`[data-act="${CSS.escape(focusKey)}"]`);
+    if (!target || target.disabled) target = next.querySelector('.fav-btn') || next;
+    hydrateRowIcons(next);
+    try { target.focus({ preventScroll: true }); } catch {}
+  }
+}
+function refreshCoverCard(p) {
+  const f = state.files[p];
+  if (!f || !els.homeGrid) return;
+  let old = null;
+  try { old = els.homeGrid.querySelector(`.cover-card[data-path="${CSS.escape(p)}"]`); } catch { return; }
+  if (!old) return;
+  const i = Number(old.style.getPropertyValue('--i')) || 0;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = coverCard(f, i).trim();
+  if (tmp.firstElementChild) old.replaceWith(tmp.firstElementChild);
+}
+const CLOUD_CONFIRM_BYTES = 100 * 1024 * 1024;
+function cloudErrorText(status, data) {
+  if (data && data.message) return data.message;
+  if (data && (data.reason === 'no-download-method' || data.reason === 'not-darwin')) {
+    return '当前系统不支持由 Atlas 发起下载，可在访达中右键这个文件，选择「立即下载」';
+  }
+  return (data && data.error) || ('HTTP ' + status);
+}
+// 点「下载到本机」：乐观地标成下载中 → POST → 202 后等 SSE cloud 推进度；其他结果撤销并提示
+async function startCloudDownload(p, { confirmLarge = false } = {}) {
+  const f = state.files[p];
+  if (!f || !isCloudFile(f) || f.cloudBusy) return;
+  if (!confirmLarge && f.cloud === 'dataless' && Number(f.size) > CLOUD_CONFIRM_BYTES) {
+    const ok = await showConfirm({
+      title: '下载大文件？',
+      body: `这个文件有 ${Math.round(f.size / 1024 / 1024)} MB，确定要从 iCloud 下载吗？`,
+      confirmText: '下载',
+    });
+    if (!ok) return;
+    confirmLarge = true;
+  }
+  cloudErrors.delete(p);
+  applyCloudUpdates([{ path: p, busy: true }]);
+  let res = null;
+  let data = {};
+  try {
+    res = await fetch('/api/icloud/download', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(confirmLarge ? { path: p, confirmLarge: true } : { path: p }),
+    });
+    data = await res.json().catch(() => ({}));
+  } catch (e) {
+    applyCloudUpdates([{ path: p, busy: false }]);
+    showToast({ kind: 'error', text: '无法下载', secondary: e.message });
+    return;
+  }
+  if (res.status === 202) return;   // 受理：完成 / 失败由 SSE cloud 推回来
+  if (res.ok && data.status === 'local') {
+    // 其实已经在本机（索引过期）：按状态切换处理
+    applyCloudUpdates([{ path: p, phase: 'state', cloud: null, busy: false }]);
+    return;
+  }
+  applyCloudUpdates([{ path: p, busy: false }]);
+  if (res.status === 409 && data.error === 'confirm-required' && !confirmLarge) {
+    if (Number.isFinite(data.size)) f.size = data.size;
+    const ok = await showConfirm({
+      title: '下载大文件？',
+      body: `这个文件有 ${Math.round((data.size || f.size || 0) / 1024 / 1024)} MB，确定要从 iCloud 下载吗？`,
+      confirmText: '下载',
+    });
+    if (ok) startCloudDownload(p, { confirmLarge: true });
+    return;
+  }
+  showToast({ kind: 'error', text: '无法下载', secondary: cloudErrorText(res.status, data) });
+}
+// SSE cloud 与乐观更新共用：只更新这几条记录对应的行 / 封面 / ⌘K / 星图 / 活动 Tab。
+// 不调用 markJustChanged、notify、fetchState —— 云端状态切换不是内容变更（FR-5.5、§6.3）
+function applyCloudUpdates(items) {
+  if (!Array.isArray(items) || !items.length) return;
+  const toLocal = [];
+  const toCloud = [];
+  let touched = false;
+  for (const it of items) {
+    const p = it && it.path;
+    const f = p && state.files[p];
+    if (!f) continue;
+    touched = true;
+    const wasCloud = isCloudFile(f);
+    if ('cloud' in it) {
+      if (it.cloud) f.cloud = it.cloud;
+      else { delete f.cloud; delete f.cloudLabel; delete f.cloudBusy; }
+    }
+    if ('busy' in it) {
+      if (it.busy && isCloudFile(f)) f.cloudBusy = true;
+      else delete f.cloudBusy;
+    }
+    if (Number.isFinite(it.mtime)) f.mtime = it.mtime;
+    if (Number.isFinite(it.size)) f.size = it.size;
+    const nowCloud = isCloudFile(f);
+    if (wasCloud && !nowCloud) toLocal.push(f);
+    if (!wasCloud && nowCloud) toCloud.push(f);
+    if (it.phase === 'error') {
+      cloudErrors.set(p, it.message || it.reason || '');
+      showToast({ kind: 'error', text: '下载失败', secondary: it.message || it.reason || f.name });
+    } else if (it.phase === 'done') {
+      cloudErrors.delete(p);
+      showToast({ kind: 'success', text: '已下载', secondary: f.alias || f.name });
+    }
+    refreshFileRow(p);
+    refreshCoverCard(p);
+  }
+  if (!touched) return;
+  // 变成本地：活动 Tab 就是这一篇 → 换成真实内容 + 补一次已读；后台 Tab 等激活时再加载
+  for (const f of toLocal) {
+    const tab = findTabByPath(f.path);
+    if (!tab) continue;
+    if (tab.id === state.activeTabId && !editState.active) {
+      tab.loaded = false;
+      ensureFrameLoaded(tab);
+      applyActiveDocUI(f);
+      completeCloudOpen(f);
+    }
+  }
+  // 变成云端（被驱逐）：有 Tab 的帧回 about:blank；活动 Tab 换成占位面板。不弹 toast
+  for (const f of toCloud) {
+    const tab = findTabByPath(f.path);
+    if (!tab) continue;
+    try { if (tab.frame.getAttribute('src') && tab.frame.getAttribute('src') !== 'about:blank') tab.frame.src = 'about:blank'; } catch {}
+    tab.frame.classList.remove('loading');
+    tab.loaded = false;
+    if (tab.id === state.activeTabId) applyActiveDocUI(f);
+  }
+  syncCloudPanel();
+  if (toLocal.length) scheduleThumbRequests();
+  if (qoEntry) qoRender();
+  if (starmapVisible()) refreshStarmap(true);
 }
 
 // 只更新「已分享」的视觉标记，不重建整棵树。
@@ -4089,6 +4477,7 @@ function markSidebarActive(filePath) {
 // 不负责导航 iframe——每个 Tab 的帧自己管加载，切 Tab 只显隐。
 function applyActiveDocUI(file) {
   if (!file) return;
+  clearCloudDocDisables();   // 先还原上一篇云端文档收回的按钮，下面再按这一篇重新设置
   const aliasPart = file.alias
     ? `<span class="crumb-alias">${escapeHtml(file.alias)}</span><span class="crumb-original">（${escapeHtml(file.name)}）</span>`
     : `<span class="crumb-name">${escapeHtml(file.name)}</span>`;
@@ -4097,7 +4486,7 @@ function applyActiveDocUI(file) {
     ${crumbHomeHtml()}
     <span class="crumb-sep">›</span>
     <span class="file-type-badge type-${dtype}">${docTypeBadge(file)}</span>
-    <span class="crumb-project">${escapeHtml(file.projectName)}</span>
+    <span class="crumb-project">${escapeHtml(projectLabel(file))}</span>
     <span class="crumb-sep">›</span>
     ${aliasPart}
     <span class="crumb-meta">更新于 ${fmtMtime(file.mtime)}</span>
@@ -4129,7 +4518,37 @@ function applyActiveDocUI(file) {
   updateFavButton();
   updateDiffButton();
   updateTrustButton();
-  maybeHintSandbox(file);
+  if (isCloudFile(file)) applyCloudDocDisables(file);
+  else maybeHintSandbox(file);
+  syncCloudPanel();
+}
+
+// 云端文档（design §7.4）：编辑、导出、分享、刷新、在浏览器打开、专注、对比、信任都要读内容，
+// 一律禁用并说明原因。收藏、在访达中显示、复制路径、标为未读仍然可用。
+// 收回前记下原 title，换到本地文档时由 clearCloudDocDisables 还原（再由各自的 update* 覆盖成最新值）。
+function cloudGatedButtons() {
+  return [els.btnEdit, els.btnExportPdf, els.btnShare, els.btnReloadPreview, els.btnOpenExternal,
+    els.btnFocus, els.btnFocusMenu, els.btnDiff, els.btnTrust].filter(Boolean);
+}
+function applyCloudDocDisables() {
+  for (const b of cloudGatedButtons()) {
+    if (b.dataset.cloudGated !== '1') {
+      b.dataset.cloudGated = '1';
+      b.dataset.cloudPrevTitle = b.getAttribute('title') || '';
+    }
+    b.disabled = true;
+    b.title = CLOUD_DISABLED_TITLE;
+  }
+}
+function clearCloudDocDisables() {
+  for (const b of cloudGatedButtons()) {
+    if (b.dataset.cloudGated !== '1') continue;
+    delete b.dataset.cloudGated;
+    b.title = b.dataset.cloudPrevTitle || '';
+    delete b.dataset.cloudPrevTitle;
+    // 其余按钮的 disabled 由 applyActiveDocUI / update* 重新设置；专注按钮只有这里会收回
+    if (b === els.btnFocus) b.disabled = false;
+  }
 }
 
 // 兼容既有调用点：
@@ -4192,10 +4611,12 @@ async function goHome({ confirmDirty = true } = {}) {
 
   // 顶栏按钮全部收回禁用态。这里必须手写一遍：它们只在 applyActiveDocUI 里被
   // 逐个 `= false` 打开过，之前没有任何地方关回去
+  clearCloudDocDisables();
   for (const b of [els.btnReloadPreview, els.btnDiff, els.btnEdit, els.btnMarkUnread,
     els.btnShare, els.btnExportPdf, els.btnOpenExternal, els.btnReveal, els.btnCopyPath, els.btnMore]) {
     if (b) b.disabled = true;
   }
+  syncCloudPanel();          // 没有活动文档：占位面板收起
   closeMoreMenu();   // 回首页时把可能开着的「更多」菜单收掉
   if (els.btnShare) els.btnShare.classList.remove('shared');
   updateFavButton();     // 这两个内部都按 activeFilePath == null 自动收敛
@@ -4569,6 +4990,7 @@ function enterEditMode() {
   const filePath = state.activeFilePath;
   const file = filePath && state.files[filePath];
   if (!file || editState.active) return;
+  if (isCloudFile(file)) return;   // 编辑按钮对云端文件禁用；这里再挡一道（不发 edit-doc）
 
   editState.active = true;
   editState.kind = 'html';
@@ -5300,6 +5722,7 @@ async function enterMdEditMode() {
   const filePath = state.activeFilePath;
   const file = filePath && state.files[filePath];
   if (!file || editState.active) return;
+  if (isCloudFile(file)) return;   // 同 enterEditMode：云端文件不读源码
 
   let data;
   try {
@@ -5864,7 +6287,10 @@ function exitEditMode({ restore } = { restore: true }) {
   }
   teardownMdPreviewTables();   // 预览区表格拖行的 Sortable 单独管理，一并销毁
   const wasMd = editState.kind === 'md';
-  const rawUrl = editState.rawUrl;
+  // 编辑期间文件被移出本机（变成云端）：不再导航回 rawUrl（那会发 /raw、render 请求），
+  // 帧回 about:blank、由占位面板接管（design §7.1）
+  const becameCloud = isCloudFile(state.files[editState.path]);
+  const rawUrl = becameCloud ? null : editState.rawUrl;
   editState.active = false;
   editState.kind = 'html';
   editState.path = null;
@@ -5894,6 +6320,7 @@ function exitEditMode({ restore } = { restore: true }) {
       // 强制重载（源可能未变，用 reload 保证刷新渲染结果）
       reloadPreviewDoc(rawUrl);
     }
+    if (becameCloud) markActiveFrameCloud();
     return;
   }
 
@@ -5906,6 +6333,7 @@ function exitEditMode({ restore } = { restore: true }) {
     els.preview.classList.add('loading');
     els.preview.src = rawUrl;
   }
+  if (becameCloud) markActiveFrameCloud();
 }
 
 async function cancelEdit() {
@@ -5979,6 +6407,9 @@ function updateEditToolbar() {
     els.btnReloadPreview.disabled = false;
     els.btnMarkUnread.disabled = false;
     updateDiffButton();
+    // 退出编辑时文件已在云端：上面放开的按钮按云端规则再收回去
+    const af = state.files[state.activeFilePath];
+    if (isCloudFile(af)) applyCloudDocDisables(af);
   }
   // 编辑态给主区域一个视觉标识
   document.body.classList.toggle('editing-mode', editing);
@@ -5987,6 +6418,7 @@ function updateEditToolbar() {
 els.btnEdit.addEventListener('click', async () => {
   if (els.btnEdit.disabled) return;
   const file = state.activeFilePath && state.files[state.activeFilePath];
+  if (isCloudFile(file)) return;
   if (isMdFile(file)) return enterMdEditMode();
   // 预览内编辑要往文档里注入锚点、样式和 Sortable，全都需要同源。
   // 沙箱里做不到，所以顺手问一句——比让编辑按钮变灰、用户不知道为什么点不动要好。
@@ -6289,6 +6721,13 @@ function updateDiffButton() {
     return;
   }
   els.btnDiff.disabled = editState.active;
+  // 云端文件：对比要读当前内容，禁用（applyActiveDocUI 末尾统一改 title）
+  if (isCloudFile(file)) {
+    els.btnDiff.disabled = true;
+    els.btnDiff.classList.remove('has-changes');
+    els.btnDiff.title = CLOUD_DISABLED_TITLE;
+    return;
+  }
   // 判据不能只看 mtime：AI 用相同内容重新生成一遍文档（或 touch / 网盘同步）
   // 会让 mtime 前进但内容没变，那样点开对比是空的，提示就成了假警报。
   // baselineSame 是服务端做过内容核对的结果（见 server.js buildVersionMeta）。
@@ -6728,7 +7167,8 @@ els.btnReveal.addEventListener('click', async () => {
 els.btnOpenExternal.addEventListener('click', () => {
   if (!state.activeFilePath) return;
   const f = state.files[state.activeFilePath];
-  if (f) window.open(previewUrlFor(f), '_blank');
+  const url = f && previewUrlFor(f);   // 云端文件为 null：按钮本来就禁用，这里是双保险
+  if (url) window.open(url, '_blank');
 });
 els.btnShare.addEventListener('click', () => {
   if (!state.activeFilePath) return;
@@ -6740,12 +7180,14 @@ els.btnReloadPreview.addEventListener('click', () => {
   const ifr = els.preview;
   if (!ifr || !ifr.src) return;
   const filePath = state.activeFilePath;
-  els.btnReloadPreview.classList.add('spinning');
-
   // canonical 地址：md 走 /api/render-md，html 走 /raw/。
-  // 不直接信任 iframe 当前 URL——详见 reloadPreviewDoc 的注释
+  // 不直接信任 iframe 当前 URL——详见 reloadPreviewDoc 的注释。
+  // 云端文件 previewUrlFor 为 null：不回退到 ifr.src，直接不动（按钮本来也禁用）
   const file = state.files[filePath];
-  reloadPreviewDoc(file ? previewUrlFor(file) : ifr.src);
+  const url = file && previewUrlFor(file);
+  if (!url) return;
+  els.btnReloadPreview.classList.add('spinning');
+  reloadPreviewDoc(url);
   // load 事件 = 加载完成；超时 1.5s 兜底防止动画卡住
   let cleared = false;
   const stop = () => {
@@ -7601,6 +8043,7 @@ function qoRowHtml(r, query) {
       ${second}
     </span>
     ${hitCount}
+    ${isCloudFile(f) ? `<span class="cloud-badge" role="img" aria-label="${escapeHtml(cloudText(f))}" title="${escapeHtml(cloudText(f))}">${ic(f.cloudBusy ? 'cloud-download' : 'cloud', 12)}</span>` : ''}
     <span class="qo-badge">${docTypeBadge(f)}</span>
     ${f.unread ? `<span class="qo-unread${isFreshUnread(f) ? '' : ' stale'}" title="未读"></span>` : ''}
     <span class="qo-action" aria-hidden="true"><kbd>↵</kbd><span>打开</span></span>
@@ -7630,7 +8073,8 @@ function qoRender() {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'quickopen-item' + (idx === qoActive ? ' active' : '')
-      + (r.content ? ' is-content' : '');
+      + (r.content ? ' is-content' : '')
+      + (isCloudFile(r.file) ? ' is-cloud' : '');
     btn.setAttribute('role', 'option');
     btn.setAttribute('aria-selected', String(idx === qoActive));
     btn.dataset.idx = String(idx);
@@ -7910,6 +8354,9 @@ async function openSettings() {
   }
   // 桌面版：挂载「检查更新」控件（检查 / 下载进度 / 一键重启安装）。浏览器 / npm 版保持隐藏。
   if (isDesktop) setupDesktopUpdateUI();
+  // iCloud 入口与扫描根的友好名都看 /api/icloud：打开设置时重新取一次（只 stat，不 readdir）
+  await refreshICloud();
+  syncICloudEntry();
   renderRootList(cfg.scanRoots);
   // 已归档 + 已分享：拉最新
   try {
@@ -8009,7 +8456,9 @@ function themeHeavyRefresh() {
   const f = state.files[state.activeFilePath];
   if (f && isMdFile(f) && !editState.active) {
     const url = previewUrlFor(f);
-    if (els.preview.getAttribute('src') !== url) els.preview.src = url;
+    // 云端文件 url 为 null：不导航（帧留在 about:blank，占位面板盖着）
+    if (!url) syncCloudPanel();
+    else if (els.preview && els.preview.getAttribute('src') !== url) els.preview.src = url;
   }
   refreshThumbsForTheme();
 }
@@ -8220,7 +8669,11 @@ if (els.trustAllToggle) {
     // 当前正在看的文档要按新规则重新加载一次
     const f = state.files[state.activeFilePath];
     if (f && isSandboxableType(f) && !editState.active) {
-      if (applyPreviewSandbox(f)) reloadPreviewSandboxed(previewUrlFor(f));
+      if (applyPreviewSandbox(f)) {
+        const url = previewUrlFor(f);
+        if (url) reloadPreviewSandboxed(url);
+        else syncCloudPanel();
+      }
     }
     showToast(next
       ? { kind: 'info', text: '已信任所有本地 HTML', secondary: '沙箱预览已关闭' }
@@ -8244,7 +8697,11 @@ if (els.trustClearBtn) {
       updateTrustButton();
       const f = state.files[state.activeFilePath];
       if (f && isSandboxableType(f) && !editState.active) {
-        if (applyPreviewSandbox(f)) reloadPreviewSandboxed(previewUrlFor(f));
+        if (applyPreviewSandbox(f)) {
+          const url = previewUrlFor(f);
+          if (url) reloadPreviewSandboxed(url);
+          else syncCloudPanel();
+        }
       }
       showToast({ kind: 'success', text: '已清空信任记录', secondary: `${data.cleared || 0} 篇回到沙箱` });
     } catch {
@@ -8397,7 +8854,8 @@ function renderArchiveList() {
     const li = document.createElement('li');
     const nameEl = document.createElement('span');
     nameEl.className = 'archive-name';
-    nameEl.textContent = name;
+    // 归档的是 iCloud 根的自动分组时也显示友好名（只在显示层，恢复时仍按原名提交）
+    nameEl.textContent = (state.autoFolderLabels && state.autoFolderLabels[name]) || name;
     li.appendChild(nameEl);
     if (count != null) {
       const c = document.createElement('span');
@@ -8447,11 +8905,18 @@ els.modal.addEventListener('click', (e) => {
 
 function renderRootList(roots) {
   els.rootList.innerHTML = '';
+  const ic0 = state.icloud;
   roots.forEach((p) => {
     const li = document.createElement('li');
+    // iCloud 根：前面加友好名，完整路径仍然显示在 .root-path 与 title 里（design §7.7）
+    const isICloud = !!(ic0 && ic0.root && p === ic0.root);
     li.innerHTML = `
+      ${isICloud ? '<span class="root-label">iCloud 云盘</span>' : ''}
       <span class="root-path" title="${escapeHtml(p)}">${escapeHtml(p)}</span>
       <button data-remove title="移除这个扫描根" aria-label="移除这个扫描根">${ic('x', 12)}</button>
+      ${isICloud && ic0.readable === false
+        ? '<span class="root-warn" role="note">Atlas 没有读取 iCloud 云盘的权限，请在 系统设置 › 隐私与安全性 › 文件与文件夹 中允许</span>'
+        : ''}
     `;
     li.querySelector('[data-remove]').addEventListener('click', async () => {
       const next = roots.filter(x => x !== p);
@@ -8472,6 +8937,8 @@ function renderRootList(roots) {
         renderRootList(cfg.scanRoots);
         fetchState();
         showToast({ kind: 'success', text: '已移除扫描根', secondary: p });
+        // 移除的可能正是 iCloud 根：入口按钮恢复成可添加
+        refreshICloud().then(syncICloudEntry);
       }
     });
     els.rootList.appendChild(li);
@@ -8524,6 +8991,52 @@ els.rootAddBtn.addEventListener('click', async () => {
     showToast({ kind: 'success', text: '已添加扫描根', secondary: v });
   }
 });
+
+// ---------- 设置：一键添加 iCloud 云盘（design §7.7） ----------
+// 只有本机能用 iCloud 云盘（available）时显示；已经在扫描根里就禁用并改文案
+const rootICloudEls = {
+  wrap: document.getElementById('root-icloud'),
+  btn: document.getElementById('root-icloud-btn'),
+};
+function syncICloudEntry() {
+  const { wrap, btn } = rootICloudEls;
+  if (!wrap || !btn) return;
+  const ic0 = state.icloud;
+  if (!ic0 || !ic0.available || !ic0.root) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  const added = !!ic0.inScanRoots;
+  btn.disabled = added;
+  const label = btn.querySelector('span');
+  if (label) label.textContent = added ? '已添加 iCloud 云盘' : '添加 iCloud 云盘';
+  btn.title = ic0.root;
+}
+if (rootICloudEls.btn) {
+  rootICloudEls.btn.addEventListener('click', async () => {
+    const btn = rootICloudEls.btn;
+    if (btn.disabled) return;
+    const root = state.icloud && state.icloud.root;
+    if (!root) return;
+    btn.disabled = true;   // 防连点：流程里有好几次往返
+    try {
+      const cfg = await (await fetch('/api/config')).json();
+      if (cfg.scanRoots.some(p => p === root)) {
+        showToast({ kind: 'info', text: 'iCloud 云盘已经在扫描列表里', secondary: root });
+        return;
+      }
+      if (!(await confirmLargeScanRoot(root))) return;
+      // 原样提交服务端给的绝对路径（含空格和 ~），不在前端改写
+      const ok = await updateConfig({ scanRoots: [...cfg.scanRoots, root] });
+      if (!ok) return;
+      showToast({ kind: 'success', text: '已添加 iCloud 云盘', secondary: root });
+      await refreshICloud();
+      const cfg2 = await (await fetch('/api/config')).json();
+      renderRootList(cfg2.scanRoots);
+      fetchState();
+    } finally {
+      syncICloudEntry();
+    }
+  });
+}
 
 // ---------- 目录浏览器 picker ----------
 let pickerHomePath = '';
@@ -8678,8 +9191,19 @@ function notify(title, body) {
 // 回到前台再重连（见页面底部的 visibilitychange）。单窗口下任一时刻只有一个 tab 可见，
 // 于是同时占用的 SSE 永远≈1 条，tab 数量再多也打不满连接池，等于没有上限。
 let evtSrc = null;
-let pendingRefresh = null;
 let sseRetryTimer = null;
+let sseEverOpened = false;   // 区分首次连接与重连（只有重连才补拉状态）
+// 文件事件触发的整包重拉：400ms 尾部去抖 + 2000ms 上限（maxWait）。AI 连续写一批文件时，
+// 只在停下来后拉一次，持续写也至少每 2 秒拉一次，不会一直拖着不刷新（design §6.3 / AC25）
+let stateRefreshTimer = null;
+let stateRefreshFirstAt = 0;
+function scheduleStateRefresh() {
+  const now = Date.now();
+  if (!stateRefreshTimer) stateRefreshFirstAt = now;
+  else clearTimeout(stateRefreshTimer);
+  const wait = Math.max(0, Math.min(400, stateRefreshFirstAt + 2000 - now));
+  stateRefreshTimer = setTimeout(() => { stateRefreshTimer = null; fetchState(); }, wait);
+}
 function connectSSE() {
   // 已排程的重连作废——否则多个 timer 会各建一条 EventSource，
   // 而下面只 close 得到 evtSrc 这一个引用，其余实例丢引用却还占着连接。
@@ -8689,6 +9213,9 @@ function connectSSE() {
 
   const es = new EventSource('/api/events');
   evtSrc = es;
+  // 这条连接是不是重连：建连时就定下来，并且每条连接最多补拉一次（onopen 被再次调用不算新连接）
+  const refreshOnOpen = sseEverOpened;
+  let openedOnce = false;
   es.onmessage = (msg) => {
     let data;
     try { data = JSON.parse(msg.data); } catch { return; }
@@ -8702,12 +9229,17 @@ function connectSSE() {
     if (data.channel === 'thumb') { onThumbReady(data); return; }
     // 引用关系索引版本变了：星图 / 迷你星图用过的话重拉一次 /api/links（不触发 fetchState）
     if (data.channel === 'links') { onLinksEvent(data); return; }
+    // iCloud 下载进度 / 云端状态切换（design §7.6）：就地更新对应行，不弹通知、不标「刚改过」、
+    // 不整包重拉。必须在下面的旧 fs 流兜底之前 return，否则会落进 scheduleStateRefresh（§6.3）
+    if (data.channel === 'cloud') { applyCloudUpdates(data.items || []); return; }
 
     // 文件系统事件（旧 fs 流，兼容没 channel 的旧 payload）
+    const known = data.path && state.files[data.path];
+    const proj = (known && projectLabel(known)) || data.projectName;
     if (data.kind === 'add') {
-      notify('📄 新文档', `${data.projectName} / ${data.name}`);
+      notify('📄 新文档', `${proj} / ${data.name}`);
     } else if (data.kind === 'change') {
-      notify('✏️ 文档已更新', `${data.projectName} / ${data.name}`);
+      notify('✏️ 文档已更新', `${proj} / ${data.name}`);
     }
     // 「AI 刚改过」：只收不是 Atlas 自己写的（保存 / 还原 / 重命名的负载带 self:true）
     if ((data.kind === 'add' || data.kind === 'change') && data.self !== true) {
@@ -8716,13 +9248,17 @@ function connectSSE() {
     // 时间河流：按 data.mtime 追加到活动日志的本地副本（self 事件也追加：'save' 是覆盖标记、
     // 'rename' 是计数事件，与服务端同一张分类表），然后同步重算时间段
     if (data.kind === 'add' || data.kind === 'change') onRiverSseEvent(data);
-    if (pendingRefresh) clearTimeout(pendingRefresh);
-    pendingRefresh = setTimeout(() => { pendingRefresh = null; fetchState(); }, 400);
+    scheduleStateRefresh();
   };
   // 首连与重连成功都会触发
   es.onopen = () => {
     if (evtSrc !== es) return;
     setLiveStatus('live');
+    // 重连（不是首次连接）：断线期间可能漏掉 cloud 进度 / 文件事件，按服务端的 cloudBusy 等校正一次。
+    // 首次连接不拉——页面加载时那次 fetchState 已经拿到最新状态（N3）
+    if (refreshOnOpen && !openedOnce) scheduleStateRefresh();
+    openedOnce = true;
+    sseEverOpened = true;
     // 断线期间可能漏掉 thumb ready：把 queued 条目删掉，下次可见时重新问一次状态
     // （服务端已完成的会直接回 ready，不会重截）
     for (const [k, it] of state.thumbs.items) {
@@ -9201,11 +9737,12 @@ function starmapRows() {
     out.push({
       path: f.path,
       name: f.alias || stripDocExt(f.name),
-      project: f.projectName || '',
+      project: projectLabel(f) || '',
       mtime: f.mtime || 0,
       unread: !!f.unread,
       fresh: isFreshUnread(f),
       justChanged: isJustChanged(f.path),
+      cloud: isCloudFile(f),   // → starmap.js 的 F_CLOUD 位（星点降低不透明度、tooltip 注明）
     });
   }
   return out;
@@ -9996,12 +10533,16 @@ if (window.AtlasPeek) {
     thumbUrl: (p) => thumbUrlFor(p),
     requestThumb: (p) => requestThumbs([p], 'peek'),
     frameUrl: (file) => previewUrlFor(file),
+    // 云端文件：不建帧、不截图，只显示一行说明（design §7.5）
+    isCloud: (file) => isCloudFile(file),
+    cloudText: (file) => cloudText(file),
     applySandbox: applyPeekSandbox,
     titleFor: (file) => file.alias || stripDocExt(file.name),
     // 第一行：类型 · 项目 · 多久前更新 · 未读；第二行：原 title 里的信息（完整相对路径 / 标签）
     metaFor(file) {
       const parts = [escapeHtml(docTypeBadge(file))];
-      if (file.projectName) parts.push(escapeHtml(file.projectName));
+      const proj = projectLabel(file);
+      if (proj) parts.push(escapeHtml(proj));
       if (file.mtime) parts.push(escapeHtml(fmtMtime(file.mtime)) + '更新');
       if (file.unread) parts.push('<span class="peek-unread">未读</span>');
       const line2 = [file.relPath || file.path];

@@ -4,7 +4,29 @@ const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { exec, spawn } = require('child_process');
+const { exec, execFile, spawn } = require('child_process');
+// iCloud 支持（lib/icloud.js）必须在其它 lib 之前 require：测试钩子开了读审计时，
+// installReadAudit 要先把 fs 的读入口包好，之后加载的模块调用的才是包过的那一层。
+const icloud = require('./lib/icloud');
+const icloudDownload = require('./lib/icloud-download');
+// 测试钩子 ATLAS_TEST_CLOUD（只有同时设置 ATLAS_HOME、钩子文件在 ATLAS_HOME 里才启用）。
+// inject 延迟绑定到 watchers：钩子文件被改写时，变化的路径直接送进对应 watcher 的 change 事件，
+// 走 createWatcher 里的 onEvent（跳过 watcher 内部的去抖与稳定期）
+const testHook = icloud.loadTestHook({
+  env: process.env,
+  configDir: require('./lib/paths').configDir,
+  log: console,
+  inject: (list) => {
+    for (const p of list) {
+      const o = ownerRoot(p);
+      const w = o && watchers.get(o.root);
+      if (w) w.emit('change', p);
+    }
+  },
+});
+if (testHook && testHook.audit) {
+  icloud.installReadAudit(testHook, path.join(require('./lib/paths').configDir(), 'cloud-read-audit.jsonl'));
+}
 const fsWatcher = require('./lib/fs-watcher');
 const { EventEmitter } = require('events');
 const userPaths = require('./lib/paths');
@@ -60,6 +82,61 @@ function getIgnoreSet() {
 }
 function getMaxDepth() {
   return config.maxDepth || 6;
+}
+
+// ---------- iCloud 云盘（design §3.1）----------
+// 平台开关：只有 darwin（或测试用的 ATLAS_ICLOUD_PLATFORM=darwin）才是 true。
+// CLOUD_ON=false 时下面所有云端分支都退化成原来的代码路径：不多做 stat，也不改 ignored 规则。
+const ICLOUD = icloud.resolveICloudConfig({ env: process.env, platform: process.platform, homedir: os.homedir() });
+const CLOUD_ON = ICLOUD.enabled;
+const ICLOUD_LABEL = 'iCloud 云盘';
+// blocks 判定的开关：ATLAS_CLOUD_DETECT=off 关掉；测试钩子启用时默认也关（避免 CI 文件系统的偶然行为）。
+// 做成函数是因为钩子的 statDetection 字段会随钩子文件重载变化
+function statDetectionOn() {
+  return ICLOUD.statDetection && (!testHook || testHook.statDetection);
+}
+// 一次 stat 的结果是不是 dataless（只在云端、内容不在本机）。占位文件不在这里判，见 cloudKindNow
+function cloudOfStat(abs, st) {
+  if (!CLOUD_ON || !st) return null;
+  if (testHook && typeof st.isFile === 'function' && st.isFile() && testHook.isDataless(abs)) return 'dataless';
+  if (!statDetectionOn()) return null;
+  return icloud.isDatalessStat(st, ICLOUD.platform) ? 'dataless' : null;
+}
+// 文件名是不是「文档类」的占位文件（.报告.md.icloud）
+function isDocPlaceholderName(name) {
+  const o = icloud.placeholderOriginalName(name);
+  return !!o && isAnyDocPath(o);
+}
+
+// 内容路由用的守卫：一次新鲜的 stat（不读内容），不依赖可能过期的索引记录。→ null | 'dataless' | 'placeholder'
+//
+// 规则（design §4.1）：任何读文件内容的代码，都必须在读之前用一次新鲜的 stat 判定云端状态。
+// rec.cloud 只用来提前跳过、省掉这次 stat，不能作为「可以读」的依据——用户在访达里「移除下载」
+// 或系统自动驱逐时，watcher 漏报或合并了事件，记录就会一直停在本地。
+// 零下载这个不变量由服务端负责，前端的规避只是为了体验。
+function cloudKindNow(abs) {
+  if (!CLOUD_ON || typeof abs !== 'string' || !abs) return null;
+  try {
+    const st = fs.statSync(abs);
+    return st.isFile() ? cloudOfStat(abs, st) : null;
+  } catch (e) {
+    if (!e || e.code !== 'ENOENT') return null;
+    try { return fs.lstatSync(icloud.placeholderPathFor(abs)).isFile() ? 'placeholder' : null; } catch { return null; }
+  }
+}
+const CLOUD_MSG = '此文件在 iCloud 中，尚未下载到本机';
+function sendCloudJson(res, kind) {
+  return res.status(409).json({ error: 'cloud-only', cloud: kind, message: CLOUD_MSG });
+}
+// iframe 页面（render-md / render-doc / edit-doc / 分享入口）用的 409 占位页
+function sendCloudHtml(res, kind, title, theme) {
+  res.set('Cache-Control', 'no-store').set('X-Atlas-Cloud', kind);
+  return res.status(409).type('html').send(plainRender.renderPage({
+    kind: 'txt',
+    title: title || 'iCloud',
+    text: CLOUD_MSG + '。',
+    ...(theme === 'light' || theme === 'dark' ? { theme } : {}),
+  }));
 }
 
 // 文档类型：多种可共存。config.docTypes 是启用类型的数组，
@@ -283,10 +360,19 @@ const linkIndex = linkIndexLib.createLinkIndex({
   getRoots: () => getScanRoots(),
   isIndexed: (abs) => fileIndex.has(abs),
   onVersion: (version) => events.emit('links', { version }),
+  // 云端文件不作为边的起点（不读它的内容）：sync / update 时 st=null 只看记录，
+  // parseFile 在 readHead 之前用已有的 stat 再判一次，兜住过期记录（design §4.1）
+  skip: CLOUD_ON
+    ? (abs, st) => !!(fileIndex.get(abs) || {}).cloud || !!(st && cloudOfStat(abs, st))
+    : undefined,
   log: console,
 });
 let indexSignature = null;       // 影响扫描结果的配置快照
 let indexBuilding = null;        // 构建中的 Promise（并发请求共用一次扫描）
+let lastIndexBuiltAt = 0;        // 上一次 buildIndex 完成的时间（§6.2 重建竞态窗口）
+let rootReadable = new Map();    // 扫描根 → 最近一次 buildIndex 时根目录 readdir 是否成功（EPERM/EACCES 为 false）
+let walkRootError = null;        // walk 对根目录本身 readdir 失败时的错误（buildIndex 逐根读取后清空）
+const rootUnreadableWarned = new Set();   // 每个根只 warn 一次
 
 // 索引总文件数硬上限：扫描根被指到极大目录（整块磁盘 / 巨型 monorepo）时，
 // fileIndex 与前端 state.files 会随文件数线性膨胀，再优雅的渲染也扛不住。到达上限
@@ -304,19 +390,37 @@ function currentIndexSignature() {
   return JSON.stringify([getScanRoots(), [...getIgnoreSet()].sort(), getMaxDepth()]);
 }
 
-function makeRecord(absPath, scanRoot, rootIndex, stat) {
+// cloud：null（本地）| 'dataless' | 'placeholder'。占位记录的 stat 是占位文件自己的，
+// 它的大小不是文档的真实大小，所以 size 写 null；mtime 由调用方按 design §3.2 改写
+function makeRecord(absPath, scanRoot, rootIndex, stat, cloud = null) {
   const rel = path.relative(scanRoot, absPath);
   const segments = rel.split(path.sep);
-  return {
+  const rec = {
     path: absPath,
     relPath: rel,
     rootIndex,
     name: path.basename(absPath),
     projectName: segments.length > 1 ? segments[0] : path.basename(scanRoot),
     mtime: stat.mtimeMs,
-    size: stat.size,
+    size: cloud === 'placeholder' ? null : stat.size,
     docType: docTypeOfPath(absPath),
+    cloud: cloud || null,
   };
+  // 测试钩子的 sizes 只改写 dataless 记录（用来测 >100MB 确认，不必造大文件）
+  if (cloud === 'dataless' && testHook) {
+    const s = testHook.sizeOf(absPath);
+    if (s !== undefined) rec.size = s;
+  }
+  return rec;
+}
+
+// 占位记录（原路径 absPath，占位文件的 stat 是 phStat）。mtime 优先沿用索引里同一路径的旧记录：
+// 占位文件自己的 mtime 是「被驱逐 / 被创建」的时刻，直接用会让「移除下载」亮未读（design §3.2）
+function makePlaceholderRecord(absPath, scanRoot, rootIndex, phStat) {
+  const rec = makeRecord(absPath, scanRoot, rootIndex, phStat, 'placeholder');
+  const prev = fileIndex.get(absPath);
+  if (prev && Number.isFinite(prev.mtime)) rec.mtime = prev.mtime;
+  return rec;
 }
 
 // 找到某个绝对路径属于哪个扫描根
@@ -341,13 +445,26 @@ async function indexUpsert(absPath) {
   }
   try {
     const stat = await fsp.stat(absPath);
-    const rec = makeRecord(absPath, owner.root, owner.rootIndex, stat);
+    const rec = makeRecord(absPath, owner.root, owner.rootIndex, stat, cloudOfStat(absPath, stat));
     const isNew = !fileIndex.has(absPath);
     fileIndex.set(absPath, rec);
-    // 引用索引只重解析这一个文件（后台进行，不阻塞 watcher）
+    // 引用索引只重解析这一个文件（后台进行，不阻塞 watcher）；云端文件由 skip 拦下
     linkIndex.update(absPath, isNew);
     return rec;
-  } catch {
+  } catch (e) {
+    // 原路径不在：看同目录有没有它的占位文件（.<名>.icloud），有就记成占位条目
+    if (CLOUD_ON && e && e.code === 'ENOENT') {
+      try {
+        const ph = await fsp.stat(icloud.placeholderPathFor(absPath));
+        if (ph.isFile()) {
+          const rec = makePlaceholderRecord(absPath, owner.root, owner.rootIndex, ph);
+          const isNew = !fileIndex.has(absPath);
+          fileIndex.set(absPath, rec);
+          linkIndex.update(absPath, isNew);
+          return rec;
+        }
+      } catch {}
+    }
     if (fileIndex.delete(absPath)) linkIndex.remove(absPath);
     return null;
   }
@@ -363,15 +480,30 @@ async function buildIndex() {
   const maxDepth = getMaxDepth();
   const roots = getScanRoots();
   const next = new Map();
+  const readable = new Map();
   indexTruncated = false;   // 本次重建重新判定
   for (let i = 0; i < roots.length; i++) {
     if (!fs.existsSync(roots[i])) continue;
     if (next.size >= MAX_INDEX_FILES) { indexTruncated = true; break; }
+    walkRootError = null;
     await walk(roots[i], roots[i], i, 0, next, ignore, maxDepth);
+    // 根目录本身 readdir 被拒（macOS TCC 拒绝了 iCloud 云盘的访问）：设置里据此显示警告
+    const code = walkRootError && walkRootError.code;
+    const ok = !(code === 'EPERM' || code === 'EACCES');
+    readable.set(roots[i], ok);
+    if (!ok && !rootUnreadableWarned.has(roots[i])) {
+      rootUnreadableWarned.add(roots[i]);
+      console.warn('  ! 没有读取扫描根的权限:', roots[i], code);
+    }
   }
+  rootReadable = readable;
   fileIndex.clear();
   for (const [k, v] of next) fileIndex.set(k, v);
   indexSignature = currentIndexSignature();
+  // 启动后第一次与每次重建之后 3 秒内，watcher 的 change 不做云端状态分类（按原流程处理）。
+  // 原因：重建会整体替换 fileIndex，如果一次真实改写落在 watcher 稳定期内、重建恰好在这期间
+  // 完成，prev 已经是新内容的记录，分类会得到 'none' 把这次改写吞掉（design §6.2「重建竞态」）
+  lastIndexBuiltAt = Date.now();
   // 扫描完成：引用索引在后台串行补齐（mtime / size 没变的直接复用缓存）
   linkIndex.sync([...fileIndex.keys()]);
 }
@@ -406,21 +538,40 @@ async function walk(currentDir, scanRoot, rootIndex, depth, out, ignore, maxDept
   let entries;
   try {
     entries = await fsp.readdir(currentDir, { withFileTypes: true });
-  } catch {
+  } catch (e) {
+    if (depth === 0) walkRootError = e;
     return;
   }
+  // 文档类占位文件（.报告.md.icloud）：先收集，循环结束后再写入——同目录下真实文件优先（FR-3.2）
+  const placeholders = [];
   for (const entry of entries) {
     if (out.size >= MAX_INDEX_FILES) { indexTruncated = true; return; }
-    if (entry.name.startsWith('.')) continue;
+    if (entry.name.startsWith('.')) {
+      if (CLOUD_ON && entry.isFile()) {
+        const orig = icloud.placeholderOriginalName(entry.name);
+        if (orig && isAnyDocPath(orig) && !ignore.has(orig)) placeholders.push([entry.name, orig]);
+      }
+      continue;
+    }
     if (ignore.has(entry.name)) continue;
     const full = path.join(currentDir, entry.name);
     if (entry.isDirectory()) {
       await walk(full, scanRoot, rootIndex, depth + 1, out, ignore, maxDepth);
     } else if (entry.isFile() && isAnyDocPath(entry.name)) {
       try {
-        out.set(full, makeRecord(full, scanRoot, rootIndex, await fsp.stat(full)));
+        const st = await fsp.stat(full);
+        out.set(full, makeRecord(full, scanRoot, rootIndex, st, cloudOfStat(full, st)));
       } catch {}
     }
+  }
+  for (const [phName, orig] of placeholders) {
+    if (out.size >= MAX_INDEX_FILES) { indexTruncated = true; return; }   // 占位条目同样计入上限
+    const logical = path.join(currentDir, orig);
+    if (out.has(logical)) continue;
+    try {
+      const st = await fsp.stat(path.join(currentDir, phName));
+      if (st.isFile()) out.set(logical, makePlaceholderRecord(logical, scanRoot, rootIndex, st));
+    } catch {}
   }
 }
 
@@ -709,12 +860,37 @@ function buildIgnoredFn() {
   const ignore = getIgnoreSet();
   return (p) => {
     const base = path.basename(p);
-    if (base.startsWith('.')) return true;
+    // 点开头一律忽略；例外是 macOS 上文档类的 iCloud 占位文件（.报告.md.icloud），它代表一篇未下载的文档
+    if (base.startsWith('.')) return !(CLOUD_ON && isDocPlaceholderName(base));
     if (ignore.has(base)) return true;
     // 跳过明显不是文档、也不可能含文档的特殊文件，免得为它们白跑一趟 stat
     if (base.endsWith('.sock') || base.endsWith('.lock') || base.endsWith('.pid')) return true;
     return false;
   };
+}
+
+// watcher 判定为「只是云端状态变了」（design §6.2）：
+// 除了「占位 → 真实时继承已读」这一处，不清 seen、不写活动日志、不推 fs 通道——
+// 所以下载 / 驱逐既不会有通知，也不会亮未读或 .just-changed（FR-5.5）
+function onCloudState(filePath, prev, rec) {
+  try { downloader.nudge(filePath); } catch {}
+  if (!rec.cloud) linkIndex.update(filePath, false);
+  else linkIndex.remove(filePath);
+  // 占位 → 真实：真实文件的 mtime 可能晚于用户上次看的时间，看过的话把 seen 提上去，不亮未读
+  if (prev && prev.cloud === 'placeholder' && !rec.cloud) {
+    const store = loadStore();
+    const seen = store.seen[filePath];
+    if (seen) {
+      const next = Math.max(seen, rec.mtime || 0);
+      if (next !== seen) { store.seen[filePath] = next; saveStore(store); }
+    }
+  }
+  if (matchesDocType(path.basename(filePath))) {
+    cloudBatcher.push({
+      path: filePath, cloud: rec.cloud || null, busy: downloader.has(filePath),
+      phase: 'state', mtime: rec.mtime, size: rec.size,
+    });
+  }
 }
 
 // 为单个扫描根创建 watcher。抽出来是为了支持增量增删（见 startWatchers）
@@ -729,6 +905,10 @@ function createWatcher(root, ignoredFn) {
       isDocPath: isAnyDocPath,
       stabilityThreshold: 300,
       pollInterval: 100,
+      // iCloud 占位文件以原路径报事件（只在 darwin 上开；不传时 watcher 行为不变）
+      placeholderName: CLOUD_ON
+        ? (n) => { const o = icloud.placeholderOriginalName(n); return o && isAnyDocPath(o) ? o : null; }
+        : undefined,
     });
 
     const onEvent = (kind) => async (filePath) => {
@@ -736,6 +916,11 @@ function createWatcher(root, ignoredFn) {
       // 这样在设置里切换文档类型不需要重新扫盘。
       if (!isAnyDocPath(filePath)) return;
       noteFsEvent();
+
+      // 上一条记录的快照：用来判断这次 change 是不是「只是云端状态变了」（design §6.2）
+      const prev = fileIndex.get(filePath);
+      const prevSnap = prev ? { cloud: prev.cloud || null, size: prev.size, mtime: prev.mtime } : null;
+      let rec = null;
 
       if (kind === 'unlink') {
         indexRemove(filePath);
@@ -749,14 +934,28 @@ function createWatcher(root, ignoredFn) {
           saveStore(st);
         }
       } else {
-        await indexUpsert(filePath);
+        rec = await indexUpsert(filePath);
+      }
+
+      // 云端状态分流（只在 darwin）：拿索引里的上一条记录比 {cloud, size, mtime}。
+      //   'state' —— 下载 / 驱逐 / 占位↔真实：不清 seen、不记活动日志、不推 fs，只推 cloud 通道
+      //   'none'  —— 三项都没变的元数据事件（xattr 等）：整个吞掉
+      // 例外：Atlas 自己的写入（selfWrites.has 只查不删，后面的 isSelfWrite 照常求值一次）；
+      // 索引重建后 3 秒内（见 buildIndex 里 lastIndexBuiltAt 的注释）
+      if (CLOUD_ON && kind === 'change' && prevSnap && rec
+          && !selfWrites.has(filePath)
+          && Date.now() - lastIndexBuiltAt > 3000) {
+        const t = icloud.classifyTransition(prevSnap, { cloud: rec.cloud || null, size: rec.size, mtime: rec.mtime });
+        if (t === 'state') return onCloudState(filePath, prev, rec);   // 开头已经 noteFsEvent() 过
+        if (t === 'none') return;
       }
 
       // 但对外通知（未读标记 / SSE 推送）只针对当前启用的类型
       if (!matchesDocType(path.basename(filePath))) return;
 
-      let mtime = 0;
-      try { mtime = (await fsp.stat(filePath)).mtimeMs; } catch {}
+      // mtime 优先取记录里的：占位条目的原路径不存在，stat 只会得到 0（活动日志会丢掉这条）
+      let mtime = (rec && rec.mtime) || 0;
+      if (!mtime) { try { mtime = (await fsp.stat(filePath)).mtimeMs; } catch {} }
       const rel = path.relative(root, filePath);
       const segments = rel.split(path.sep);
       const projectName = segments.length > 1 ? segments[0] : path.basename(root);
@@ -955,12 +1154,33 @@ function mountRawRoutes() {
 }
 mountRawRoutes();
 
-app.use('/raw', (req, res, next) => {
+app.use('/raw', async (req, res, next) => {
   // 这里的 req.url 形如 /0/proj/a.html（Express 已经剥掉了 /raw 前缀）
   const m = /^\/(\d+)(\/[\s\S]*)?$/.exec(req.url);
   if (!m) return next();
   const handler = rawHandlers[Number(m[1])];
   if (!handler) return next();
+  // dataless 文件不能交给 express.static：它一读就会触发 iCloud 下载（design §4.2）。
+  // 本地 md 引用一张没下载的图片时，iframe 会来请求它——这里拦下，代价是显示为裂图。
+  const root = CLOUD_ON ? getScanRoots()[Number(m[1])] : null;
+  if (root) {
+    // 与 parseurl / send 一致：pathname 是第一个 ? 之前的部分（再去掉 #，以防客户端把它发上来）。
+    // 不用 new URL()：它会把 \ 改成 /、折叠 ..，而 send 在 posix 上把 \ 当普通字符，两边会解析出不同的文件
+    const pathname = (m[2] || '/').split('?')[0].split('#')[0];
+    let rel;
+    try { rel = decodeURIComponent(pathname); } catch { rel = null; }   // 解码失败：交给 static（它会 400）
+    if (rel !== null && !rel.includes('\0')) {
+      let abs = path.join(root, rel);
+      if (icloud.isWithinOrEqual(root, abs)) {                          // 越界的交给 static 自己 403
+        let st = await fsp.stat(abs).catch(() => null);
+        // 目录：express.static 默认服务 <dir>/index.html（无尾斜杠时先 301，第二次请求同样经过这里）
+        if (st && st.isDirectory()) { abs = path.join(abs, 'index.html'); st = await fsp.stat(abs).catch(() => null); }
+        if (st && st.isFile() && cloudOfStat(abs, st) === 'dataless') {
+          return res.status(409).set('X-Atlas-Cloud', 'dataless').type('text/plain').send(CLOUD_MSG);
+        }
+      }
+    }
+  }
   const originalUrl = req.url;
   req.url = m[2] || '/';
   handler(req, res, (err) => {
@@ -1045,6 +1265,8 @@ async function getFileText(filePath, mtime) {
     // MAX_SEARCH_BYTES 做索引——正文搜索命中通常在文档前部，截断代价可接受。
     let raw;
     const st = await fsp.stat(filePath).catch(() => null);
+    // 新鲜 stat 判为云端（记录可能过期）：不读、不写 contentCache（design §4.1）
+    if (st && st.isFile() && cloudOfStat(filePath, st)) return { text: '', lower: '' };
     if (st && st.size > MAX_SEARCH_BYTES) {
       const fh = await fsp.open(filePath, 'r');
       try {
@@ -1151,6 +1373,7 @@ app.get('/api/search', async (req, res) => {
     const matches = [];
     let truncated = false;
     for (const f of scanned) {
+      if (f.cloud) continue;   // 云端文件不进正文搜索（按文件名搜索走前端，不受影响）
       const { text, lower } = await getFileText(f.path, f.mtime);
       // AND：所有关键词都要命中
       let firstIdx = -1;
@@ -1225,6 +1448,17 @@ app.get('/api/state', async (_req, res) => {
         favoritedAt: (store.favorites && store.favorites[f.path]) || 0,
         tags: (store.tags && Array.isArray(store.tags[f.path])) ? store.tags[f.path] : [],
       };
+      // 云端字段只在云端时追加，本地文件不加（5 万条时别撑大负载）
+      if (f.cloud) {
+        const e = fileMap[f.path];
+        e.cloud = f.cloud;
+        if (downloader.has(f.path)) e.cloudBusy = true;
+        if (f.cloud === 'dataless') e.size = f.size;   // 前端据此判断是否超过 100MB 需要确认
+        const label = icloud.iCloudLabelFor(f.path, os.homedir());
+        if (label !== '在 iCloud 中') e.cloudLabel = label;
+        // 占位状态下内容未知、mtime 比较没有意义：看过就不算未读（兜住重启后取不到旧 mtime 的情况）
+        if (f.cloud === 'placeholder') e.unread = !store.seen[f.path];
+      }
     }
 
     // 可见集合：下面的 favorites / allTags / recent 都按它过滤后再发给前端
@@ -1284,6 +1518,11 @@ app.get('/api/state', async (_req, res) => {
       favorites,
       allTags,
       scanRoots: getScanRoots(),
+      // 与 scanRoots 下标对齐的友好名（iCloud 根 → 'iCloud 云盘'，其余 null）
+      rootLabels: getScanRoots().map(r => (CLOUD_ON && ICLOUD.root && r === ICLOUD.root ? ICLOUD_LABEL : null)),
+      // 自动分组的显示名映射（只在显示层，不写 store，见 design §3.7）
+      autoFolderLabels: (CLOUD_ON && ICLOUD.root && getScanRoots().includes(ICLOUD.root))
+        ? { [path.basename(ICLOUD.root)]: ICLOUD_LABEL } : {},
       // 可见文档数，和 files 的口径一致（不含归档分组）
       scannedCount: visible.length,
       docTypes: getEnabledDocTypes(),
@@ -1360,12 +1599,26 @@ async function getShareAllowlist(entry) {
   try { mtime = (await fsp.stat(entry.path)).mtimeMs; } catch {}
   const cached = shareAllowCache.get(entry.path);
   if (cached && cached.mtime === mtime) return cached.allow;
+  // 读之前做一次新鲜的云端判定：云端的 CSS / HTML / MD 仍进白名单（allow.add 在读之前），
+  // 但不会被读、也不会再往下追（buildAllowlist 本来就 catch 读失败并跳过）。
+  // 这次构建只要遇到过云端文件就不写缓存：那份资源下载之后，下次请求会重建出完整的白名单
+  let sawCloud = false;
   const allow = await share.buildAllowlist(
-    { readFile: (p) => fsp.readFile(p, 'utf8') },
+    {
+      readFile: (p) => {
+        if (CLOUD_ON && cloudKindNow(p)) {
+          sawCloud = true;
+          const e = new Error('cloud');
+          e.code = 'ECLOUD';
+          return Promise.reject(e);
+        }
+        return fsp.readFile(p, 'utf8');
+      },
+    },
     baseDir,
     entryRel,
   );
-  shareAllowCache.set(entry.path, { mtime, allow });
+  if (!sawCloud) shareAllowCache.set(entry.path, { mtime, allow });
   return allow;
 }
 
@@ -1375,6 +1628,7 @@ app.post('/api/share/start', (req, res) => {
   if (!filePath || !isPathInScanRoots(filePath)) {
     return res.status(400).json({ error: '路径非法' });
   }
+  { const k = cloudKindNow(filePath); if (k) return sendCloudJson(res, k); }
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: '文件不存在' });
   }
@@ -1471,6 +1725,7 @@ app.get('/share/:token', (req, res) => {
   if (!entry) return shareGonePage(res);
   if (share.isExpired(entry)) return shareGonePage(res, '分享已到期。请让作者重新生成链接。');
   if (!fs.existsSync(entry.path)) return shareGonePage(res, '源文件已不存在。');
+  { const k = cloudKindNow(entry.path); if (k) return sendCloudHtml(res, k, path.basename(entry.path)); }
   return res.redirect(302, `/share/${req.params.token}/${encodeURIComponent(path.basename(entry.path))}`);
 });
 
@@ -1483,6 +1738,8 @@ app.get('/share/:token/*', async (req, res) => {
   if (!entry) return shareGonePage(res);
   if (share.isExpired(entry)) return shareGonePage(res, '分享已到期。请让作者重新生成链接。');
   if (!fs.existsSync(entry.path)) return shareGonePage(res, '源文件已不存在。');
+  // ① 入口文档已被驱逐：在构建白名单之前就拦下（构建要读入口文档）
+  { const k = cloudKindNow(entry.path); if (k) return sendCloudHtml(res, k, path.basename(entry.path)); }
 
   const baseDir = path.dirname(entry.path);
   let relPath;
@@ -1526,6 +1783,13 @@ app.get('/share/:token/*', async (req, res) => {
       return res.status(403).type('html').send('<h1>403 — 禁止列目录</h1>');
     }
   } catch {}
+  // ③ 资源本身 dataless：sendFile / 渲染都会读它，从而触发下载
+  if (CLOUD_ON) {
+    const st = await fsp.stat(resolved.abs).catch(() => null);
+    if (st && st.isFile() && cloudOfStat(resolved.abs, st) === 'dataless') {
+      return res.status(409).set('X-Atlas-Cloud', 'dataless').type('text/plain').send(CLOUD_MSG);
+    }
+  }
   // Markdown 文件：渲染成完整 HTML 页面再返回，让局域网访客看到预览样式而不是 md 原文
   if (isMarkdownPath(resolved.abs)) {
     try {
@@ -1665,6 +1929,8 @@ const KEEP_VERSIONS = versionStore.KEEP_PER_FILE;
 //     保存了编辑。这时"没有变更"正是他期望看到的结果。
 function recordSeenVersion(store, filePath, opts = {}) {
   const ack = !!opts.ack;
+  // 记底本要读全文：云端文件一律不记（覆盖 /api/seen、/api/diff/accept 与保存类接口）
+  if (cloudKindNow(filePath)) return { ok: false, reason: 'cloud' };
   const snap = versionStore.snapshot(filePath);
   if (!snap.ok) return snap;
   if (!store.seenVersions || typeof store.seenVersions !== 'object') store.seenVersions = {};
@@ -1704,7 +1970,9 @@ function buildVersionMeta(store, files) {
     // 只有 mtime 前进了才真的核对一次 —— 那正是"时间变了但内容可能没变"的
     // 可疑区间，也就是假警报的来源。
     let baselineSame = !!latest;
-    if (latest && f.mtime > (latest.at || 0)) {
+    // 云端文件不核对内容（读它会触发下载），baselineSame 保持初值 !!latest：
+    // 它的对比入口本来就禁用，这样也不会凭空亮起「有改动」（plan N4）
+    if (latest && !f.cloud && f.mtime > (latest.at || 0)) {
       const h = currentContentHash(f.path, f.mtime);
       baselineSame = !!(h && h === latest.hash);
     }
@@ -1727,6 +1995,12 @@ const contentHashCache = new Map();
 function currentContentHash(filePath, mtime) {
   const c = contentHashCache.get(filePath);
   if (c && c.mtime === mtime) return c.hash;
+  // 真正读文件之前补一次新鲜 stat：记录过期（文件已被驱逐）时返回 null，调用方按「无法核对」处理
+  if (CLOUD_ON) {
+    let st;
+    try { st = fs.statSync(filePath); } catch { return null; }
+    if (cloudOfStat(filePath, st)) return null;
+  }
   let hash = null;
   try { hash = versionStore.sha1(fs.readFileSync(filePath)); } catch {}
   if (hash) {
@@ -1743,6 +2017,13 @@ app.post('/api/seen', (req, res) => {
     return res.status(400).json({ error: '路径非法' });
   }
   const store = loadStore();
+  // 云端文件：只更新「最近打开」，不写 seen、不记底本——用户还没看到内容（design §4.2、Q7）
+  const cloud = cloudKindNow(filePath);
+  if (cloud) {
+    pushRecent(store, filePath);
+    saveStore(store);
+    return res.json({ ok: true, cloud });
+  }
   let mtime = 0;
   try { mtime = fs.statSync(filePath).mtimeMs; } catch {}
   store.seen[filePath] = markSeenAt(mtime);
@@ -1758,6 +2039,7 @@ app.get('/api/diff', async (req, res) => {
   if (!filePath || typeof filePath !== 'string' || !isPathInScanRoots(filePath)) {
     return res.status(400).json({ error: '路径非法' });
   }
+  { const k = cloudKindNow(filePath); if (k) return sendCloudJson(res, k); }
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: '文件不存在' });
   }
@@ -1840,6 +2122,7 @@ app.post('/api/revert', async (req, res) => {
   if (!filePath || typeof filePath !== 'string' || !isPathInScanRoots(filePath)) {
     return res.status(400).json({ error: '路径非法' });
   }
+  { const k = cloudKindNow(filePath); if (k) return sendCloudJson(res, k); }
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: '文件不存在' });
   }
@@ -1885,6 +2168,7 @@ app.post('/api/diff/accept', (req, res) => {
   if (!filePath || !isPathInScanRoots(filePath)) {
     return res.status(400).json({ error: '路径非法' });
   }
+  { const k = cloudKindNow(filePath); if (k) return sendCloudJson(res, k); }
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: '文件不存在' });
   }
@@ -1945,6 +2229,8 @@ app.post('/api/rename', async (req, res) => {
   if (!filePath || typeof filePath !== 'string' || !isPathInScanRoots(filePath)) {
     return res.status(400).json({ error: '路径非法' });
   }
+  // 云端文件一律不许改名（Q6：条目身份是原路径；占位文件的原路径在磁盘上不存在）
+  { const k = cloudKindNow(filePath); if (k) return sendCloudJson(res, k); }
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: '文件不存在' });
   }
@@ -2150,6 +2436,18 @@ app.post('/api/reveal', (req, res) => {
   if (!filePath || !isPathInOrIsScanRoot(filePath)) {
     return res.status(400).json({ error: '路径非法' });
   }
+  // 占位条目：原路径在磁盘上不存在，`open -R` 会失败，改为打开它的父目录
+  if (CLOUD_ON && !fs.existsSync(filePath) && cloudKindNow(filePath) === 'placeholder') {
+    const dir = path.dirname(filePath);
+    if (process.platform === 'darwin') {
+      spawn('open', [dir], { detached: true, stdio: 'ignore' }).unref();
+      return res.json({ ok: true, dir });
+    }
+    return revealInFileManager(dir, (err) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ ok: true, dir });
+    });
+  }
   revealInFileManager(filePath, (err) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ ok: true });
@@ -2210,8 +2508,18 @@ app.post('/api/resolve-open', (req, res) => {
   }
   const abs = path.resolve(raw);
   let stat;
+  let cloud = null;
   try { stat = fs.statSync(abs); }
-  catch { return res.json({ status: 'not-found', path: abs }); }
+  catch {
+    // 原路径不在：同目录有它的 iCloud 占位文件时当作文件继续判断（只 lstat，不读）
+    if (CLOUD_ON && isAnyDocPath(abs)) {
+      try {
+        const ph = fs.lstatSync(icloud.placeholderPathFor(abs));
+        if (ph.isFile()) { stat = ph; cloud = 'placeholder'; }
+      } catch {}
+    }
+    if (!stat) return res.json({ status: 'not-found', path: abs });
+  }
 
   // 目录：作为扫描根打开整个目录
   if (stat.isDirectory()) {
@@ -2221,13 +2529,15 @@ app.post('/api/resolve-open', (req, res) => {
 
   if (!isAnyDocPath(abs)) return res.json({ status: 'not-doc', path: abs });
 
+  if (!cloud) cloud = cloudOfStat(abs, stat);
+  const extra = cloud ? { cloud } : {};
   const inRoot = isPathInScanRoots(abs);
   const docType = docTypeOfPath(abs);
   const enabled = getEnabledDocTypes().includes(docType);
-  if (inRoot && enabled) return res.json({ status: 'ready', path: abs, docType });
-  if (inRoot && !enabled) return res.json({ status: 'need-doctype', path: abs, docType });
+  if (inRoot && enabled) return res.json({ status: 'ready', path: abs, docType, ...extra });
+  if (inRoot && !enabled) return res.json({ status: 'need-doctype', path: abs, docType, ...extra });
   // 不在任何扫描根：建议把它所在目录加为扫描根
-  return res.json({ status: 'need-root', path: abs, dir: path.dirname(abs), docType });
+  return res.json({ status: 'need-root', path: abs, dir: path.dirname(abs), docType, ...extra });
 });
 
 // 把 HTML 文件导出为 PDF——用本机 Chromium 系浏览器（Chrome / Edge / Brave / Arc / Chromium）
@@ -2295,6 +2605,45 @@ async function renderForCapture(absPath, theme, { forPrint = false, forThumb = f
   return { renderPath, tempDir };
 }
 
+// ---------- file:// 渲染的 iCloud 依赖检查（design §4.3，fail-closed）----------
+// 缩略图（系统 Chromium）和 PDF 导出（系统 Chromium / Electron printToPDF）都是 file:// 加载，
+// 不经过 /raw：本地文档引用的 dataless 资源会被直接读到，从而触发下载。这里只做薄包装，
+// 判定与兜底（抛错 → 'deps-unverified'）都在 icloud.checkRenderDeps 里。
+// → null | 'cloud' | 'cloud-deps' | 'deps-unverified'
+function renderDepsCheck(abs) {
+  if (!CLOUD_ON) return Promise.resolve(null);
+  return icloud.checkRenderDeps({
+    abs,
+    kind: docTypeOfPath(abs),
+    cloudKindNow,
+    stat: (p) => fsp.stat(p),
+    isDataless: (p, st) => cloudOfStat(p, st) === 'dataless',
+    // 只读前 maxBytes（调用前 checkRenderDeps 已确认 p 不是 dataless）
+    readText: async (p, maxBytes) => {
+      const fh = await fsp.open(p, 'r');
+      try {
+        const st = await fh.stat();
+        const len = Math.max(0, Math.min(st.size, maxBytes));
+        const buf = Buffer.alloc(len);
+        const { bytesRead } = len > 0 ? await fh.read(buf, 0, len, 0) : { bytesRead: 0 };
+        return { text: buf.subarray(0, bytesRead).toString('utf8'), truncated: st.size > maxBytes, bytes: bytesRead };
+      } finally {
+        await fh.close();
+      }
+    },
+    log: console,
+  });
+}
+const CLOUD_DEPS_MSG = '文档引用的部分资源在 iCloud 中，导出会触发下载。请先在访达中下载这些资源';
+const DEPS_UNVERIFIED_MSG = '文档过大或引用的资源过多，无法确认是否都已下载到本机。为避免触发 iCloud 下载，已停止导出';
+// renderDepsCheck 的结果 → 导出接口的 { reason, message }；null 表示放行
+function exportBlockOf(result) {
+  if (result === 'cloud') return { reason: 'cloud-only', message: CLOUD_MSG };
+  if (result === 'cloud-deps') return { reason: 'cloud-deps', message: CLOUD_DEPS_MSG };
+  if (result === 'deps-unverified') return { reason: 'deps-unverified', message: DEPS_UNVERIFIED_MSG };
+  return null;
+}
+
 // ---------- 真实缩略图（§3b） ----------
 // 后台按需截图、断网、只用 file:// 打开源文件；PNG 经下面的 GET 端点以 <img> 下发。
 // ATLAS_THUMBS=off：逃生开关，缩略图恒不可用、永不 spawn 浏览器（startAtlas 隔离实例默认也关）。
@@ -2318,6 +2667,8 @@ const thumbnailer = thumbnail.createThumbnailer({
       cleanup: () => { if (r.tempDir) { try { fs.rmSync(r.tempDir, { recursive: true, force: true }); } catch {} } },
     };
   },
+  // file:// 截图之前的 iCloud 依赖检查（fail-closed，见 renderDepsCheck）。非 darwin 恒为 null
+  checkSource: renderDepsCheck,
   // 让路：首次扫描 / 重建索引中、启动静默期内，或 AI 正在批量写文件（截图要读的正是这些文件）
   isBusy: () => !!indexBuilding || fsBurstActive() || inStartupQuiet(),
   // 清扫时判断源文件还在不在索引里；索引没建好时返回 null，不剪条目
@@ -2393,15 +2744,19 @@ app.post('/api/thumbs', async (req, res) => {
   const theme = body.theme === 'dark' ? 'dark' : 'light';
   const invalid = {};
   const valid = [];
+  const cloudItems = {};
   for (const p of paths) {
     if (typeof p !== 'string' || !p || !isPathInScanRoots(p) || !fileIndex.has(p)) {
       invalid[String(p)] = { status: 'invalid' };
+    } else if (CLOUD_ON && (fileIndex.get(p).cloud || cloudKindNow(p))) {
+      // 云端文件不进截图队列（截图要读它）
+      cloudItems[p] = { status: 'cloud' };
     } else {
       valid.push(p);
     }
   }
   const r = thumbnailer.request(valid, theme);
-  res.json({ available: r.available, items: { ...invalid, ...r.items } });
+  res.json({ available: r.available, items: { ...invalid, ...cloudItems, ...r.items } });
 });
 
 // GET /api/thumb?path=&theme=light|dark&k=<16 hex> → image/png
@@ -2455,9 +2810,21 @@ app.post('/api/export-pdf', async (req, res) => {
     send({ phase: 'error', reason: 'unsupported', message: '只支持 HTML / Markdown / CSV / JSON / 文本' });
     return res.end();
   }
+  if (cloudKindNow(filePath)) {
+    send({ phase: 'error', reason: 'cloud-only', message: CLOUD_MSG });
+    return res.end();
+  }
   if (!fs.existsSync(filePath)) {
     send({ phase: 'error', reason: 'source-missing', message: '文件不存在' });
     return res.end();
+  }
+  // file:// 渲染会直接读文档引用的资源：有 dataless 的、或无法确认的，一律不导出
+  {
+    const block = exportBlockOf(await renderDepsCheck(filePath));
+    if (block) {
+      send({ phase: 'error', ...block });
+      return res.end();
+    }
   }
 
   // Markdown / CSV / JSON / 文本先渲染成一份打印版 HTML 落到临时目录，再交给同一套
@@ -2519,8 +2886,16 @@ app.post('/api/export-pdf-html', async (req, res) => {
   if (!isHtml && !isMd && !isPlain) {
     return res.status(400).json({ ok: false, reason: 'unsupported', message: '只支持 HTML / Markdown / CSV / JSON / 文本' });
   }
+  if (cloudKindNow(filePath)) {
+    return res.status(409).json({ ok: false, reason: 'cloud-only', message: CLOUD_MSG });
+  }
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ ok: false, reason: 'source-missing', message: '文件不存在' });
+  }
+  // 同 /api/export-pdf：Electron 的 printToPDF 关了 webSecurity，同样会直接读 file:// 资源
+  {
+    const block = exportBlockOf(await renderDepsCheck(filePath));
+    if (block) return res.status(409).json({ ok: false, ...block });
   }
   let renderPath = filePath;   // HTML 文档直接用原文件（file:// 加载，相对资源按原目录解析）
   let tempDir = null;
@@ -2578,6 +2953,7 @@ app.get('/api/edit-doc', async (req, res) => {
   if (!lower.endsWith('.html') && !lower.endsWith('.htm')) {
     return res.status(400).type('text/plain').send('只支持 HTML 文件');
   }
+  { const k = cloudKindNow(filePath); if (k) return sendCloudHtml(res, k, path.basename(filePath)); }
   if (!fs.existsSync(filePath)) {
     return res.status(404).type('text/plain').send('文件不存在');
   }
@@ -2613,6 +2989,7 @@ app.post('/api/save-edits', async (req, res) => {
   if (!lower.endsWith('.html') && !lower.endsWith('.htm')) {
     return res.status(400).json({ error: '只支持 HTML 文件' });
   }
+  { const k = cloudKindNow(filePath); if (k) return sendCloudJson(res, k); }
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: '文件不存在' });
   }
@@ -2710,6 +3087,7 @@ app.get('/api/render-md', async (req, res) => {
   if (!isMarkdownPath(filePath)) {
     return res.status(400).type('text/plain').send('只支持 Markdown 文件');
   }
+  { const k = cloudKindNow(filePath); if (k) return sendCloudHtml(res, k, path.basename(filePath), req.query.theme); }
   if (!fs.existsSync(filePath)) {
     return res.status(404).type('text/plain').send('文件不存在');
   }
@@ -2769,6 +3147,7 @@ app.get('/api/render-doc', async (req, res) => {
   if (!READONLY_DOC_TYPES.has(kind)) {
     return res.status(400).type('text/plain').send('这个类型不走这条渲染路径');
   }
+  { const k = cloudKindNow(filePath); if (k) return sendCloudHtml(res, k, path.basename(filePath), req.query.theme); }
   if (!fs.existsSync(filePath)) {
     return res.status(404).type('text/plain').send('文件不存在');
   }
@@ -2821,6 +3200,7 @@ app.get('/api/md-source', async (req, res) => {
   if (!isMarkdownPath(filePath)) {
     return res.status(400).json({ error: '只支持 Markdown 文件' });
   }
+  { const k = cloudKindNow(filePath); if (k) return sendCloudJson(res, k); }
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: '文件不存在' });
   }
@@ -2854,6 +3234,7 @@ app.post('/api/save-md', async (req, res) => {
   if (!isMarkdownPath(filePath)) {
     return res.status(400).json({ error: '只支持 Markdown 文件' });
   }
+  { const k = cloudKindNow(filePath); if (k) return sendCloudJson(res, k); }
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: '文件不存在' });
   }
@@ -3043,7 +3424,11 @@ app.get('/api/estimate-scan', async (req, res) => {
     for (const e of entries) {
       if (count >= CAP) { capped = true; return; }
       if (Date.now() > DEADLINE) { timedOut = true; return; }
-      if (e.name.startsWith('.')) continue;
+      if (e.name.startsWith('.')) {
+        // 文档类 iCloud 占位文件也算一篇（只做字符串判断，不 stat，不会触发下载）
+        if (CLOUD_ON && e.isFile() && isDocPlaceholderName(e.name)) count++;
+        continue;
+      }
       if (ignore.has(e.name)) continue;
       if (e.isDirectory()) await walkEst(path.join(cur, e.name), depth + 1);
       else if (e.isFile() && isAnyDocPath(e.name)) count++;
@@ -3096,6 +3481,8 @@ app.get('/api/config', (_req, res) => {
     maxDepth: config.maxDepth,
     docTypes: getEnabledDocTypes(),
     version: pkg.version,
+    // iCloud 云盘根（可用时）；不等能力探测
+    icloudRoot: icloudStatusNow().available ? ICLOUD.root : null,
   });
 });
 
@@ -3107,11 +3494,29 @@ app.put('/api/config', (req, res) => {
   // 只动 scanRoots 时走增量，避免为没变化的大目录重复建监听（会卡住事件循环数十秒）
   let watchOptsChanged = false;
   if (Array.isArray(body.scanRoots)) {
-    const cleaned = [...new Set(body.scanRoots.map(p => path.resolve(String(p).trim())).filter(Boolean))];
+    // expand 只展开开头的 ~/（段内的 ~ 原样保留，com~apple~CloudDocs 不受影响）；
+    // 顺带修掉手输 ~/x 被解析成相对 cwd 的问题
+    const cleaned = [...new Set(body.scanRoots.map(p => path.resolve(userPaths.expand(String(p).trim()))).filter(Boolean))];
+    const prevRoots = new Set((config.scanRoots || []).map(r => path.resolve(r)));
     for (const p of cleaned) {
       if (!fs.existsSync(p)) return res.status(400).json({ error: `路径不存在：${p}` });
       const stat = fs.statSync(p);
       if (!stat.isDirectory()) return res.status(400).json({ error: `不是目录：${p}` });
+      // 新加入的根先试读一个目录项：macOS 没给权限（TCC）时 readdir 是 EPERM，
+      // 加进去也扫不到任何东西，不如当场说清楚（design §8）
+      if (!prevRoots.has(p)) {
+        try {
+          const d = fs.opendirSync(p);
+          try { d.readSync(); } finally { d.closeSync(); }
+        } catch (e) {
+          if (e && (e.code === 'EPERM' || e.code === 'EACCES')) {
+            return res.status(400).json({
+              error: `没有读取权限：${p}（macOS 可能需要在 系统设置 › 隐私与安全性 中授权）`,
+              code: e.code,
+            });
+          }
+        }
+      }
     }
     if (JSON.stringify(cleaned) !== JSON.stringify(config.scanRoots || [])) {
       rootsChanged = true;
@@ -3161,6 +3566,147 @@ app.put('/api/config', (req, res) => {
   });
 });
 
+// ---------- iCloud 云盘：入口探测与下载（design §5）----------
+
+// rootExists / available 每次现算（只 stat，不 readdir：单纯打开设置不该弹 TCC 授权框）
+function icloudStatusNow() {
+  const root = ICLOUD.root;
+  let rootExists = false;
+  if (root) { try { rootExists = fs.statSync(root).isDirectory(); } catch {} }
+  return { root, rootExists, available: ICLOUD.enabled && !!root && rootExists };
+}
+
+function capabilityOf(brctl) {
+  return {
+    brctl,
+    readFallback: CLOUD_ON,
+    dataless: CLOUD_ON,                              // dataless 总能用读取回退
+    placeholder: CLOUD_ON && !!brctl.download,       // 占位文件只能靠 brctl（原路径不存在，读不了）
+  };
+}
+// 执行不带参数的 brctl，看帮助里行首有没有 download 子命令。
+// 不带参数、不涉及任何路径，不可能触发下载。非 0 退出（不带参数时是 64）照样解析输出
+function probeBrctl() {
+  return new Promise((resolve) => {
+    try {
+      execFile('brctl', [], { timeout: 3000, windowsHide: true }, (err, stdout, stderr) => {
+        if (err && err.code === 'ENOENT') return resolve({ present: false, download: false });
+        if (err && (err.killed || err.signal)) return resolve({ present: true, download: false });   // 超时
+        const out = [stdout, stderr, err && err.stdout, err && err.stderr].filter(Boolean).map(String).join('\n');
+        let download = false;
+        try { download = icloud.parseBrctlHelp(out).download; } catch {}
+        if (process.env.ATLAS_DEBUG) console.log('  · brctl 探测:', { download });
+        resolve({ present: true, download });
+      });
+    } catch {
+      resolve({ present: false, download: false });
+    }
+  });
+}
+// 惰性单例（plan N5）：第一个调用者创建 Promise——静默期结束后的后台探测，或 /api/icloud、
+// 下载接口（接口不等静默期）。只探一次，进程内缓存。测试钩子的 brctl 字段覆盖探测结果
+let capabilityPromise = null;
+function getCapability() {
+  if (!CLOUD_ON) return Promise.resolve(capabilityOf({ present: false, download: false }));
+  if (testHook && testHook.brctlMode) {
+    return Promise.resolve(capabilityOf({ present: true, download: testHook.brctlMode === 'supported' }));
+  }
+  if (!capabilityPromise) capabilityPromise = probeBrctl().then(capabilityOf);
+  return capabilityPromise;
+}
+
+// SSE cloud 通道的批量合并：250ms 尾部去抖 + 1000ms maxWait，同路径按 phase 优先级合并（§5.5）
+const cloudBatcher = icloud.createBatcher({
+  flush: (items) => events.emit('cloud', { items }),
+});
+
+// 下载任务队列。测试钩子启用时，brctl 与读取回退都换成桩（桩不真读文件，读审计不会把下载器算进去）
+const downloader = icloudDownload.createDownloader({
+  execFile: testHook ? testHook.brctlStub : execFile,
+  createReadStream: testHook ? testHook.readStub : (p, o) => fs.createReadStream(p, o),
+  stat: (p) => fsp.stat(p),
+  lstat: (p) => fsp.lstat(p),
+  isDataless: (abs, st) => cloudOfStat(abs, st) === 'dataless',
+  placeholderPath: icloud.placeholderPathFor,
+  probe: getCapability,
+  onUpdate: (item) => cloudBatcher.push(item),
+  // 和 watcher 的 change 谁先到都没关系：后到的那个要么被判为 'none'，要么重复写同一条记录
+  onDone: async (abs) => {
+    await indexUpsert(abs);
+    linkIndex.update(abs, false);
+  },
+  settleMs: testHook && testHook.settleMs != null ? testHook.settleMs : 10_000,
+  log: console,
+});
+
+const LARGE_DOWNLOAD_BYTES = 100 * 1024 * 1024;
+
+// GET /api/icloud：设置里「添加 iCloud 云盘」入口与下载能力。会等能力探测（最多 3 秒，只有第一次）
+app.get('/api/icloud', async (req, res) => {
+  if (rejectCrossSite(req, res)) return;
+  res.set('Cache-Control', 'no-store');
+  const { root, rootExists, available } = icloudStatusNow();
+  const roots = getScanRoots();
+  const idx = root ? roots.indexOf(root) : -1;
+  const inScanRoots = idx >= 0;
+  const capability = await getCapability();
+  const out = {
+    platform: ICLOUD.platform,
+    enabled: ICLOUD.enabled,
+    available,
+    root,
+    rootExists,
+    label: ICLOUD_LABEL,
+    inScanRoots,
+    rootIndex: inScanRoots ? idx : null,
+    // 最近一次 buildIndex 对根目录 readdir 的结果（true / false / null），不额外 I/O
+    readable: inScanRoots && rootReadable.has(root) ? rootReadable.get(root) : null,
+    capability,
+  };
+  if (testHook) {
+    out._debug = {
+      thumbCheckWired: thumbnailer.hasCheckSource(),
+      msSinceIndexBuilt: Date.now() - lastIndexBuiltAt,
+      hook: testHook.debug(),
+    };
+  }
+  res.json(out);
+});
+
+// POST /api/icloud/download { path, confirmLarge? }（design §5.3）
+// 访问控制只有本机地址 + 非 GET 的 Origin 校验 + rejectCrossSite，服务本身没有鉴权 token。
+// 防批量下载靠：只认索引内文档、同路径去重、全局并发 2 + 排队 8 + 429
+app.post('/api/icloud/download', async (req, res) => {
+  if (rejectCrossSite(req, res)) return;
+  const body = req.body || {};
+  const p = body.path;
+  if (typeof p !== 'string' || !p) return res.status(400).json({ error: 'bad-request' });
+  if (!CLOUD_ON) return res.status(501).json({ error: 'unsupported', reason: 'not-darwin' });
+  // 越界判定在存在性判定之前：根外路径不论存不存在一律 403（不形成存在性探测口子）
+  const target = await icloud.resolveDownloadTarget(p, { roots: getScanRoots() });
+  if (!target.ok) {
+    if (target.code === 403 && process.env.ATLAS_DEBUG) console.warn('  ! 拒绝 iCloud 下载请求:', target.error, p);
+    return res.status(target.code).json({ error: target.error });
+  }
+  const { abs, real } = target;
+  // 服务刚启动、还没人拉过 /api/state 时先建一次索引，避免误报 404
+  if (indexSignature === null) { try { await getScannedFiles(); } catch {} }
+  const rec = fileIndex.get(abs);
+  if (!rec) return res.status(404).json({ error: 'not-found' });   // 只允许下载看板里已知的文档
+  // N8：交给下载器的 kind 用新鲜 stat 求（targetKind 只决定 real 的来源）
+  const kind = cloudKindNow(abs);
+  if (!kind) return res.json({ status: 'local' });
+  const capability = await getCapability();
+  if (!capability[kind]) return res.status(501).json({ error: 'unsupported', reason: 'no-download-method', cloud: kind });
+  const size = Number.isFinite(rec.size) ? rec.size : null;
+  if (kind === 'dataless' && size != null && size > LARGE_DOWNLOAD_BYTES && body.confirmLarge !== true) {
+    return res.status(409).json({ error: 'confirm-required', size });
+  }
+  const r = downloader.request({ abs, real, kind, size });
+  if (r.status === 'busy') return res.status(429).json({ error: 'busy', message: '同时下载的文件过多，请稍后再试' });
+  res.status(202).json({ status: 'downloading', path: abs, deduped: r.status === 'deduped' });
+});
+
 app.get('/api/events', (req, res) => {
   res.set({
     'Content-Type': 'text/event-stream',
@@ -3180,10 +3726,12 @@ app.get('/api/events', (req, res) => {
   const onUpdate = (e) => send({ channel: 'update', ...e });
   const onThumb = (e) => send({ channel: 'thumb', ...e });
   const onLinks = (e) => send({ channel: 'links', ...e });
+  const onCloud = (e) => send({ channel: 'cloud', ...e });
   events.on('fs', onFs);
   events.on('update', onUpdate);
   events.on('thumb', onThumb);
   events.on('links', onLinks);
+  events.on('cloud', onCloud);
 
   // 新连接进来时，若已知有可用更新，立即推一次（避免依赖 frontend 主动 fetch）
   const cached = updateCheck.getCachedResult(pkg.version);
@@ -3195,6 +3743,7 @@ app.get('/api/events', (req, res) => {
     events.off('update', onUpdate);
     events.off('thumb', onThumb);
     events.off('links', onLinks);
+    events.off('cloud', onCloud);
     clearInterval(ping);
   });
 });
@@ -3224,6 +3773,11 @@ const httpServer = app.listen(PORT, () => {
     console.log('  缩略图: 未找到 Chrome / Edge 等浏览器，首页使用生成式封面');
   }
   startWatchers();
+  // iCloud 下载能力探测：静默期之后在后台跑一次（接口先来就由接口创建，见 getCapability）
+  if (CLOUD_ON) {
+    const t = setTimeout(() => { getCapability().catch(() => {}); }, Math.max(0, STARTUP_QUIET_MS - (Date.now() - SERVER_STARTED_AT)));
+    if (t.unref) t.unref();
+  }
   // 升级检查：启动立即查一次 + 每 1h 重复，发现新版本时 SSE 推到所有 tab
   const checkUpdate = async () => {
     try {
@@ -3251,6 +3805,10 @@ httpServer.on('error', (err) => {
 function shutdown() {
   console.log('\n  收到退出信号，关闭中…');
   try { thumbnailer.shutdown(); } catch {}
+  // 在途下载：流 destroy、brctl 子进程 SIGKILL、推一条 cancelled；然后把这批推出去并清 timer
+  try { downloader.shutdown(); } catch {}
+  try { cloudBatcher.flushNow(); cloudBatcher.close(); } catch {}
+  try { if (testHook) testHook.close(); } catch {}
   try { linkIndex.flush(); } catch {}
   try { activityLog.flushSync(); } catch {}
   for (const w of watchers.values()) {

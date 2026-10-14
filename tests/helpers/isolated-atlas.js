@@ -85,6 +85,13 @@ function health(base, expectScanDir) {
  * @param {object}  opts.env        额外的子进程环境变量（合并在最后，可覆盖默认值）。
  *                                  默认注入 ATLAS_THUMBS=off：隔离实例不起 Chrome 截缩略图，
  *                                  免得抢 CPU 让别的 spec 时序抖动；thumbnail.spec 用 env 打开
+ * @param {string[]} opts.scanDirNames 扫描根相对 tmp 的路径（可多级、可带空格和 ~，
+ *                                  如 'Mobile Documents/com~apple~CloudDocs'）。不传时按
+ *                                  scanRootCount 生成 scan / scan2 …
+ * @param {Function} opts.beforeSpawn async ({ tmp, home, scanDirs, configPath, port }) => env|void：
+ *                                  fixture 与 config 写完之后、spawn 之前调用。可以写钩子文件、
+ *                                  造符号链接 / 根外文件；返回的对象合并进子进程 env
+ *                                  （顺序：默认值 → opts.env → beforeSpawn 返回值）
  * @returns {Promise<object>} 实例句柄
  */
 async function startAtlas(opts = {}) {
@@ -92,6 +99,8 @@ async function startAtlas(opts = {}) {
     files = {},
     config: extraConfig = {},
     scanRootCount = 1,
+    scanDirNames = null,
+    beforeSpawn = null,
     prefix = 'atlas-spec-',
     env: extraEnv = {},
   } = opts;
@@ -102,10 +111,13 @@ async function startAtlas(opts = {}) {
   const home = path.join(tmp, 'home');
   fs.mkdirSync(home, { recursive: true });
 
-  // 扫描根：scan / scan2 / scan3 …
+  // 扫描根：默认 scan / scan2 / scan3 …；scanDirNames 给了就按它（目录名可以带空格和 ~）
+  const names = Array.isArray(scanDirNames) && scanDirNames.length
+    ? scanDirNames
+    : Array.from({ length: scanRootCount }, (_, i) => (i === 0 ? 'scan' : `scan${i + 1}`));
   const scanDirs = [];
-  for (let i = 0; i < scanRootCount; i++) {
-    const d = path.join(tmp, i === 0 ? 'scan' : `scan${i + 1}`);
+  for (const name of names) {
+    const d = path.join(tmp, name);
     fs.mkdirSync(d, { recursive: true });
     scanDirs.push(d);
   }
@@ -127,6 +139,17 @@ async function startAtlas(opts = {}) {
     ...extraConfig,
   }, null, 2));
 
+  // 回调失败时也要清掉临时目录（此时还没有子进程）
+  let spawnEnv = {};
+  if (typeof beforeSpawn === 'function') {
+    try {
+      spawnEnv = (await beforeSpawn({ tmp, home, scanDirs, configPath, port })) || {};
+    } catch (e) {
+      try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+      throw e;
+    }
+  }
+
   const child = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
     env: {
       ...process.env,
@@ -138,6 +161,7 @@ async function startAtlas(opts = {}) {
       ATLAS_THUMBS: 'off',
       ATLAS_STARTUP_QUIET_MS: '0',   // 启动静默期（推迟引用索引 / 缩略图）在测试里关掉，免得拖慢断言
       ...extraEnv,
+      ...spawnEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

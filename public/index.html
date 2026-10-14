@@ -115,6 +115,9 @@
       <symbol id="i-collapse-all" viewBox="0 0 24 24"><path d="m17 11-5-5-5 5"/><path d="m17 18-5-5-5 5"/></symbol>
       <symbol id="i-expand-all" viewBox="0 0 24 24"><path d="m7 6 5 5 5-5"/><path d="m7 13 5 5 5-5"/></symbol>
       <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v13"/><path d="m7 12 5 5 5-5"/><path d="M4 21h16"/></symbol>
+      <!-- iCloud 云盘：只在云端的文件（灰显徽标）/ 正在从云端下载 -->
+      <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z"/></symbol>
+      <symbol id="i-cloud-download" viewBox="0 0 24 24"><path d="M12 13v8"/><path d="m8 17 4 4 4-4"/><path d="M4.39 15.27A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.44 8.28"/></symbol>
       <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></symbol>
       <!-- 排序：三条递减的横线 + 向下箭头（树头 #btn-sort） -->
       <symbol id="i-sort" viewBox="0 0 24 24"><path d="M4 6h10"/><path d="M4 12h7"/><path d="M4 18h4"/><path d="M18 5v14"/><path d="m15 16 3 3 3-3"/></symbol>
@@ -447,6 +450,20 @@
           <div class="md-outline-list" id="md-outline-list"></div>
         </nav>
       </div>
+      <!-- iCloud 占位面板（design §7.4）：活动文档只在 iCloud 里、没下载到本机时盖住预览区。
+           这时预览帧不导航（不发 /raw、render 请求），由 app.js syncCloudPanel() 显隐 -->
+      <section id="cloud-panel" class="cloud-panel hidden" aria-labelledby="cloud-panel-title">
+        <svg class="ico" width="40" height="40" aria-hidden="true"><use href="#i-cloud"/></svg>
+        <h2 id="cloud-panel-title"></h2>
+        <p>此文件在 iCloud 中，尚未下载到本机。</p>
+        <p class="cloud-panel-meta"></p>
+        <div class="cloud-panel-actions">
+          <button id="cloud-download-btn" type="button" class="primary">下载到本机</button>
+          <button id="cloud-reveal-btn" type="button">在访达中显示</button>
+        </div>
+        <p id="cloud-panel-hint" class="muted" hidden>当前系统不支持由 Atlas 发起下载。可在访达中右键这个文件，选择「立即下载」。</p>
+        <p id="cloud-panel-status" role="status" aria-live="polite"></p>
+      </section>
       <!-- Diff 面板：和上次已读版本对比（默认隐藏） -->
       <div class="diff-panel hidden" id="diff-panel">
         <div class="diff-header">
@@ -702,6 +719,11 @@
           <input id="root-input" type="text" placeholder="点击右侧浏览，或粘贴绝对路径" />
           <button id="root-browse-btn" type="button" title="浏览选择目录"><svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-folder-open"/></svg><span>浏览…</span></button>
           <button id="root-add-btn" type="button">添加</button>
+        </div>
+        <!-- iCloud 云盘入口（design §7.7）：只有本机能用 iCloud 云盘时由 app.js 显示 -->
+        <div class="root-icloud" id="root-icloud" hidden>
+          <button id="root-icloud-btn" type="button"><svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-cloud"/></svg><span>添加 iCloud 云盘</span></button>
+          <p class="muted">未下载到本机的文件会灰显，Atlas 不会自动下载它们。其他 App 的 iCloud 目录可以点「浏览…」，在 ~/Library/Mobile Documents 下手动选择。</p>
         </div>
         <!-- 目录浏览器（默认隐藏，点"浏览..."后展开） -->
         <div id="dir-picker" class="dir-picker hidden">

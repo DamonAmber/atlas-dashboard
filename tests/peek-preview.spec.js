@@ -75,6 +75,9 @@ function tinyPng() {
   check('触发行 aria-describedby=peek-meta', await page.getAttribute(r1, 'aria-describedby'), 'peek-meta');
   check('title 信息并入 #peek-meta 第二行', await page.evaluate(() =>
     document.querySelector('#peek-meta .peek-meta-l2').textContent), 'proj/doc-01.html');
+  // 等弹出动画（atlas-peek-in，spring 缓动会过冲到 scale≈1.006）播完再量几何：
+  // 过冲期间 top 会比夹紧值小零点几 px（宽度仍四舍五入成 380），机器忙时检查恰好落在这段里就偶发失败
+  await page.evaluate(() => Promise.all(document.getElementById('peek').getAnimations().map(a => a.finished.catch(() => {}))));
   const geo = await page.evaluate(() => {
     const pk = document.getElementById('peek').getBoundingClientRect();
     const sb = document.getElementById('sidebar').getBoundingClientRect();

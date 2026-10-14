@@ -37,6 +37,7 @@
   const F_UNREAD = 1;
   const F_FRESH = 2;               // 未读且 24 小时内
   const F_JUST = 4;                // 刚变更（本会话经 SSE 收到）
+  const F_CLOUD = 8;               // 只在 iCloud 里、没下载到本机：星点降低不透明度（design §7.3）
 
   const nowMs = (typeof performance !== 'undefined' && performance.now)
     ? () => performance.now() : () => Date.now();
@@ -498,7 +499,7 @@
   const pure = {
     tierOf, lodOf, djb2, pathSignature, layoutClusters, layoutStars, buildSpatialIndex, hitTest,
     placeLabels, clusterLinks, clusterRadius, placeThumbLabels, fitThumb, boxHitsCircle,
-    constants: { CLUSTER_GAP, LOD_FAR, LOD_NEAR, DOC_QUOTA, CAND_CAP, STAR_OBSTACLE_CAP, F_UNREAD, F_FRESH, F_JUST },
+    constants: { CLUSTER_GAP, LOD_FAR, LOD_NEAR, DOC_QUOTA, CAND_CAP, STAR_OBSTACLE_CAP, F_UNREAD, F_FRESH, F_JUST, F_CLOUD },
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
@@ -650,6 +651,7 @@
     if (row.unread) f |= F_UNREAD;
     if (row.unread && now - (row.mtime || 0) < DAY) f |= F_FRESH;
     if (row.justChanged) f |= F_JUST;
+    if (row.cloud) f |= F_CLOUD;
     return f;
   }
   function setData(nextRows) {
@@ -1078,6 +1080,8 @@
         if (!HIT[i] || TIER[i] !== t) continue;
         const x = sx(X[i]), y = sy(Y[i]);
         if (!inViewXY(x, y, 10)) continue;
+        const cloud = FLAGS[i] & F_CLOUD;
+        if (cloud) ctx.globalAlpha *= 0.45;
         if (t <= 2) {
           ctx.fillStyle = C.halo;
           ctx.beginPath(); ctx.arc(x, y, r * (near ? 2.6 : 2.4), 0, Math.PI * 2); ctx.fill();
@@ -1085,6 +1089,7 @@
         ctx.fillStyle = tcol[t];
         if (near || t <= 2) { ctx.beginPath(); ctx.arc(x, y, Math.max(0.8, r), 0, Math.PI * 2); ctx.fill(); }
         else { const d = Math.max(1, r * 1.6); ctx.fillRect(x - d / 2, y - d / 2, d, d); }
+        if (cloud) ctx.globalAlpha /= 0.45;
       }
     }
     // §11.B4：未读星画实心点（新鲜 3.2px、较早 2.4px）；正在轻闪的交给动画层
@@ -1296,7 +1301,7 @@
     const rel = opts.fmtRel ? opts.fmtRel(r.mtime) : relShort(r.mtime);
     const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     els.tip.innerHTML = `<div class="n">${esc(r.name || '')}</div>`
-      + `<div class="m">${esc(r.project || '')} · <span class="mono">${esc(rel)}</span>${(FLAGS[i] & F_UNREAD) ? ' · <span class="u">未读</span>' : ''}${(FLAGS[i] & F_JUST) ? ' · 刚变更' : ''}</div>`
+      + `<div class="m">${esc(r.project || '')} · <span class="mono">${esc(rel)}</span>${(FLAGS[i] & F_UNREAD) ? ' · <span class="u">未读</span>' : ''}${(FLAGS[i] & F_JUST) ? ' · 刚变更' : ''}${(FLAGS[i] & F_CLOUD) ? ' · 在 iCloud 中' : ''}</div>`
       + `<div class="m">引用 ${lc.out} · 被引用 ${lc.in}</div>`;
     els.tip.style.left = sx(X[i]) + 'px';
     els.tip.style.top = sy(Y[i]) + 'px';

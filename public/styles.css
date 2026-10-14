@@ -5620,3 +5620,102 @@ html[data-desktop="darwin"].focus-mode #match-badge { -webkit-app-region: no-dra
   padding: 0 3px; border-radius: 3px; background: var(--bg-elev);
 }
 .river-svg .bar.peak { fill: var(--accent); }
+
+/* ==================== iCloud 云盘（design §7） ====================
+ * 只在 iCloud 里、没下载到本机的文件：照常列出，文件名灰显 + 一个云朵徽标。
+ * 灰显只换文字令牌（--text-faint / 选中时 --text-dim），不用 opacity：这样对比度仍由
+ * contrast-tokens.spec 守着的现有令牌保证，也不用新增令牌。 */
+.file.is-cloud .file-name { color: var(--text-faint); }
+.file.is-cloud.active .file-name { color: var(--text-dim); }
+/* 徽标固定 14px 宽、不收缩：不改变 26px 行高、不换行（sidebar-row-stability 守着） */
+.cloud-badge {
+  flex: none; width: 14px; height: 14px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-faint);
+}
+.file:hover .cloud-badge,
+.file:has(.file-actions :focus-visible) .cloud-badge { visibility: hidden; }
+/* 多一个「下载到本机」按钮：7 × 18px + 6 个 1px 间隙 = 132px */
+.file.can-cloud-dl:hover .file-actions,
+.file.can-cloud-dl .file-actions:has(:focus-visible) { width: 132px; }
+.file-actions button:disabled { opacity: .45; cursor: not-allowed; }
+.file-actions button:disabled:hover { background: transparent; color: inherit; }
+
+/* 首页封面卡：装饰层去色（不影响文字），正文里加一行「在 iCloud 中」 */
+.cover-card.is-cloud .cover-art { filter: saturate(0); }
+.cover-cloud {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: var(--fs-xs); color: var(--text-faint);
+}
+.cover-card.is-cloud .cover-name { color: var(--text-dim); }
+
+/* ⌘K 结果行 */
+.quickopen-item.is-cloud .qo-name { color: var(--text-dim); }
+.quickopen-item .cloud-badge { margin-left: 2px; }
+
+/* 占位面板：盖住预览区（和首页 .empty 一样 absolute inset:0），预览帧此时不导航 */
+.cloud-panel {
+  position: absolute; inset: 0; z-index: 2;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; padding: 32px;
+  background: var(--bg);
+  color: var(--text-dim);
+  text-align: center;
+}
+.cloud-panel.hidden { display: none; }
+.cloud-panel > .ico { color: var(--text-faint); margin-bottom: 4px; }
+.cloud-panel h2 { margin: 0; font-size: var(--fs-lg); font-weight: var(--fw-semi); color: var(--text); word-break: break-all; }
+.cloud-panel p { margin: 0; font-size: var(--fs-sm); line-height: 1.55; max-width: 52ch; }
+.cloud-panel .cloud-panel-meta { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.cloud-panel .muted { color: var(--text-dim); }
+.cloud-panel-actions { display: flex; gap: 8px; margin-top: 8px; }
+.cloud-panel-actions button {
+  height: 30px; padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font: inherit; font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.cloud-panel-actions button:hover:not(:disabled) { background: var(--bg-hover); }
+.cloud-panel-actions button:focus-visible { outline: none; box-shadow: var(--ring); }
+.cloud-panel-actions button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: var(--fw-medium); }
+.cloud-panel-actions button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+.cloud-panel-actions button:disabled { opacity: .6; cursor: not-allowed; }
+.cloud-panel-actions button[hidden] { display: none; }
+#cloud-panel-status:empty { display: none; }
+
+/* 设置：扫描根列表里的友好名 + iCloud 入口 */
+.root-list li .root-label {
+  flex: none;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; font-size: 11.5px; font-weight: var(--fw-semi);
+  color: var(--text);
+}
+.root-list li .root-warn {
+  flex-basis: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; font-size: 11.5px; line-height: 1.5;
+  color: var(--danger);
+}
+.root-list li:has(.root-warn) { flex-wrap: wrap; }
+.root-icloud { margin-top: 10px; }
+.root-icloud[hidden] { display: none; }
+.root-icloud button { display: inline-flex; align-items: center; gap: 6px; }
+.root-icloud .muted { margin-top: 6px; }
+
+/* 下载中：徽标轻轻呼吸。属于「运动需授权」：只在没有 reduced-motion 时跑，
+ * 两路 reduce（系统偏好 / html[data-motion="reduce"]）下一律 animation:none */
+@keyframes atlas-cloud-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .4; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion="reduce"]) .is-downloading .cloud-badge {
+    animation: atlas-cloud-pulse var(--dur-ambient) var(--ease-standard) infinite;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .is-downloading .cloud-badge { animation: none; }
+}
+:root[data-motion="reduce"] .is-downloading .cloud-badge { animation: none; }

@@ -8,7 +8,8 @@
 //   hoverEnabled()             → 设置里的「悬停预览」开关
 //   thumbUrl(path)             → 当前主题下 ready / stale 截图的 URL，没有返回 null
 //   requestThumb(path)         → 顺手请求生成截图（受 webdriver 闸门约束）
-//   frameUrl(file)             → 实时 iframe 的地址（previewUrlFor）
+//   frameUrl(file)             → 实时 iframe 的地址（previewUrlFor；云端文件为 null）
+//   isCloud(file) / cloudText(file) → 是否只在 iCloud 里 / 此时 #peek-empty 显示的说明
 //   applySandbox(ifr)          → 设 src 之前调用：sandbox 严格等于 allow-scripts
 //   titleFor(file) / metaFor(file) → 浮窗标题 / { line1, line2 }
 //   findAnchor(path)           → 重渲染后按路径重新找触发元素（键盘模式用）
@@ -64,13 +65,25 @@
       img: $('peek-img'),
       empty: $('peek-empty'),
     };
+    els.emptyDefault = els.empty.textContent;
     els.img.addEventListener('error', () => {
       // 缓存截图 404 / 加载失败 → 回退到实时 iframe（不防抖）
       if (!cur || els.img.classList.contains('hidden')) return;
       els.img.classList.add('hidden');
       els.img.removeAttribute('src');
       const file = deps.getFile(cur.path);
-      if (file) loadFrame(deps.frameUrl(file), false);
+      if (!file) return;
+      // 这条回退绕过了 renderContent 的云端判断：frameUrl 对云端文件返回 null，
+      // 此时只显示说明，不建帧（N6）
+      const url = deps.frameUrl(file);
+      if (!url) {
+        blankFrame();
+        if (frame) frame.classList.add('hidden');
+        els.empty.textContent = deps.isCloud && deps.isCloud(file) && deps.cloudText ? deps.cloudText(file) : els.emptyDefault;
+        els.empty.classList.remove('hidden');
+        return;
+      }
+      loadFrame(url, false);
     });
     return els;
   }
@@ -169,6 +182,17 @@
       l2.textContent = meta.line2;
       els.meta.appendChild(l2);
     }
+    // 云端文件（只在 iCloud 里）：不截图、不建 / 不导航 iframe，只显示一行说明
+    if (deps.isCloud && deps.isCloud(file)) {
+      blankFrame();
+      if (frame) frame.classList.add('hidden');
+      els.img.classList.add('hidden');
+      els.img.removeAttribute('src');
+      els.empty.textContent = deps.cloudText ? deps.cloudText(file) : els.emptyDefault;
+      els.empty.classList.remove('hidden');
+      return;
+    }
+    els.empty.textContent = els.emptyDefault;
     const thumb = deps.thumbUrl(cur.path);
     if (thumb) {
       // 缓存截图：零渲染成本，不防抖（Atlas 自己的 PNG，没有外发请求）
