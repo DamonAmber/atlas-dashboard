@@ -311,7 +311,7 @@ done
 > 偶尔能过是因为前面的用例碰巧把页面滚到了合适位置 —— 现在拖拽前强制
 > `scrollIntoViewIfNeeded()` 并加了"源与目标都在视口内"的前置断言。
 
-### 本次未发布的安全整改（基于 0.32.0）
+### 0.33.0 安全整改（开发基线 0.32.0）
 
 2026-11-21：继续保持 MIT 开源、npm + macOS App + 官网三条渠道；取消旧闭源迁移方案，遥测暂不上线。不整体合并 `feat/v0.33-telemetry-closed-source`。开发阶段以 0.32.0 为基线；本轮改动已准备并入 0.33.0，实际发布前仍须完成签名公证及认证检查。
 
@@ -320,14 +320,14 @@ done
 - `app:build` 先检查公证配置，仓库内存在旧 `electron/build/notarize.env` 或公证环境未配齐就失败；`app:dir` 可无签名生成隔离验证包，但同样必须过产物门禁。无签名验证通过不等于可以发布。
 - 扫描是防误带的特征门禁，不是对任意格式秘密的完整识别；发布前仍要审查产物清单。打包白名单新增文件必须说明运行时用途，不能恢复 `electron/**`。
 
-### 本次未发布的交互修复（基于 0.32.0）
+### 0.33.0 交互修复（开发基线 0.32.0）
 
 - 顶栏「更多」菜单：点击已触发展开，但顶栏因 `view-transition-name` 建立的层叠上下文被后面的标签栏/预览层覆盖，浏览器与 macOS App 都受影响。为 `.main-header` 显式设定层叠顺序，不改变菜单动作；新增 `toolbar-more.spec.js` 检查每项的真实鼠标命中及展开/收起。
 - 官网 `#features` 与 README 补齐「更多」菜单的四项操作说明；本轮修复归入 0.33.0，官网仍按发版铁律最后推送。
 
-### 本次未发布的性能与 Tab 排序改动（基于 0.32.0）
+### 0.33.0 性能与 Tab 排序改动（开发基线 0.32.0）
 
-2026-11-22：只做热点局部优化，不合并闭源/遥测分支，不改运行时架构；已确认以 0.33.0 完整发布；认证阻塞解决前不执行公开发布。
+2026-11-22：只做热点局部优化，不合并闭源/遥测分支，不改运行时架构；已完成 0.33.0 的 npm 与 macOS Release 发布，官网在资产就位后同步。
 
 - 标签栏节点按 Tab 身份复用，不再切换时整条销毁重建；保留预览 iframe、滚动与编辑状态。一个独立 Sortable 实例支持拖动排序，按下准备阶段至松手都延后目录实例重建；排序结果写回原有 `atlas:openTabs`。边缘滚动使用单个按需 rAF，松手即停止；减少动效时不播放排序动画。
 - 自动分组先建立顶层身份索引，再按分组批量添加文件，保留原匹配优先级与子项顺序，避免多项目查找与同项目逐次 unshift 的平方开销。
@@ -442,7 +442,7 @@ npm view atlas-dashboard version   # 确认 registry 已同步
 
 期望 publish 最后一行是 `+ atlas-dashboard@<新版本>`。
 
-> 当前账号配置了 **Granular Access Token with bypass 2FA**（写到 `~/.npmrc`），所以**不需要 OTP**。如果 token 失效（403）或被撤销，去 https://www.npmjs.com/settings/d4monwang/tokens 重新生成。
+> `npm whoami` 成功不代表已经满足发布二次认证。普通网页登录/CLI 会话可能仍在 publish 时返回 `E403: Two-factor authentication or granular access token with bypass 2fa enabled is required`。这时由用户本人在正常终端完成 OTP / 网页认证，或在 npm 官方页面配置有包写权限且符合当前政策的 Granular Access Token，再只写入本机 `~/.npmrc`。验证码、token、恢复码均不得贴到聊天或写入仓库。非 TTY 的自动化执行可能无法弹出认证提示；不要关闭 2FA，也不要绕过失败继续打 tag。
 
 ### 步骤 6：打 tag → 自动创建 GitHub Release
 
@@ -661,6 +661,14 @@ Developer ID Application 证书 → 导出为 .p12 → `base64 -i cert.p12 | pbc
 
 ## 故障排查
 
+**0.33.0 发版补充（2026-11-22）：**
+- npm 普通登录并不等于满足发布 2FA；未配置 2FA 的账号没有 OTP 可输入。由账号持有人在 npm 网页配置安全密钥 / Touch ID 等二次认证，再在正常终端交互发布；不要关闭 2FA、不要把验证码或 token 发到聊天。非交互 publish 被 E403 拒绝时停止。
+- npm 发布回执可能显示「package is being processed」，此时即使显示 `+ package@version`，registry 暂时仍可能 E404。等待指定版本可查询并核对 dist.shasum，不重复发布，验证后再打 tag。
+- 本机 Git 标签推送持续出现 Empty reply / HTTP2 错误时，可先只用单次 `git -c http.version=HTTP/1.1` 重试。仍失败时，经已授权的 GitHub API 创建同一新标签：必须先确认远端不存在，且提交为 CI 已通过的发布提交；同名不同提交立即停止，不强制覆盖。0.33.0 API 创建标签后正常触发 release workflow。
+- 草稿 Release 的按 tag REST 查询可能返回 404；使用 `gh release view <tag> --json apiUrl` 的 Release ID 地址读取草稿资产，核对三件文件的大小、state=uploaded 和服务器 SHA256 后才转正。
+- 本机多命令构建/发布脚本使用独立 `/bin/bash -euo pipefail`，不能只依赖外层交互 shell 的 set -e；必须检查实际 Accepted / stapler / spctl / 文件摘要结果，不能以后台任务最后退出 0 代替验收。
+
+
 | 现象 | 原因 / 修复 |
 |---|---|
 | `npm publish` → 401 Unauthorized | token 过期或被 revoke。重新生成 Granular Token（勾 bypass 2FA），写回 `~/.npmrc`：`npm config set //registry.npmjs.org/:_authToken <new_token>` |
@@ -794,7 +802,6 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
 
-> 发版准备状态：0.33.0 的 81 个 spec 全部通过，npm 与 Apple 公证认证已恢复，App 签名/公证/隔离启动已通过；DMG 容器公证与 CI 尚待完成，以下条目仍是发布候选说明，不代表 npm / DMG 已上架。
 
 - **0.33.0** (2026-11-22) — 新增 **Tab 拖拽排序**，并修复更多菜单及后端性能/容量问题，保持 MIT 开源和 npm + macOS App + 官网原有渠道，不引入遥测或闭源迁移。① 标签左右拖动、边缘自动滚动、刷新后恢复顺序；拖动不切换活动文档、不丢未保存文本和预览状态，键盘与关闭邻居按新顺序工作；覆盖 Sortable 按下准备阶段与目录刷新共享状态冲突；快速查看在标签准备/拖动期间让位，避免长拖动时再次弹出预览。② 标签 DOM 按身份复用，不变渲染零节点增删；24 个 Tab 同机微基准每 100 次渲染中位约 88ms → 6ms（仅标签热路径，不代表整机性能倍数）。③ 顶栏建立正确层叠顺序，浏览器与 App 的 ⋯ 菜单不再被 Tab/预览层盖住。④ 自动分组建立身份索引、批量添加子项，避免平方开销；短 hash 缓存受文件索引上限约束并清理已删除路径，不再超过 500 条就整表清空；重复引用在 realpath/stat 前去重。⑤ 带点目录搬入/删除正确同步；失败缩略图及启动载入也执行数量淘汰；活动日志恢复所有保留日期的日上限，防止重启绕过。⑥ 固定 CI 的 Ubuntu 24.04 以兼容现有 Playwright，补齐 DMG 容器签名与签名/staple 后更新清单校验；npm 与 App 显式运行时白名单、真实产物凭据扫描门禁及日志脱敏，兼容外层 npm pack/publish dry-run；公证改用钥匙串/仓库外配置，CI 增加最终 App 与 DMG 签名、公证验收。保留开源源码、生产依赖和 asar:false。⑦ 新增 release-security / toolbar-more / tab-reorder / backend-perf spec，接入 npm test 与 CI；相关旧 spec 补回归，81 个 spec 全绿，另验证真实隔离 Electron 窗口与未签名 App 产物；正式签名、公证由发版阶段另验。⑧ README、官网 #features、应用内新功能引导与发布流程同步。
 
