@@ -43,7 +43,12 @@ async function beginDrag(page, from, to, during, beforeMove) {
       window.__frames = state.tabs.map(t => t.frame);
       window.__tabSorter = Sortable.get(els.tabBar);
     });
-    await beginDrag(page, 'alpha.html', 'charlie.html', null, async () => {
+    await beginDrag(page, 'alpha.html', 'charlie.html', async () => {
+      const middle = await page.locator('#tab-bar .tab[data-path$="bravo.html"]').boundingBox();
+      await page.mouse.move(middle.x + middle.width / 2, middle.y + middle.height / 2, { steps: 8 });
+      await page.waitForTimeout(800);
+      check('长拖动期间快速查看不重新弹出', await page.locator('#peek').isVisible(), false);
+    }, async () => {
       check('按下 Tab 尚未移动也已进入刷新保护', await page.evaluate(() => state.tabsDragging));
       await page.evaluate(() => render());
     });

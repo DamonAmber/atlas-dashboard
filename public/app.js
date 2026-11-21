@@ -10653,7 +10653,7 @@ if (window.AtlasPeek) {
       if (!path || !state.files[path]) return false;
       if (via === 'hover') {
         if (!peekHoverEnabled()) return false;
-        if (isDragging || isInlineEditing() || openModals.length || qoEntry) return false;
+        if (isDragging || state.tabsDragging || isInlineEditing() || openModals.length || qoEntry) return false;
         if (path === state.activeFilePath) return false;
         if (window.innerWidth < 700) return false;
       }
