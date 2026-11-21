@@ -738,12 +738,22 @@ function reconcile(store, scanned) {
   const newFiles = visibleScanned.filter(f => !existing.has(f.path));
   newFiles.sort((a, b) => b.mtime - a.mtime);
 
+  // 顶层分组按身份建立一次索引，避免每个新文件都线性扫描增长中的 tree。
+  // 只记录首个匹配项，保持旧 .find() 在重复/手工分组上的优先级。
+  const autoFolders = new Map(), manualFolders = new Map();
+  for (const node of store.tree) {
+    if (node.type !== 'folder') continue;
+    const key = autoFolderKey(node);
+    const map = key === null ? manualFolders : autoFolders;
+    const name = key === null ? node.name : key;
+    if (!map.has(name)) map.set(name, node);
+  }
+  const additions = new Map();
   for (const file of newFiles) {
     const folderName = file.projectName;
     // 先按 autoFor 认领（改过名的分组也能认出来，这是关键），
     // 再退回按名字认领没有 autoFor 的分组（用户手工建的同名分组，沿用旧行为）
-    let folder = store.tree.find(n => n.type === 'folder' && autoFolderKey(n) === folderName)
-      || store.tree.find(n => n.type === 'folder' && autoFolderKey(n) === null && n.name === folderName);
+    let folder = autoFolders.get(folderName) || manualFolders.get(folderName);
     if (!folder) {
       // 名字优先取用户起过的那个（见 syncFolderAliases）：分组可能是被归档、
       // 被误回收之后重建的，这时不该退回自动名
@@ -752,9 +762,14 @@ function reconcile(store, scanned) {
         autoFor: folderName, collapsed: false, children: [],
       };
       store.tree.push(folder);
+      autoFolders.set(folderName, folder);
     }
-    folder.children.unshift({ type: 'file', path: file.path });
+    let batch = additions.get(folder);
+    if (!batch) { batch = []; additions.set(folder, batch); }
+    batch.push({ type: 'file', path: file.path });
   }
+  // 等价于原来逐次 unshift（新文件的内部顺序不变），但一次拼接避免同项目 O(N²)。
+  for (const [folder, batch] of additions) folder.children = batch.reverse().concat(folder.children);
 
   store.tree = pruneEmptyFolders(store.tree);
 
@@ -1961,6 +1976,8 @@ function recordSeenVersion(store, filePath, opts = {}) {
 // mtime 缓存，同一个版本只算一次 sha1。所以 fileMap 那圈"不许 stat"的约束
 // 并没有被破坏。
 function buildVersionMeta(store, files) {
+  // 只保留仍在索引里的短 hash，不缓存正文。随索引删除清理，容量受索引上限约束。
+  for (const p of contentHashCache.keys()) if (!fileIndex.has(p)) contentHashCache.delete(p);
   const out = {};
   for (const f of files) {
     const list = versionsOf(store, f.path);
@@ -2004,8 +2021,11 @@ function currentContentHash(filePath, mtime) {
   let hash = null;
   try { hash = versionStore.sha1(fs.readFileSync(filePath)); } catch {}
   if (hash) {
-    // 上限兜底：长期运行 + 大量文件时别让它无限长
-    if (contentHashCache.size > 500) contentHashCache.clear();
+    // 候选集合可超过 500；整表清空会使每轮 /api/state 反复同步重读全部候选。
+    // 容量与受保护的文件索引一致，必要时单项淘汰，不清空其它命中的条目。
+    if (contentHashCache.size >= MAX_INDEX_FILES && !contentHashCache.has(filePath)) {
+      contentHashCache.delete(contentHashCache.keys().next().value);
+    }
     contentHashCache.set(filePath, { mtime, hash });
   }
   return hash;

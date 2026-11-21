@@ -1442,6 +1442,10 @@ body.tx-ready .main { transition: margin-left var(--dur) var(--ease); }
 body.sidebar-collapsed .main { margin-left: 0; }
 
 .main-header {
+  /* view-transition-name 会建立独立层叠上下文；显式抬高顶栏，避免它的下拉菜单
+   * 被后面的 Tab 栏 / 预览帧盖住。菜单自身的 z-index 无法跨越祖先层叠上下文。 */
+  position: relative;
+  z-index: 2;
   height: 46px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
@@ -2046,6 +2050,19 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
   font-weight: var(--fw-semi);
 }
 .tab:focus-visible { outline: none; box-shadow: var(--ring); }
+
+/* 标签拖拽只移动标签，帧保持原位；独立类名避免与目录树的克隆清理互相干扰。 */
+.tab.tab-sort-ghost { opacity: .25; }
+.tab.tab-sort-chosen, body.tabs-dragging { cursor: grabbing; }
+.tab-sort-fallback {
+  background: var(--bg-elev);
+  color: var(--text);
+  box-shadow: var(--shadow-3);
+}
+body.tabs-dragging .tab:hover { transform: none; }
+body.tabs-dragging .tab-indicator { transition: none; }
+body.tabs-dragging .preview-frame { pointer-events: none; }
+
 
 /* 滑动指示层：常驻一枚 accent 淡填充胶囊，切换标签时平滑滑到新标签的位置
  * （iOS 分段控件里那块会滑动的选中滑块）。left/width 由 JS positionTabIndicator 设置，

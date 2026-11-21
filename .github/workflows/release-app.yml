@@ -41,7 +41,17 @@ jobs:
         run: npm ci
 
       - name: Build, sign & notarize DMG
-        run: npm run app:build
+        run: |
+          npm run app:build
+          node scripts/release-security.js --app dist-app/mac-arm64/Atlas.app
+          codesign --verify --deep --strict dist-app/mac-arm64/Atlas.app
+          spctl -a -vvv --type exec dist-app/mac-arm64/Atlas.app
+          xcrun stapler validate dist-app/mac-arm64/Atlas.app
+          xcrun notarytool submit dist-app/Atlas-mac-arm64.dmg \
+            --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple dist-app/Atlas-mac-arm64.dmg
+          xcrun stapler validate dist-app/Atlas-mac-arm64/Atlas.app
+          xcrun stapler validate dist-app/Atlas-mac-arm64.dmg
         env:
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}

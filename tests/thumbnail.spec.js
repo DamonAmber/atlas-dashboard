@@ -370,6 +370,23 @@ async function unitTests() {
     await env.cleanup();
   }
 
+  console.log('\n[单测] 全部失败的缩略图也遵守条目上限');
+  {
+    const env = makeEnv('fail-limit', { thumbOpts: { maxEntries: 2 } });
+    const t = env.make({ renderSource: async () => ({ error: 'too-large' }) });
+    for (let i = 0; i < 10; i++) {
+      const p = env.write(`fail-${i}.html`);
+      t.request([p], 'light');
+      await waitFor(() => env.events.some(e => e.path === p && e.status === 'too-large'), 3000);
+    }
+    check('失败缓存不超过 maxEntries', Object.keys(t._debug.index().entries).length, 2);
+    t.flush();
+    check('失败缓存落盘也不超过 maxEntries', Object.keys(JSON.parse(fs.readFileSync(path.join(env.cacheDir, 'index.json'))).entries).length, 2);
+    const restarted = env.make({ maxEntries: 1 });
+    check('重启后按新上限裁剪已保存缓存', Object.keys(restarted._debug.index().entries).length, 1);
+    await env.cleanup();
+  }
+
   console.log('\n[单测] index.json 损坏 → 空缓存 + 清扫孤儿 + warn 一次');
   {
     const env = makeEnv('corrupt');

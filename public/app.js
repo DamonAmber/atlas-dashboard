@@ -59,6 +59,7 @@ const state = {
   //   loaded = frame 是否已经导航过一次（懒加载：恢复的 Tab 先建帧、激活时才 set src）
   tabs: [],
   activeTabId: null,
+  tabsDragging: false,    // 标签排序期间延后标签 DOM 同步，避免破坏 Sortable 的落点
   // 「AI 刚改过」：本会话经 SSE 收到 add / change、且不是 Atlas 自己写的（负载 self !== true）
   // 的文档。path → 收到时刻（ms）。JUST_CHANGED_MS 窗口内侧栏行 / 首页封面带 .just-changed
   // （点做 3 次轻闪），到期由一个共享定时器清理。
@@ -1508,7 +1509,7 @@ function withViewTransition(fn, kind = 'home', dir) {
   if (prefersReducedMotion()) return direct();
   if (navigator.webdriver === true && !window.__atlasForceVT) return direct();
   if (vtActive || tooSoon) return direct();
-  if (isDragging || isInlineEditing() || editState.active) return direct();
+  if (isDragging || state.tabsDragging || isInlineEditing() || editState.active) return direct();
 
   root.dataset.vt = kind;
   if (dir) root.dataset.vtDir = dir; else delete root.dataset.vtDir;
@@ -2015,7 +2016,7 @@ function render() {
   //
   // 治法：拖拽期间直接跳过整树重建（本处），跳过的这次在拖拽结束时补上（见 onEnd）；
   // 另外 destroySortables 兜底清扫可能已被孤立的克隆（见 sweepDragArtifacts）。
-  if (isDragging) { renderSkippedDuringDrag = true; return; }
+  if (isDragging || state.tabsDragging) { renderSkippedDuringDrag = true; return; }
   renderSkippedDuringDrag = false;
   // 一个渲染周期只算一次筛选命中集合：树计数、首页筛选条、待看都读这一份
   filterSnapshot(true);
@@ -3309,6 +3310,7 @@ function removeFolderFromTree(nodes, id) {
 // 实例在拖拽途中被 destroy 时收尾跑不到，克隆就永久浮在 body 上。
 // 只在"确定不在拖拽中"时调用，否则会把正在用的克隆误删。
 function sweepDragArtifacts() {
+  if (state.tabsDragging) return;  // 目录树重建不能清掉仍在使用的标签拖拽克隆
   // 挂在 body 上的 fallback 克隆
   for (const el of document.querySelectorAll('body > .sortable-fallback')) el.remove();
   // 保险：任何落在树外的 fallback / drag 克隆
@@ -3326,6 +3328,7 @@ function sweepDragArtifacts() {
 // 保存所有 Sortable 实例，render 前先 destroy，避免实例泄漏导致长时间使用后卡顿
 let sortableInstances = [];
 function destroySortables() {
+  if (state.tabsDragging) { renderSkippedDuringDrag = true; return; }
   for (const s of sortableInstances) {
     try { s.destroy(); } catch {}
   }
@@ -3342,6 +3345,7 @@ function destroySortables() {
   sweepDragArtifacts();
 }
 function initSortables() {
+  if (state.tabsDragging) { renderSkippedDuringDrag = true; return; }
   destroySortables();
   const containers = [els.tree, ...els.tree.querySelectorAll('.folder-children')];
   for (const el of containers) {
@@ -3810,51 +3814,176 @@ function pruneDeadTabs() {
   }
 }
 
-// 渲染标签栏。
-function renderTabs() {
+// 标签栏只有一个 Sortable 实例，独立于目录树的实例列表；渲染/切换不重建实例。
+let tabSortable = null;
+let tabScrollRaf = 0, tabScrollAt = 0, tabPointer = null;
+function stopTabAutoScroll() {
+  if (tabScrollRaf) cancelAnimationFrame(tabScrollRaf);
+  tabScrollRaf = 0; tabScrollAt = 0; tabPointer = null;
+}
+function scrollTabsAtEdge(time) {
+  tabScrollRaf = 0;
+  if (!state.tabsDragging || !document.body.classList.contains('tabs-dragging') || !tabPointer) return;
+  const bar = els.tabBar, r = bar.getBoundingClientRect();
+  const { x, y } = tabPointer;
+  let direction = 0;
+  if (y >= r.top - 10 && y <= r.bottom + 10) {
+    if (x >= r.right - 32 && x <= r.right + 20) direction = 1;
+    else if (x <= r.left + 32 && x >= r.left - 20) direction = -1;
+  }
+  const delta = tabScrollAt ? Math.min(32, time - tabScrollAt) : 16;
+  tabScrollAt = time;
+  const before = bar.scrollLeft;
+  if (direction) bar.scrollLeft += direction * delta * .55;
+  // 无方向或已到边界就停，下一次移动会重新启动；不留常驻计时器。
+  if (bar.scrollLeft !== before) tabScrollRaf = requestAnimationFrame(scrollTabsAtEdge);
+  else tabScrollAt = 0;
+}
+function trackTabDragPointer(e) {
+  if (!state.tabsDragging) return;
+  const point = e.touches ? e.touches[0] : e;
+  if (!point) return;
+  tabPointer = { x: point.clientX, y: point.clientY };
+  if (!tabScrollRaf && document.body.classList.contains('tabs-dragging')) tabScrollRaf = requestAnimationFrame(scrollTabsAtEdge);
+}
+// PointerEvent 覆盖鼠标与触摸；旧浏览器降级，监听器只注册一次。
+if (window.PointerEvent) document.addEventListener('pointermove', trackTabDragPointer, { capture: true, passive: true });
+else {
+  document.addEventListener('mousemove', trackTabDragPointer, { capture: true, passive: true });
+  document.addEventListener('touchmove', trackTabDragPointer, { capture: true, passive: true });
+}
+window.addEventListener('blur', stopTabAutoScroll);
+function ensureTabSortable() {
+  if (!els.tabBar || tabSortable || typeof Sortable === 'undefined') return;
+  tabSortable = new Sortable(els.tabBar, {
+    group: 'atlas-tabs',
+    draggable: '.tab',
+    direction: 'horizontal',
+    scroll: false,   // 标签栏由下方单个 rAF 驱动边缘滚动，避免插件漏掉快速移动后的末次判定
+    filter: '.tab-close, .tab-close *',
+    preventOnFilter: false,
+    forceFallback: true,
+    fallbackOnBody: true,
+    fallbackTolerance: 6,   // 普通点击的轻微抖动不应该变成拖拽
+    touchStartThreshold: 6,
+    delay: 150,
+    delayOnTouchOnly: true,
+    animation: prefersReducedMotion() ? 0 : 150,
+    ghostClass: 'tab-sort-ghost',
+    chosenClass: 'tab-sort-chosen',
+    dragClass: 'tab-sort-drag',
+    fallbackClass: 'tab-sort-fallback',
+    onChoose() {
+      // Sortable 在按下时就占用了全局准备状态，不能等移动后的 onStart 才保护它。
+      state.tabsDragging = true;
+    },
+    onUnchoose() {
+      if (document.body.classList.contains('tabs-dragging')) return;  // 实际拖动由 onEnd 收尾
+      state.tabsDragging = false;
+      stopTabAutoScroll();
+      setTimeout(() => {
+        if (state.tabsDragging) return;
+        renderTabs({ scrollActive: false });
+        if (renderSkippedDuringDrag && !isDragging && !isInlineEditing()) {
+          renderSkippedDuringDrag = false;
+          render();
+        }
+      }, 0);
+    },
+    onStart() {
+      state.tabsDragging = true;
+      document.body.classList.add('tabs-dragging');
+      if (tabPointer && !tabScrollRaf) tabScrollRaf = requestAnimationFrame(scrollTabsAtEdge);
+      if (window.AtlasPeek) AtlasPeek.close();
+    },
+    onChange() { positionTabIndicator(false); },
+    onEnd() {
+      state.tabsDragging = false;
+      document.body.classList.remove('tabs-dragging');
+      stopTabAutoScroll();
+      // 使用 Tab 身份而不是 DOM 索引：指示层不参与排序，拖拽期间删掉/新开的 Tab
+      // 也不能丢失；恢复最新的模型后再补渲染一次。
+      const byId = new Map(state.tabs.map(tab => [tab.id, tab]));
+      const ordered = [];
+      for (const el of els.tabBar.querySelectorAll('.tab')) {
+        const tab = byId.get(el.dataset.tabId);
+        if (tab) { ordered.push(tab); byId.delete(tab.id); }
+      }
+      ordered.push(...byId.values());
+      state.tabs.splice(0, state.tabs.length, ...ordered);
+      renderTabs({ scrollActive: false });
+      persistTabs();
+      // Sortable 的拖动状态在库内部共享，不能在 Tab 拖动中销毁目录树实例。
+      // 延后被跳过的目录刷新，等本次 onEnd 返回、库完成清理后再同步。
+      if (renderSkippedDuringDrag) {
+        renderSkippedDuringDrag = false;
+        setTimeout(() => { if (!isDragging && !state.tabsDragging && !isInlineEditing()) render(); }, 0);
+      }
+    },
+  });
+}
+window.addEventListener('atlas:motion-change', () => {
+  if (tabSortable) tabSortable.option('animation', prefersReducedMotion() ? 0 : 150);
+});
+
+// 复用标签节点：切换只更新选中态，不重新创建整条标签栏，也不触碰任何预览 iframe。
+function renderTabs({ scrollActive = true } = {}) {
   const bar = els.tabBar;
-  if (!bar) return;
+  if (!bar || state.tabsDragging) return;
   const has = state.tabs.length > 0;
   bar.classList.toggle('hidden', !has);
   document.body.classList.toggle('has-tabs', has);
-  // 只移除旧的 .tab，保留常驻的滑动指示层——重建会打断过渡，指示层必须一直在 DOM 里，
-  // 改它的 transform 才能从"上一个标签"平滑滑到"新标签"，而不是每次重新出现。
-  bar.querySelectorAll('.tab').forEach(el => el.remove());
+  const existing = new Map([...bar.querySelectorAll('.tab')].map(el => [el.dataset.tabId, el]));
+  const ids = new Set(state.tabs.map(tab => tab.id));
+  for (const [id, el] of existing) if (!ids.has(id)) el.remove();
   ensureTabIndicator();
+  let cursor = bar.firstElementChild;
   for (const tab of state.tabs) {
     const file = state.files[tab.path];
     const dtype = file ? docTypeOf(file) : 'html';
     const label = file ? (file.alias || file.name) : tabBasename(tab.path);
-    const el = document.createElement('div');
-    el.className = 'tab' + (tab.id === state.activeTabId ? ' active' : '');
-    el.setAttribute('role', 'tab');
-    el.setAttribute('aria-selected', tab.id === state.activeTabId ? 'true' : 'false');
-    el.dataset.tabId = tab.id;
-    el.dataset.path = tab.path;   // 快速查看的触发目标（活动 Tab 不触发）
-    el.title = tab.path;
-    el.innerHTML =
-      `<span class="file-type-badge type-${dtype}">${file ? docTypeBadge(file) : 'HTML'}</span>` +
-      `<span class="tab-name"></span>` +
-      `<button class="tab-close" type="button" title="关闭（⌘W）" aria-label="关闭标签">${ic('x', 12)}</button>`;
-    el.querySelector('.tab-name').textContent = label;
-    el.addEventListener('click', (e) => {
-      if (e.target.closest('.tab-close')) return;
-      requestActivateTab(tab.id);
-    });
-    el.querySelector('.tab-close').addEventListener('click', (e) => {
-      e.stopPropagation();
-      closeTab(tab.id);
-    });
-    el.addEventListener('auxclick', (e) => {   // 中键关闭
-      if (e.button === 1) { e.preventDefault(); closeTab(tab.id); }
-    });
-    bar.appendChild(el);
+    let el = existing.get(tab.id);
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'tab';
+      el.setAttribute('role', 'tab');
+      el.dataset.tabId = tab.id;
+      el.innerHTML =
+        '<span class="file-type-badge"></span>' +
+        '<span class="tab-name"></span>' +
+        `<button class="tab-close" type="button" title="关闭（⌘W）" aria-label="关闭标签">${ic('x', 12)}</button>`;
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('.tab-close')) return;
+        requestActivateTab(tab.id);
+      });
+      el.querySelector('.tab-close').addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeTab(tab.id);
+      });
+      el.addEventListener('auxclick', (e) => {
+        if (e.button === 1) { e.preventDefault(); closeTab(tab.id); }
+      });
+    }
+    const selected = tab.id === state.activeTabId;
+    el.classList.toggle('active', selected);
+    if (el.getAttribute('aria-selected') !== String(selected)) el.setAttribute('aria-selected', String(selected));
+    if (el.dataset.path !== tab.path) el.dataset.path = tab.path;
+    if (el.title !== tab.path) el.title = tab.path;
+    const badge = el.querySelector('.file-type-badge');
+    const badgeClass = `file-type-badge type-${dtype}`;
+    if (badge.className !== badgeClass) badge.className = badgeClass;
+    const badgeText = file ? docTypeBadge(file) : 'HTML';
+    if (badge.textContent !== badgeText) badge.textContent = badgeText;
+    const name = el.querySelector('.tab-name');
+    if (name.textContent !== label) name.textContent = label;
+    if (el !== cursor) bar.insertBefore(el, cursor);
+    cursor = el.nextElementSibling;
   }
-  // 指示层挪到最后一个子元素：它是 absolute（不占布局）、z-index 垫底（不挡标签），
-  // 放末尾能让 .tab:nth-child(1) 仍指向第一个标签（否则会把标签整体挤后一位）。
-  if (els.tabIndicator) bar.appendChild(els.tabIndicator);
+  // 指示层常驻末尾且不参与 Sortable，避免无变化的渲染仍移动节点。
+  if (els.tabIndicator && bar.lastElementChild !== els.tabIndicator) bar.appendChild(els.tabIndicator);
+  ensureTabSortable();
   const activeEl = bar.querySelector('.tab.active');
-  if (activeEl) activeEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  if (scrollActive && activeEl) activeEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   positionTabIndicator(true);
 }
 

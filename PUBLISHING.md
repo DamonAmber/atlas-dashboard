@@ -56,7 +56,7 @@ NEW_VERSION="0.x.y"   # 替换成实际新版本号
 node -e "const p=require('./package.json'); p.version='$NEW_VERSION'; require('fs').writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n');"
 
 # 2. 先把 macOS App 打好 + 公证（放在打 tag 之前，让资产提前躺在 dist-app/ 里就位）
-source electron/build/notarize.env && npm run app:build
+APPLE_KEYCHAIN_PROFILE=atlas-notary npm run app:build
 #    再单独公证 DMG 容器 + staple —— 见「桌面 App（macOS DMG）发版」章节
 #    （npm-only 发版、用户说"先不出 DMG"时跳过第 2 / 8 步）
 
@@ -116,6 +116,7 @@ rm -rf dist-app
 >   就马上成为 "latest"，而 130MB 的 dmg 还在上传——这段时间 `releases/latest/download/Atlas-mac-arm64.dmg`
 >   指向一个还没有该资产的 Release，返回 **404**。草稿不被计入 latest，期间 latest 仍是上一版
 >   （下载到旧版但有效），转正的同一刻资产已齐、才成为 latest。
+> - **可并行的等待**：App 已签名公证通过且 DMG / zip / yml 已在本地生成后，可在 DMG 容器单独公证等待期间推送代码跑 CI；只有 DMG 验收与 CI 都通过才执行 npm 发布，不改变三条公开渠道的先后顺序。
 > - **官网（docs/）最后才推**：Pages 在任何 push 到 main 时部署 `docs/`。官网一更新，访客就看到
 >   新版号并去点下载/`npm i`。所以它必须排在 npm 上架 + Release 转正之后，否则官网领先于实际产物，
 >   用户撞 404。**0.24.0 发版时就是把 docs 和代码放在同一个首 commit 一起推了，导致官网提前几分钟
@@ -131,8 +132,8 @@ git status                          # 工作区干净？
 git rev-parse --abbrev-ref HEAD     # 当前在 main 分支？
 gh auth status                      # gh CLI 已登录？
 npm whoami                          # npm 已登录？(应输出 d4monwang)
-grep authToken ~/.npmrc             # token 已配置？(应输出 1 行)
-atlas status                        # atlas 服务在跑？(测试需要)
+npm config get registry            # registry 正确？不要打印或 grep npm token
+atlas status                        # 可选：查看本机服务；测试不依赖它，勿为测试重启服务
 ```
 
 如果任意一项不对，停下来修，不要发版。**唯一的例外是 `gh auth status`**：
@@ -294,6 +295,10 @@ done
 > - `dir-picker.spec.js` — 浏览器内目录选择器（15 项。`/api/browse` 本身就是列真实文件系统目录的接口，用例会只读地浏览 home 与 `~/Documents`；因 CI runner 的 home 结构不保证，不放进 CI）
 > - `landing-demo.spec.js` — landing page demo 交互（28 项，`file://`，连服务都不需要）
 > - `e2e-install.spec.js` — npm pack + 模拟陌生用户安装（10 项，自建临时 home 与端口）
+> - `tab-reorder.spec.js` — Tab 拖拽与 DOM 复用（真实鼠标左右排序、按下/拖动中的目录刷新保护、编辑内容/帧/滚动状态保留、持久化/快捷键/关闭相邻项、溢出边缘滚动和停止、不变渲染零节点增删）
+> - `backend-perf.spec.js` — 后端热路径机制（分组索引与旧算法结果一致、避免逐文件顶层 find、超过 500 个候选时 hash 缓存复用及失效清理；使用原函数和 mock IO，不依赖 Git 历史或真实配置，耗时只作观测）
+> - `toolbar-more.spec.js` — 顶栏更多菜单（58 项，浏览器/桌面外壳、HTML/Markdown、深浅主题、多 Tab、真实点击命中、Esc/点击外部关闭与专注阅读动作）
+> - `release-security.spec.js` — 发布安全门禁（34 项，纯 Node，临时 App/npm 产物；覆盖白名单、凭据文件/内容、跨块扫描、符号链接、日志脱敏、公证配置与开源渠道保持；无需起服务）
 
 > ⚠️ **新写 spec 一律用 `startAtlas()`，不要直连 `:4321`。** 哪怕自认为"只读"也不要——
 > 点开一篇文档就会写 store 的 recent 与已读状态，折叠一个分组就会写 tree。
@@ -305,6 +310,32 @@ done
 > （y≈1650）而视口只有 900 高，拖拽目标不在视口内、鼠标事件打不到元素，
 > 偶尔能过是因为前面的用例碰巧把页面滚到了合适位置 —— 现在拖拽前强制
 > `scrollIntoViewIfNeeded()` 并加了"源与目标都在视口内"的前置断言。
+
+### 本次未发布的安全整改（基于 0.32.0）
+
+2026-11-21：继续保持 MIT 开源、npm + macOS App + 官网三条渠道；取消旧闭源迁移方案，遥测暂不上线。不整体合并 `feat/v0.33-telemetry-closed-source`。开发阶段以 0.32.0 为基线；本轮改动已准备并入 0.33.0，实际发布前仍须完成签名公证及认证检查。
+
+- `package.json`：npm 与桌面包改为显式运行时白名单；保留源码、生产依赖与 `asar:false`，不加入混淆或埋点。
+- `scripts/release-security.js`：`prepack` 会在临时目录生成并扫描真实 npm tarball（内部 `--ignore-scripts` 避免递归）；`build.afterPack` 扫描最终 App 的 `Resources/app`（含生产依赖）及其它 Resources 文件。未知运行时文件、符号链接、环境凭据/私钥文件名或秘密内容特征、缺失运行时文件、读取/扫描失败均阻止出包；报错只列路径和规则，不输出匹配内容。
+- `app:build` 先检查公证配置，仓库内存在旧 `electron/build/notarize.env` 或公证环境未配齐就失败；`app:dir` 可无签名生成隔离验证包，但同样必须过产物门禁。无签名验证通过不等于可以发布。
+- 扫描是防误带的特征门禁，不是对任意格式秘密的完整识别；发布前仍要审查产物清单。打包白名单新增文件必须说明运行时用途，不能恢复 `electron/**`。
+
+### 本次未发布的交互修复（基于 0.32.0）
+
+- 顶栏「更多」菜单：点击已触发展开，但顶栏因 `view-transition-name` 建立的层叠上下文被后面的标签栏/预览层覆盖，浏览器与 macOS App 都受影响。为 `.main-header` 显式设定层叠顺序，不改变菜单动作；新增 `toolbar-more.spec.js` 检查每项的真实鼠标命中及展开/收起。
+- 官网 `#features` 与 README 补齐「更多」菜单的四项操作说明；本轮修复归入 0.33.0，官网仍按发版铁律最后推送。
+
+### 本次未发布的性能与 Tab 排序改动（基于 0.32.0）
+
+2026-11-22：只做热点局部优化，不合并闭源/遥测分支，不改运行时架构；已确认以 0.33.0 完整发布；认证阻塞解决前不执行公开发布。
+
+- 标签栏节点按 Tab 身份复用，不再切换时整条销毁重建；保留预览 iframe、滚动与编辑状态。一个独立 Sortable 实例支持拖动排序，按下准备阶段至松手都延后目录实例重建；排序结果写回原有 `atlas:openTabs`。边缘滚动使用单个按需 rAF，松手即停止；减少动效时不播放排序动画。
+- 自动分组先建立顶层身份索引，再按分组批量添加文件，保留原匹配优先级与子项顺序，避免多项目查找与同项目逐次 unshift 的平方开销。
+- 内容 hash 缓存不再越过 500 条就整表清空；仅缓存短 hash，容量受现有文件索引上限约束，索引中删除的路径在状态查询时清理。首次候选核对仍需读取内容，本次不重写此接口为异步任务。
+- 引用索引在 realpath/stat 前按候选路径去重，目标身份去重仍保留，避免重复链接放大 IO。
+- 缩略图失败条目与启动载入的条目同样按上限淘汰；活动日志异步统计所有保留日期的已存行数，每文件只读到日上限，避免历史日期在重启后绕过日上限；今天/昨天的合并预热预算保持不变。
+- watcher 不再把带点目录当作无关扩展名文件丢弃。过滤后的非文档路径需要在去抖之后异步 stat 区分目录，此处存在必要的额外 IO，但不在事件回调同步读盘，仍保留 ignored/depth 过滤。
+- 新 spec 已接入 npm test / CI；fs-watcher、thumbnail、link-index、activity-log 原 spec 补了对应回归。README / 官网 #features 同步 Tab 排序说明。
 
 ### 步骤 1：更新 PUBLISHING.md
 
@@ -461,7 +492,8 @@ atlas restart      # 让本机服务也用新版
 
 | 触发 | Workflow | 做什么 |
 |---|---|---|
-| `git push` 到 main | `.github/workflows/test.yml` | CLI smoke + landing demo + e2e install + 33 个隔离 spec（各自起实例，无需预置 fixture 与共享服务）+ 帧率非阻塞观测 |
+| `git push` 到 main | `.github/workflows/test.yml` | CLI smoke + landing demo + e2e install + 隔离 spec（各自起实例，无需预置 fixture 与共享服务）+ 发布安全门禁 spec + 帧率非阻塞观测 |
+| 手动触发（签名 secrets 已配置） | `.github/workflows/release-app.yml` | 打包与产物门禁、App 签名/公证验证、DMG 容器公证及 staple，验证通过后上传 DMG / zip / latest-mac.yml |
 | `git push origin v*` (tag) | `.github/workflows/release.yml` | 抽取 PUBLISHING.md 该版本段落 → 创建 GitHub Release |
 | 任何 push 到 main | GitHub Pages（仓库设置） | 自动重新部署 `docs/` 到 https://damonamber.github.io/atlas-dashboard/ |
 | `npm publish` | npm registry | 包上架 + CDN 同步（约 1-2 分钟） |
@@ -515,12 +547,31 @@ curl -s "https://api.github.com/repos/DamonAmber/atlas-dashboard/actions/runs?pe
 
 从 0.20.0 起，除 npm 外还分发一个签名 + 公证的 macOS App。npm 流程照旧；DMG 作为 GitHub Release 的资产附上。
 
+**发布安全前置约束：**
+
+- 凭据仅存 macOS 钥匙串（首选 profile `atlas-notary`）；退路是仓库外 `~/.config/atlas/notarize.env`（目录权限 0700、文件 0600，由用户本人填写），绝不放进 `electron/build/`。`.gitignore` 不会限制打包。旧密码已吊销也不要继续公开分发含旧凭据的安装包；清理历史 Release 资产前需单独确认。
+- `APPLE_KEYCHAIN_PROFILE` 与 Apple ID/API key 公证环境不要混用；多种方式共存可能使 electron-builder 选错凭据。前置检查只检查配置，不代替实际签名/公证验收。
+- `npm pack` / `npm publish` 通过 `prepack` 自动过 npm 产物门禁；直接发布既有 `.tgz` 不运行源码项目钩子，必须先核验该归档，不能用来绕过门禁。
+- `npm run app:build` / `npm run app:dir` 经 `afterPack` 检查实际 App 文件；CI 上传前再检查一次、验证签名与公证并公证 DMG 容器。任何一步失败禁止上传。
+
+**产物文件清单与用途（不依赖 .gitignore）：**
+
+| 产物 | 包含范围 | 必要性 |
+|---|---|---|
+| npm（当前 59 个文件） | `bin/atlas.js`、`server.js`、显式列出的 `lib/*.js`、前端脚本/样式/本地 vendor/KaTeX 字体、package.json、README、MIT LICENSE | CLI 启动、本地服务、离线预览及开源使用说明；不包含 electron、tests、scripts、design 或凭据 |
+| App | `server.js`、同一组 lib/public 运行时文件、package.json、LICENSE、5 个 Electron 入口、两张 trayTemplate 图标，外加 electron-builder 自动收集的生产 node_modules | 桌面主进程/preload/PDF/服务管理/标题栏、菜单栏图标与 Node 生产依赖；保留开源源码、不混淆 |
+| App 外层 | Electron 运行时与本地化资源、App 图标、更新配置、签名资源 | 桌面启动、应用图标、更新与系统签名；构建用 entitlements 不作为 App 源码资源打包 |
+
+复核命令：`npm pack --dry-run --json`（自动过门禁）；`node scripts/release-security.js --npm`；`find dist-app/mac-arm64/Atlas.app/Contents/Resources/app -type f`；`node scripts/release-security.js --app dist-app/mac-arm64/Atlas.app`。
+
 **本地出包（推荐，凭据在本机最省事）：**
 
 ```bash
-# 首次：把签名/公证凭据写进本机 gitignored 文件（模板见 electron/build/notarize.env.example）
-#   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
-source electron/build/notarize.env && npm run app:build
+# 首次：用户本人在终端交互运行，按提示输入 Apple ID、新 App 专用密码与 Team ID。
+# 不把密码放在命令行、聊天、仓库文件或日志里。
+xcrun notarytool store-credentials atlas-notary
+# 以后只传 profile 名；不要同时设置 APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD。
+APPLE_KEYCHAIN_PROFILE=atlas-notary npm run app:build
 # 产物：dist-app/ 下 Atlas-mac-arm64.dmg（人工下载）+ .zip + latest-mac.yml（自动更新）
 # ⚠️ electron-builder 只公证并 staple 了 .app，DMG 容器本身没被公证/staple —— 要手动补，见下方「DMG 单独公证」
 ```
@@ -538,9 +589,8 @@ source electron/build/notarize.env && npm run app:build
 所以要把 DMG 也提交一次公证再 staple，下载的 DMG 才能离线过 Gatekeeper（app 本身已 stapled，这步是让容器也干净、并对齐本节验收）：
 
 ```bash
-source electron/build/notarize.env
 xcrun notarytool submit dist-app/Atlas-mac-arm64.dmg \
-  --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+  --keychain-profile atlas-notary --wait
 # 等到 status: Accepted（约 1-3 分钟）后再 staple
 xcrun stapler staple dist-app/Atlas-mac-arm64.dmg
 xcrun stapler validate dist-app/Atlas-mac-arm64.dmg   # 应 The validate action worked!
@@ -583,7 +633,7 @@ rm -rf dist-app
 `APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`）。导出 .p12：钥匙串里选中
 Developer ID Application 证书 → 导出为 .p12 → `base64 -i cert.p12 | pbcopy`。
 
-> 目前只出 arm64（Apple Silicon）。Intel / 通用二进制、Windows、以及 App 自动更新（electron-updater）待后续。
+> 目前只出 arm64（Apple Silicon）。Intel / 通用二进制、Windows 待后续；App 自动更新已实现，依赖 zip 与 latest-mac.yml。
 
 **§3g 原生外壳实机手测（第 3 层，改过 `electron/` 或桌面外壳 CSS 的版本必做）：** 前两层是
 `desktop-chrome.spec.js`（假 `window.atlasDesktop` 桥，只测前端钩子）和 `--smoke` 冒烟，都碰不到主进程的
@@ -623,8 +673,8 @@ Developer ID Application 证书 → 导出为 .p12 → `base64 -i cert.p12 | pbc
 | tests workflow 失败但本地通过 | 多半是 fixture HTML 不够长 / 不含某关键字。看 `.github/workflows/test.yml` 里 `Prepare fixture HTML files` 那一步，按需调整 |
 | `npm pack` → **`EACCES: permission denied, rename '.../_cacache/tmp/...'`**（或 `EEXIST`） | `~/.npm/_cacache` 里有目录属主是 `root`，历史上某次 `sudo npm` 留下的，跟本仓库无关。**不要 `sudo chown` 用户的 npm 缓存**（影响面比这个问题大得多）。用一次性缓存目录绕开就行：`npm pack --cache /tmp/atlas-npmcache`。步骤 0 里给 `e2e-install.spec.js` 备 tgz 时会撞到这个。0.17.1 发版时遇到过。 |
 | `xcrun stapler validate <dmg>` → **`does not have a ticket stapled to it`**；`stapler staple <dmg>` → **`Record not found` / `Could not find ... ticket`** | 不是构建坏了。`build.mac.notarize: true` 只公证 `.app`，**DMG 容器没被公证**，所以 staple 找不到票。按「[DMG 单独公证 + staple](#桌面-appmacos-dmg发版)」把 dmg 也 `notarytool submit --wait` 一次再 staple。app 本身其实已 notarized+stapled（`spctl` 显示 accepted），这步是让下载的 dmg 容器离线也干净。0.22.0 发版时遇到并补流程。 |
-| `npm run app:build` → **`codesign ... The timestamp service is not available`**（退出码 1，签某个 `locale.pak` 时失败） | Apple 的安全时间戳服务（`codesign --timestamp` 联网访问 `timestamp.apple.com`）**瞬时不可用**，不是证书/凭据/代码问题。**直接重跑** `source electron/build/notarize.env && npm run app:build` 即可，一般第二次就过（electron-builder 用 `--force` 重签，不用清理）。0.24.1 发版时遇到，重试一次即成功。 |
-| `npm run app:build` 公证阶段 → **`Failed to notarize via notarytool. HTTP status code: 403. A required agreement is missing or has expired`** | 不是证书/凭据/代码问题，签名那步其实已成功。Apple **更新了开发者协议**（Program License Agreement 等），公证会一直 403 直到**账号持有人**登录 <https://developer.apple.com/account> 或 App Store Connect **接受新协议**。重跑没用，必须先签协议。签完直接重跑 `source electron/build/notarize.env && npm run app:build` 即可。0.31.0 发版时遇到。 |
+| `npm run app:build` → **`codesign ... The timestamp service is not available`**（退出码 1，签某个 `locale.pak` 时失败） | Apple 的安全时间戳服务（`codesign --timestamp` 联网访问 `timestamp.apple.com`）**瞬时不可用**，不是证书/凭据/代码问题。**直接重跑** `APPLE_KEYCHAIN_PROFILE=atlas-notary npm run app:build` 即可，一般第二次就过（electron-builder 用 `--force` 重签，不用清理）。0.24.1 发版时遇到，重试一次即成功。 |
+| `npm run app:build` 公证阶段 → **`Failed to notarize via notarytool. HTTP status code: 403. A required agreement is missing or has expired`** | 不是证书/凭据/代码问题，签名那步其实已成功。Apple **更新了开发者协议**（Program License Agreement 等），公证会一直 403 直到**账号持有人**登录 <https://developer.apple.com/account> 或 App Store Connect **接受新协议**。重跑没用，必须先签协议。签完直接重跑 `APPLE_KEYCHAIN_PROFILE=atlas-notary npm run app:build` 即可。0.31.0 发版时遇到。 |
 | `gh release upload` **卡住 / 5 分钟超时中断**，Release 上只挂了 `latest-mac.yml` | 一条命令里塞了两个 ~124MB 的 zip+dmg（合计 ~248MB），超过默认超时。**分开单独上传**（各给足时间），传完用 `gh release view --json assets` 核对三件都在、`size` 与本地 `stat -f %z` 一致。0.22.0 发版时遇到。 |
 | **分开单独传 zip/dmg 仍然卡**：`gh release upload` 和直接 `curl` 到 `uploads.github.com` 都传不完，Release assets 长时间只剩 `latest-mac.yml` | 本机→GitHub 上行**网络抖动**期，单个 124MB 也传不完（而同一时段 `notarytool` 传 Apple 却很快，说明是到 GitHub 这条路的问题）。两条上传**并行**时每条被挤到 ~27KB/s，且长连接（~40 分钟）会被对端掐断：`curl: (55) Recv failure: Connection reset by peer`（实测 zip 传到 64MB、dmg 到 70MB 就断）。**诊断**：前台 `curl --max-time 100 … -o /tmp/x -w "uploaded=%{size_upload} speed=%{speed_upload}"`，看这 100s 到底传了多少字节 / 平均速度，据此区分"慢"还是"完全卡死"。**处置**：改成**单连接、串行、一次传完、中途绝不打断**——GitHub 资产上传**不支持断点续传**，一旦中断（含命令超时被杀、`Ctrl-C`）就得从 0 重来，反复打断只会永远传不完；同名残片会占住 asset 名，重传前先 `gh release view --json assets` 确认没有半成品（有就先删）。单连接通常能跑满带宽（本次网络恢复后 zip 19.5s、dmg 43.7s 就传完了）。若持续极慢，就等网速恢复再一次性传，别并行、别中断。**另注意**：用 `pgrep -fl` / `ps` 排查上传进程会把命令行里的 `gh` token 明文打出来——构造 `curl` 时用 `TOKEN=$(gh auth token)` 引用变量、不要把 token 写进会被别人看到的地方；万一泄露，`gh auth refresh` 轮换。0.29.2 发版时遇到。 |
 | 用户反馈**官网说有新版、但点下载 404**；或 `releases/latest/download/Atlas-mac-arm64.dmg` 一段时间内 404 | 发版顺序错了：官网（`docs/`）或空 Release 领先于真实产物。根因两条——① docs 和代码放同一个 commit 一起 push，Pages 立刻部署、官网提前宣告新版而包还在传；② tag 触发的 Release 若不是草稿会立刻抢 `latest`，130MB dmg 上传期间 latest 指向一个还没这个资产的 Release。**修复（已固化进流程）**：Release 由 `release.yml` 建成**草稿**，传齐资产再 `gh release edit --draft=false --latest` 转正；**官网（docs/）永远最后一步 push**（TL;DR 第 10 步）。0.24.0 发版时踩到，由此修订顺序铁律。 |
@@ -737,8 +787,14 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 
 ## 已发布版本
 
+> 历史版本描述中曾提到把公证配置放在仓库内，该做法已废止；当前只使用上文的钥匙串或仓库外配置方式。
+
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
+
+> 发版准备状态：0.33.0 的 81 个 spec 全部通过，npm 与 Apple 公证认证已恢复，App 签名/公证/隔离启动已通过；DMG 容器公证与 CI 尚待完成，以下条目仍是发布候选说明，不代表 npm / DMG 已上架。
+
+- **0.33.0** (2026-11-22) — 新增 **Tab 拖拽排序**，并修复更多菜单及后端性能/容量问题，保持 MIT 开源和 npm + macOS App + 官网原有渠道，不引入遥测或闭源迁移。① 标签左右拖动、边缘自动滚动、刷新后恢复顺序；拖动不切换活动文档、不丢未保存文本和预览状态，键盘与关闭邻居按新顺序工作；覆盖 Sortable 按下准备阶段与目录刷新共享状态冲突。② 标签 DOM 按身份复用，不变渲染零节点增删；24 个 Tab 同机微基准每 100 次渲染中位约 88ms → 6ms（仅标签热路径，不代表整机性能倍数）。③ 顶栏建立正确层叠顺序，浏览器与 App 的 ⋯ 菜单不再被 Tab/预览层盖住。④ 自动分组建立身份索引、批量添加子项，避免平方开销；短 hash 缓存受文件索引上限约束并清理已删除路径，不再超过 500 条就整表清空；重复引用在 realpath/stat 前去重。⑤ 带点目录搬入/删除正确同步；失败缩略图及启动载入也执行数量淘汰；活动日志恢复所有保留日期的日上限，防止重启绕过。⑥ npm 与 App 显式运行时白名单、真实产物凭据扫描门禁及日志脱敏，兼容外层 npm pack/publish dry-run；公证改用钥匙串/仓库外配置，CI 增加最终 App 与 DMG 签名、公证验收。保留开源源码、生产依赖和 asar:false。⑦ 新增 release-security / toolbar-more / tab-reorder / backend-perf spec，接入 npm test 与 CI；相关旧 spec 补回归，81 个 spec 全绿，另验证真实隔离 Electron 窗口与未签名 App 产物；正式签名、公证由发版阶段另验。⑧ README、官网 #features、应用内新功能引导与发布流程同步。
 
 - **0.32.0** (2026-10-14) — 新功能：**macOS 上可把 iCloud 云盘加入扫描路径，云端文件灰显且绝不被批量下载**（`lib/icloud.js` + `lib/icloud-download.js` + `server.js` + `lib/fs-watcher.js` / `link-index.js` / `thumbnail.js` + `public/app.js` / `index.html` / `styles.css` / `peek.js` / `starmap.js` + `public/changelog.js` + `README.md` + `docs/index.html`）。用户诉求：Mac 上希望直接扫 iCloud 云盘里的文档；没下载到本机的文件要照样列出但标灰，最好能一键下载。核心约束是**扫描、搜索、预览、缩略图、引用索引任何一条链路都不能 open / read 云端文件**——读一次就会让 iCloud 把它拉下来，扫一个几千篇的云盘等于触发批量下载。① **新增 `lib/icloud.js`**：dataless 判定（`lstat` 的 `blocks === 0` 且 `size > 0`，即 APFS 上「文件条目在、数据在云端」的新式占位）与旧式 `.name.ext.icloud` 占位名 ↔ 原名映射；iCloud 根探测（`~/Library/Mobile Documents/com~apple~CloudDocs`，测试用 `ATLAS_ICLOUD_ROOT` / `ATLAS_ICLOUD_PLATFORM` 覆盖）；`isWithin` 按 realpath 做路径越界校验；渲染依赖检查（提取 HTML / CSS / JS 里的资源引用——带引号与不带引号的属性、srcset、srcdoc、meta refresh、`@import`、js 字符串字面量与 `import`——递归 3 层、最多 2000 条，引到 dataless 资源时返回 `cloud-deps`，预算耗尽或读取出错返回 `deps-unverified`，dataless 的 js 本身从不被读）；状态切换分类与 iCloud 事件合并。② **新增 `lib/icloud-download.js`**：优先 `brctl download <path>`（数组参数、无 shell），brctl 没有 download 子命令时回退为**流式读取**（逐块读完即丢、不缓存整份、fd 用完归位）来让系统物化文件；同一路径去重，**并发 2 + 排队 8**，超出返回 429；超时由下载器自己计时并 `SIGKILL`；读完仍未物化报 not-materialized。③ **`server.js`**：`/api/state` 的文件项带 `cloud` 状态；内容路由（render-md / render-doc / edit-doc / md-source / thumb / 导出 PDF / 局域网分享）与 `/raw`（含查询串、`#`、目录索引）遇到云端文件一律 **409**、不读内容；全文搜索、`/api/estimate-scan`、引用索引（`linkIndex` 的 `skip`，不调 `readHead`）与缩略图（`checkSource` 抛错按 `deps-unverified`）都跳过云端文件；新增 **`GET /api/icloud`**（平台、是否可用、是否已在扫描根、能力：brctl / brctl.download / readFallback / dataless / placeholder）与 **`POST /api/icloud/download`**（越界判定先于存在性：400 参数错 / 403 越界或跨站 / 404 不在索引里 / 409 超过 100MB 需前端二次确认后带 `confirmLarge` / 429 排队满 / 501 非 macOS 或当前能力不支持 / 已在本机直接回 `status:'local'` / 202 已受理，进度经 SSE `cloud` 事件推送）；`PUT /api/config` 新增扫描根时展开 `~` 并检查可读，不可读 400，已加入但不可读的根在 `/api/icloud` 里报 `readable:false`。④ **`lib/fs-watcher.js`**：占位文件以**原路径**报事件、真实文件优先；占位 ↔ 真实两个方向的切换合并成一次 change（不当成删除 + 新建，不清已读、不亮未读、不发通知、不记活动日志）；删除带宽限期；补偿扫描报原路径；对 iCloud 同步时的事件爆发去抖，macOS 上 size 与 mtime 都不变的元数据事件被吞掉、重命名不被吞。`.DS_Store`、`.hidden.md` 等其他点文件仍按原规则忽略，冲突副本（`报告 2.html`）按普通文件处理。⑤ **前端**：目录树行、首页封面、⌘K 结果对云端文件灰显并带「未下载 · 在 iCloud 中」徽标（行高仍 26px，封面去色、不请求缩略图）；打开云端文件时预览帧不导航，改由 `#cloud-panel` 占位面板盖住预览区（含 ⌘K 打开、Tab 恢复、切主题、信任开关等所有导航点）；peek 不建帧只显示说明；**下载按钮按能力分支显示**——brctl 支持 download 时 dataless 与 `.icloud` 占位都可下载，只有读取回退时 dataless 可下载、`.icloud` 占位改显示「在访达中右键选择『立即下载』」提示（读取占位文件本身不会物化原文件）；下载完成后自动恢复正常，后台下载不造成未读与通知，正打开着的那篇恰好补一次 `POST /api/seen`；SSE 爆发下 `/api/state` 重拉有上限、首次连接不重拉、重连补拉 1 次；reduced-motion 下下载中徽标不转。设置「扫描」分区新增「添加 iCloud 云盘」按钮（只在本机能用 iCloud 时显示，加入后变「已添加」并禁用，分组显示为「iCloud 云盘」而 store 里的名字不变）。⑥ **本机实测**：macOS 26.5.1 的 `brctl` 存在但**没有 download 子命令**，所以本机走读取回退（下载按钮这条路径本机未实测点击）；对真实 iCloud 云盘的手动验证中 10 篇 dataless 文档全部灰显，搜索 / 预览 / peek / ⌘K 零内容读取、前后 `blocks` 均为 0，用户本地也实测通过。⑦ **验证**：新增 4 个 spec 共 584 项——`icloud-unit`（267）、`icloud-watcher`（23）、`icloud-api`（206，含零读取审计）、`icloud-ui`（88），加入 `npm test` 与 CI（`ATLAS_TEST_CLOUD` 测试钩子不依赖 macOS，Linux runner 也能跑；只有同时设了 `ATLAS_HOME` 且钩子文件位于其中才生效）；`peek-preview.spec.js` 与 `tests/helpers/isolated-atlas.js` 随之调整；全套 77 个 spec 全绿。⑧ **已知限制**：启动后与每次索引重建后 3 秒内不做云端状态分类；真实 → 占位若占位晚于去抖窗口出现会先报 unlink（只影响旧系统）；依赖检查拦不住脚本运行时拼出来的路径；size 与 mtime 都不变的内容改写被当元数据事件吞掉、不亮未读；dataless 目录在离线时 `readdir` 可能阻塞（未做断网实测）；下载完成后「占位 → 真实继承 seen」在 onDone 路径不执行；`PUT /api/config` 的 `~` 展开与可读性检查在非 darwin 上也生效；`POST /api/icloud/download` 与其他接口一样没有鉴权，只靠本机地址 + Origin 校验。⑨ **npm 与 App**：`server.js` + `lib/` + `public/` 改动，npm 与桌面 App 同源生效，已装 App 需重新出 **DMG + zip + latest-mac.yml** 才能拿到。
 - **0.31.0** (2026-10-13) — 新功能：**星图 / 任务控制台 UI 全面升级——星图视图、真实缩略图封面、快速查看、时间河流、专注阅读、macOS 原生外壳与星图配色**（`server.js` + 新增 `lib/thumbnail.js` / `lib/chromium.js` / `lib/link-index.js` / `lib/activity-log.js` / `lib/self-writes.js` + `lib/pdf-export.js` + 新增 `public/starmap.js` / `peek.js` / `river.js` + `public/app.js` / `index.html` / `styles.css` / `vendor/markdown.js` / `changelog.js` + `electron/main.js` / `preload.js` / 新增 `titlebar.js` + `README.md` + `docs/index.html`）。目标是让「AI 在各处写了哪些文档、哪段时间最忙、哪些互相引用」一屏看清，同时修掉桌面实机验收发现的一批问题。① **星图视图**（`public/starmap.js`）：项目 = 星团、文档 = 星，亮度按新鲜度四档（1 小时 / 24 小时 / 7 天 / 更早）；布局确定性（新增一篇不移动其他星），星团两两留 28px 间隙，篇数多的星团按对数放大（`clusterRadius`），不把小项目挤成一个点；LOD + 标签避让（`placeLabels`）、空间索引命中、右侧星表可键盘浏览；进星图自动收起侧栏、离开恢复且不写偏好。连线来自新增的**引用关系索引** `lib/link-index.js`：解析 MD 链接与 HTML `<a href>`，相对路径归一、外链 / 锚点 / 根外路径丢弃，缓存在 `ATLAS_HOME/links/`，经 **`GET /api/links`** 提供（未就绪回 202 `{ ready:false }`），版本变化经 SSE `links` 推送。② **真实缩略图**（`lib/thumbnail.js` + 从 `lib/pdf-export.js` 抽出、两边共用的 `lib/chromium.js`）：用本机 Chrome 系浏览器在后台、带断网参数（`OFFLINE_ARGS`）截图，PNG 缓存在 `ATLAS_HOME/thumbnails/`（`index.json` + LRU；队列 64 条，第 65 条挤掉最旧并发 `dropped`；同一 mtime 失败 2 次记 failed；起不来浏览器时熔断 10 分钟）；HTML 双主题只截一次，引用在线资源的页面改用生成式封面；新接口 **`POST /api/thumbs`**（≤ 48 项）与 **`GET /api/thumb`**（`k` 校验、跨站 403、`immutable` 缓存、`nosniff` + CSP），完成进度经 SSE `thumb`；`ATLAS_THUMBS=off` 是逃生开关（恒不可用、永不起浏览器）；Markdown 截图页走 `renderPage({ forThumb })`，不带目录栏和宽度胶囊。前端在 webdriver 下默认不请求缩略图（spec 用 `__atlasForceThumbs` 打开）。③ **快速查看**（`public/peek.js`）：悬停 450ms 弹出 / `Space` 开关，`↑↓` 换内容、`Esc` 只关浮窗；预览帧 sandbox 严格为 `allow-scripts`（已信任文档也一样），不标已读；设置里可关悬停，`Space` 仍可用。④ **时间河流**（`public/river.js` + `lib/activity-log.js` + `lib/self-writes.js`）：活动日志写在 `ATLAS_HOME/activity/YYYY-MM-DD.jsonl`，60 秒固定窗口合并、只留 8 天，**绝不写 `store.json`**；新接口 **`GET /api/activity`**，日志拿不到时前端按 mtime 兜底并标「仅修改时间」。`lib/self-writes.js` 记下 Atlas 自己的写入（`/api/save-md`、`/api/rename`），SSE `fs` 负载带 `self` / `selfReason`，自写不挂 `.just-changed`。首页的活动脉冲换成 168 根柱的河流（cap 取非零小时 p95，尖峰画到顶并标真实次数），可刷选时间段，并与标签 / 仅未读 / 搜索叠加筛选。⑤ **专注阅读**（`⌘.`）：收起侧栏、顶栏和标签栏，`Esc` 退出；三档阅读宽度控件在专注时移到左下角（`vendor/markdown.js` 新增 `--fw-*` 令牌与 `html[data-focus]` 样式），Atlas 渲染页和已信任 HTML 顶部有阅读进度条。⑥ **首页与侧栏瘦身**：首页顶部全局标签筛选条、竖排读数、迷你星图；侧栏只留搜索、树头（分组 / 目录 / 星图切换 + 排序菜单，仅未读与按标签筛选收进菜单）和目录树，收藏 / 最近搬到首页轨道与 ⌘K 空状态，星标挪到行尾操作组第一个；首页、目录树、星图的命中数统一取 `filterSnapshot()`；首页态顶栏加「快速打开 ⌘K」胶囊。⑦ **星图配色与动效**（`public/styles.css`）：设计令牌重做（深空蓝黑 / 星图纸底、单一品牌色，未读改蓝紫，红色只留给错误与危险操作），冷 / 暖 × 浅 / 深四组合都有对比度护栏；切 Tab / 切主题 / 切视图走 View Transitions，系统 reduced-motion 与设置「界面动效：减少」两路都能关掉动效。⑧ **macOS 原生外壳**（`electron/main.js` / `preload.js` / 新增 `titlebar.js`）：`titleBarStyle: 'hidden'` + `trafficLightPosition`，侧栏 `vibrancy: 'sidebar'`；红绿灯几何按系统版本算（macOS 26 灯组 60pt → 避让 90px，旧系统 52pt → 82px），经启动参数在首帧下发；Atlas 主题同步给 `nativeTheme.themeSource`，系统「降低透明度」时侧栏改实底，专注模式隐藏红绿灯，全屏时撤掉避让。实机验收修掉的问题包括：红绿灯被图标压住、毛玻璃看不出、双击顶栏不能缩放、侧栏拖窄后侧栏头重叠、悬停两行交界时行高闪烁、切主题时浮层消失一下、设置弹窗切分区高度跳、迷你星图把小项目挤成点、河流被单小时尖峰压扁、Markdown 封面被目录栏挡住。⑨ **测试**：新增 18 个 spec（`contrast-tokens` / `motion-reduced` / `desktop-chrome` / `sidebar-tree-alignment` / `filter-consistency` / `thumbnail` / `peek-preview` / `star-map` / `link-index` / `activity-log` / `time-river` / `focus-mode` / `sidebar-row-stability` / `minimap-layout` / `river-scale` / `settings-theme-motion` / `sidebar-header-narrow` / `theme-overlay-continuity`，标了项数的 16 个合计 1145 项），全部加入 `npm test` 与 CI；`tests/helpers/isolated-atlas.js` 的 `startAtlas()` 新增 `opts.env`，默认注入 `ATLAS_THUMBS=off` 与 `ATLAS_STARTUP_QUIET_MS=0`（服务端启动静默期默认 6 秒，推迟引用索引与缩略图），免得隔离实例起 Chrome 抢 CPU；`changelog` / `favorites-and-tags` / `quickopen-a11y-rename` / `tree-toggle-perf` / `v0.2-features` 随 UI 调整更新断言；新增 `tests/bench/starmap-labels.bench.js`。文档：PUBLISHING.md 步骤 0 写明 spec 不依赖 `:4321`、手动验证另起实例，清单 51 → 71 个；CLAUDE.md 的测试前提同步；`.gitignore` 加 `.agents/`。CI（tests run 38335970901）全绿。⑩ **npm 与 App**：`server.js` + `lib/` + `public/` + `electron/` 改动，npm 与桌面 App 同源生效，原生外壳只在桌面 App 里有；已装 App 需重新出 **DMG + zip + latest-mac.yml** 才能拿到。⑪ **补记**：这一条是发 0.32.0 时补写的，0.31.0 发版时漏加到本列表（所以 v0.31.0 的 GitHub Release 说明走的是 awk 抽不到时的兜底文案）。

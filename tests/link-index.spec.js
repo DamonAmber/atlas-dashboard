@@ -84,6 +84,27 @@ async function nodeSection() {
   check('file:// 转本地路径', L.hrefToPath('file:///root/x/y.md', src), '/root/x/y.md');
 
   console.log('\n[索引] 解析范围与上限');
+  // 单篇文档重复引用同一路径：候选去重应发生在 realpath/stat 前。
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-link-repeat-'));
+    const root = path.join(tmp, 'docs'); fs.mkdirSync(root);
+    const target = write(root, 'target.md', '# target');
+    const source = write(root, 'source.md', '[same](target.md)\n'.repeat(10000));
+    const promises = require('fs/promises'), real = promises.realpath, stat = promises.stat;
+    let realCalls = 0, statCalls = 0;
+    promises.realpath = async (...args) => { if (args[0] === target) realCalls++; return real(...args); };
+    promises.stat = async (...args) => { if (args[0] === target) statCalls++; return stat(...args); };
+    const indexed = new Set([source, target]);
+    const idx = L.createLinkIndex({ cacheDir: path.join(tmp, 'cache'), getRoots: () => [root], isIndexed: p => indexed.has(p) });
+    try {
+      idx.sync([...indexed]); await idx.whenIdle();
+      check('重复 10000 次引用只有一条边', idx.snapshot().edges.length, 1);
+      check('重复引用的 realpath 只执行一次', realCalls, 1);
+      check('目标 stat 不随重复次数增长', statCalls <= 3, true);
+      idx.flush();
+    } finally { promises.realpath = real; promises.stat = stat; fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-linkidx-'));
   const root = path.join(tmp, 'scan');
   const outside = path.join(tmp, 'outside');

@@ -202,6 +202,16 @@ async function start(root, opts = {}) {
   check('删掉整个目录 → 里面的文档都报了 unlink',
     w1.drain(), ['unlink:moved/inner/y.md', 'unlink:moved/x.md']);
 
+  // 带点的目录不能按“无关扩展名文件”丢弃。
+  const dotted = path.join(tmp, 'reports.v1');
+  await fsp.mkdir(dotted); await fsp.writeFile(path.join(dotted, 'inside.md'), '# dotted');
+  await fsp.rename(dotted, path.join(root, 'reports.v1'));
+  await sleep(1200);
+  check('搬入带点目录仍补偿收录文档', w1.drain(), ['add:reports.v1/inside.md']);
+  await fsp.rm(path.join(root, 'reports.v1'), { recursive: true, force: true });
+  await sleep(1200);
+  check('删除带点目录仍移除内部文档', w1.drain(), ['unlink:reports.v1/inside.md']);
+
   // ---- ⑥ close ----
   console.log('\n[close]');
   await w1.close();

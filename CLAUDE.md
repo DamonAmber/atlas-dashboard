@@ -13,11 +13,14 @@
 - **改了发版相关流程**（命令、自动化、tools、token 机制）→ **同步更新 PUBLISHING.md**。
 - **加了新的测试 spec**（`tests/*.spec.js`）→ 把它加到 PUBLISHING.md 的"步骤 0：跑全套测试"清单里。
 - **加了新的 GitHub workflow**（`.github/workflows/*`）→ 在 PUBLISHING.md 的"自动化（你不用管）"表格里加一行。
-- **凭据类信息**（npm token / GitHub PAT / npm recovery codes）**永远不在聊天里贴**——让用户自己在终端里粘到 `~/.npmrc` 或环境变量。
+- **凭据类信息**（Apple App 专用密码 / npm token / GitHub PAT / npm recovery codes）**永远不在聊天里贴**——让用户自己在终端里粘到 `~/.npmrc` 或环境变量。
 - **`npm publish` / `git push --tags` / `npm unpublish` / `gh release delete`** 是公开/不可逆操作。**先和用户确认**。
+
+- **发布物安全**：打包使用显式运行时白名单；`scripts/release-security.js` 的 npm `prepack` 和桌面 `afterPack` 门禁不得绕过。新增运行时文件同步白名单并说明用途。公证凭据只放钥匙串或仓库外，绝不放在 `electron/build/`；完整流程见 PUBLISHING.md。
 
 ## 这个项目的关键事实
 
+- 项目方向（2026-11-21 确认）：保持 MIT 开源与 npm + macOS App + 官网分发；取消闭源仓库迁移，埋点/遥测暂不上线。旧闭源分支与 runbook 不能作为当前发布依据。
 - npm 包名：`atlas-dashboard`
 - GitHub: `DamonAmber/atlas-dashboard`
 - 当前版本：见 `package.json` 的 `version` 字段，或 PUBLISHING.md 顶部的"已发布版本"

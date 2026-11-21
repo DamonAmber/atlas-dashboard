@@ -1,6 +1,6 @@
 # Atlas 桌面 App（Electron 外壳）
 
-阶段 1 POC：把现有 Atlas（Node/Express 服务 + Web 前端）包成一个可双击运行的桌面 App，
+开源桌面版：把现有 Atlas（Node/Express 服务 + Web 前端）包成一个可双击运行的桌面 App，
 面向不熟悉 npm / 终端的用户。**不改 `server.js` 与现有测试**，只在壳里复用它们。
 
 ## 怎么跑（开发模式）
@@ -25,7 +25,7 @@ npm run app        # 启动桌面 App
 ```bash
 npm run app:build         # 需要签名证书时用（自动发现 Keychain 里的 Developer ID）
 # 无签名验证构建（本机自测用，产物在 dist-app/）：
-CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac dmg --arm64
+CSC_IDENTITY_AUTO_DISCOVERY=false npm run app:dir
 ```
 
 构建配置在 `package.json` 的 `build` 字段：
@@ -47,17 +47,12 @@ CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac dmg --arm64
   `electron` / `electron-builder` 都是 devDependency，也不进用户的 npm 安装。
   npm 渠道（`atlas` CLI）完全不受影响。`dist-app/` 已在 `.gitignore` 里。
 
-## 已完成（阶段 1–2）
+## 当前状态与安全验证
 
-- 桌面外壳复用 `server.js`，`npm run app` 可跑；
-- App 图标（`.icns`）；
-- electron-builder 打包出 **arm64 DMG**（目前**未签名**，仅本机自测）。
-
-## 还没做（后续阶段）
-
-- **签名 + 公证**：用 Apple Developer ID 证书签名，再 `notarytool` 公证 —— 否则非技术用户
-  会被 Gatekeeper 拦。需要开发者信息（Team ID / 证书 / Apple ID + app-specific password）。
-- 托盘/菜单栏常驻形态（当前是标准窗口，关窗留 dock）；
-- PDF 导出改用 Electron 自带 Chromium 的 `printToPDF`，替掉"在本机找 Chromium"那条脆弱路径；
-- App 模式下把"npm 升级提示"换成 App 自己的自动更新（electron-updater）；
-- Intel（x64）/ 通用二进制、以及后续的 Windows。
+- 保持 MIT 开源；桌面版与 npm CLI 继续并行分发，不引入闭源混淆或遥测。
+- 已实现菜单栏常驻、内置 Chromium PDF 导出、electron-updater 自动更新与 macOS 签名/公证发布流程。
+- 当前分发 arm64 DMG / zip，Intel / 通用二进制和 Windows 尚未支持。
+- 凭据不放仓库目录。首选用户本人在终端执行 `xcrun notarytool store-credentials atlas-notary`，构建时使用 `APPLE_KEYCHAIN_PROFILE=atlas-notary npm run app:build`；完整流程以根目录 `PUBLISHING.md` 为准。
+- `build.files` 是显式运行时白名单，`afterPack` 检查最终 App（包括生产依赖）的凭据文件和内容特征。两张托盘图标需要进入 App；构建用图标源文件、entitlements 和公证配置不进入 App 的源码目录。
+- 无签名验证：`CSC_IDENTITY_AUTO_DISCOVERY=false npm run app:dir`，同样必须过产物门禁；验证实例使用独立 `ATLAS_HOME`，不得操作正在使用的看板。验证包不能发布。
+- 正式发布前仍须验证 App 签名、公证与 DMG 容器 staple；门禁通过不代替这些检查。

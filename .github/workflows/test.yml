@@ -92,7 +92,11 @@ jobs:
             icloud-unit \
             icloud-watcher \
             icloud-api \
-            icloud-ui
+            icloud-ui \
+            release-security \
+            toolbar-more \
+            tab-reorder \
+            backend-perf
           do
             echo "===== $spec ====="
             node "tests/$spec.spec.js"

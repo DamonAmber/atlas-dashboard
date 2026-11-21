@@ -241,6 +241,21 @@ async function settle(log) { await log.flush(); await sleep(5); }
     log3.close();
   }
 
+  console.log('\n[历史日期重启后的日上限]');
+  {
+    const dir = tmpDir(), now = noonToday(), old = now - 3 * DAY;
+    const key = actLib.dateKey(old), file = path.join(dir, key + '.jsonl');
+    fs.writeFileSync(file, [0, 1].map(i => JSON.stringify({ t: old + i * MIN, k: 'c', p: '/old-' + i })).join('\n') + '\n');
+    for (let restart = 0; restart < 2; restart++) {
+      const log = await mk(dir, { now: () => now, dayLimit: 2 });
+      log.record({ t: old + 10 * MIN, kind: 'a', path: '/new-' + restart });
+      await settle(log);
+      check('历史日期已满后不再追加（重启 ' + restart + '）', readLines(file).length, 2);
+      check('超出历史日期上限计入 dropped（重启 ' + restart + '）', log.stats().dropped, 1);
+      log.close();
+    }
+  }
+
   console.log('\n[停用与追加失败]');
   {
     const base = tmpDir();
