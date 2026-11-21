@@ -225,7 +225,8 @@
       "notarize": true
     },
     "dmg": {
-      "title": "Atlas ${version}"
+      "title": "Atlas ${version}",
+      "sign": true
     },
     "publish": [
       {

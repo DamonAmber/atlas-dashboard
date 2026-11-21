@@ -39,6 +39,7 @@ try {
     assert(pkg.scripts.prepack.includes('--npm'));
     assert(pkg.scripts['app:build'].startsWith('node scripts/release-security.js --check-notary &&'));
     assert(pkg.scripts['app:dir'].includes('--dir'));
+    assert.strictEqual(pkg.build.dmg.sign, true);
   });
   const clean = appFixture('clean');
   check('正常开源 App 和生产依赖通过', () => {
@@ -140,6 +141,22 @@ try {
     put(fixture.root, 'server.js', fake);
     const result = spawnSync(process.execPath, [path.join(ROOT, 'scripts/release-security.js'), '--app', fixture.app], { encoding: 'utf8' });
     assert.strictEqual(result.status, 1); assert(!`${result.stdout}${result.stderr}`.includes(fake));
+  });
+  check('DMG 签名/staple 后刷新清单的大小与 sha512，zip 主校验保持正确', () => {
+    const dir = path.join(tmp, 'feed'); fs.mkdirSync(dir);
+    const zip = Buffer.from('stable zip'), dmg = Buffer.from('signed and stapled dmg');
+    fs.writeFileSync(path.join(dir, 'Atlas-mac-arm64.zip'), zip);
+    fs.writeFileSync(path.join(dir, 'Atlas-mac-arm64.dmg'), dmg);
+    const yaml = require('js-yaml'), crypto = require('crypto');
+    fs.writeFileSync(path.join(dir, 'latest-mac.yml'), yaml.dump({ version: pkg.version, files: [
+      { url: 'Atlas-mac-arm64.zip', sha512: 'old', size: 0 }, { url: 'Atlas-mac-arm64.dmg', sha512: 'old', size: 0 },
+    ], path: 'Atlas-mac-arm64.zip', sha512: 'old' }));
+    const run = spawnSync(process.execPath, [path.join(ROOT, 'scripts/release-security.js'), '--mac-feed', dir], { encoding: 'utf8', timeout: 30000 });
+    assert.strictEqual(run.status, 0);
+    const feed = yaml.load(fs.readFileSync(path.join(dir, 'latest-mac.yml'), 'utf8'));
+    assert.strictEqual(feed.files[0].sha512, crypto.createHash('sha512').update(zip).digest('base64'));
+    assert.strictEqual(feed.files[1].sha512, crypto.createHash('sha512').update(dmg).digest('base64'));
+    assert.strictEqual(feed.files[1].size, dmg.length); assert.strictEqual(feed.sha512, feed.files[0].sha512);
   });
   console.log(`\n通过 ${passed} 项，失败 0 项。`);
 } finally { fs.rmSync(tmp, { recursive: true, force: true }); }

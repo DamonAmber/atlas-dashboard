@@ -170,6 +170,39 @@ function scanNpm(pkgDir) {
   finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   return { files: files.sort(), errors: [...new Set(errors)] };
 }
+// 签名 / staple 会改变 DMG 字节；发布前刷新清单，zip 与顶层 sha512 保持对应。
+async function refreshMacFeed(dir) {
+  const yaml = require('js-yaml');
+  const crypto = require('crypto');
+  const file = path.join(dir, 'latest-mac.yml');
+  let feed;
+  try { feed = yaml.load(fs.readFileSync(file, 'utf8')); }
+  catch { throw new Error('自动更新清单无法解析'); }
+  const version = require('../package.json').version;
+  if (!feed || feed.version !== version || !Array.isArray(feed.files)) throw new Error('自动更新版本或清单结构不一致');
+  const allowed = new Set(['Atlas-mac-arm64.zip', 'Atlas-mac-arm64.dmg']);
+  const seen = new Set();
+  for (const item of feed.files) {
+    if (!item || !allowed.has(item.url) || seen.has(item.url)) throw new Error('自动更新清单包含非法或重复文件');
+    seen.add(item.url);
+    const target = path.join(dir, item.url);
+    const stat = fs.lstatSync(target);
+    if (!stat.isFile()) throw new Error('自动更新文件必须是普通文件');
+    const hash = crypto.createHash('sha512');
+    for await (const chunk of fs.createReadStream(target)) hash.update(chunk);
+    item.sha512 = hash.digest('base64');
+    item.size = stat.size;
+  }
+  if (!seen.has('Atlas-mac-arm64.zip')) throw new Error('自动更新清单缺少 zip');
+  if (feed.path) {
+    const primary = feed.files.find(item => item.url === feed.path);
+    if (!primary || !feed.path.endsWith('.zip')) throw new Error('macOS 主更新文件必须是 zip');
+    feed.sha512 = primary.sha512;
+  }
+  fs.writeFileSync(file + '.tmp', yaml.dump(feed, { lineWidth: -1 }));
+  fs.renameSync(file + '.tmp', file);
+  return feed.files.length;
+}
 function report(result) {
   if (result.errors.length) {
     console.error(`发布安全门禁失败：\n${result.errors.map(e => `- ${e}`).join('\n')}`);
@@ -190,15 +223,18 @@ function assertNotaryEnv(env) {
   throw new Error('正式出包需要完整的 Apple 公证环境变量或钥匙串 profile；不要混用。凭据只能在仓库外配置。');
 }
 module.exports = afterPack;
-Object.assign(module.exports, { APP_FILES, NPM_FILES, scanApp, scanNpm, scanTree, checkName, checkContent, assertNotaryEnv });
+Object.assign(module.exports, { APP_FILES, NPM_FILES, scanApp, scanNpm, scanTree, checkName, checkContent, assertNotaryEnv, refreshMacFeed });
 if (require.main === module) {
-  try {
+  (async () => {
     const [mode, target] = process.argv.slice(2);
     if (mode === '--check-notary') {
       if (fs.existsSync(path.join(__dirname, '../electron/build/notarize.env'))) throw new Error('仓库内仍有公证凭据文件，请先迁出仓库。');
-      assertNotaryEnv(process.env); console.log('公证配置前置检查通过（未输出凭据）。'); }
-    else if (mode === '--npm') process.exitCode = report(scanNpm(path.resolve(target || '.'))) ? 0 : 1;
+      assertNotaryEnv(process.env); console.log('公证配置前置检查通过（未输出凭据）。');
+    } else if (mode === '--npm') process.exitCode = report(scanNpm(path.resolve(target || '.'))) ? 0 : 1;
     else if (mode === '--app' && target) process.exitCode = report(scanApp(path.resolve(target))) ? 0 : 1;
-    else throw new Error('用法：--npm [目录] / --app <Atlas.app> / --check-notary');
-  } catch (e) { console.error(e.message); process.exitCode = 1; }
+    else if (mode === '--mac-feed' && target) {
+      const count = await refreshMacFeed(path.resolve(target));
+      console.log(`自动更新清单已刷新：${count} 个文件的大小与 sha512，主更新文件为 zip。`);
+    } else throw new Error('用法：--npm [目录] / --app <Atlas.app> / --check-notary / --mac-feed <产物目录>');
+  })().catch(e => { console.error(e.message); process.exitCode = 1; });
 }

@@ -52,6 +52,8 @@ jobs:
           xcrun stapler staple dist-app/Atlas-mac-arm64.dmg
           xcrun stapler validate dist-app/Atlas-mac-arm64/Atlas.app
           xcrun stapler validate dist-app/Atlas-mac-arm64.dmg
+          spctl -a -vvv --type open --context context:primary-signature dist-app/Atlas-mac-arm64.dmg
+          node scripts/release-security.js --mac-feed dist-app
         env:
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
