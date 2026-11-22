@@ -728,6 +728,8 @@ APPLE_KEYCHAIN_PROFILE=atlas-notary APPLE_KEYCHAIN="$HOME/Library/Keychains/logi
 
 不要盲目切换钥匙串位置。只有原 profile 持续不可用、旧密码也无法找回时，才由用户本人从 https://account.apple.com/ 的“登录与安全 → App 专用密码”生成新密码，并在系统终端安全提示中保存；不能用 Apple 登录密码替代，也不能粘到聊天、仓库或日志。App 签名和 afterPack 成功仍不代表公证完成，失败时不先发 npm、不上传未公证包。
 
+后续定位（同次发版）：`CGSessionCopyCurrentDictionary` 检测到 Mac 锁屏时 profile 不可读；解锁后原 profile 立即恢复查询，并成功完成 App 与 DMG 公证，无需新 App 专用密码。保持锁屏安全设置，提交公证前由用户解锁，不用命令绕过或降低钥匙串安全。此前整窗截图未生成也可能与锁屏有关，不能直接认定缺少权限；原生内容截图、隔离资料及实际窗口 API 验证已通过。
+
 **恢复同一已签名 App 的打包**：如果 App 运行时代码与待发提交一致、已通过原 afterPack 门禁和签名验证，可以先用 `@electron/notarize` 及原 profile 补完 App 公证，再复用该 App 生成目标包。恢复路径必须显式再次执行原 `scripts/release-security.js` afterPack 钩子（或同等 `--app` 实物扫描），验证 App 签名/staple/Gatekeeper，才用 `electron-builder --mac --prepackaged dist-app/mac-arm64/Atlas.app --publish never` 生成 DMG/zip；DMG 仍需单独签名检查、公证/staple、更新 `latest-mac.yml` sha512。不得借预打包路径绕过任何门禁。打包后 package.json 的 main 从 server.js 改为 electron/main.js 属于既有 extraMetadata，不凭字节差异认定构建过旧，必须核对版本和运行时文件。
 
 
