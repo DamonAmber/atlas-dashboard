@@ -1426,6 +1426,23 @@ html.focus-mode .main-actions > button.qo-capsule { display: none; }
 .footer-stats .stat-warn { color: var(--warn); font-weight: 600; cursor: help; }
 .footer-kbd { flex: none; opacity: .8; }
 
+/* 侧栏常驻署名/推荐入口独占一行，不挤实时连接、统计与快捷键。 */
+.sidebar-discover {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 12px; border-top: 1px solid var(--border); flex: none;
+  font-size: 11px; line-height: 1.5;
+}
+.sidebar-discover a, .sidebar-discover button {
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+  color: var(--text-dim); text-decoration: none; cursor: pointer;
+  border: 0; border-radius: var(--r-sm); background: transparent;
+  padding: 4px 0; font: inherit;
+  transition: color var(--dur-fast) ease;
+}
+.sidebar-discover button { color: var(--accent); }
+.sidebar-discover a:hover, .sidebar-discover button:hover { color: var(--text); }
+.sidebar-discover :is(a, button):focus-visible { outline: none; box-shadow: var(--ring); }
+
 /* main：margin-left 跟随 sidebar */
 .main {
   margin-left: calc(var(--sidebar-w) + var(--resizer-w));
@@ -2051,16 +2068,19 @@ html.init-sidebar-collapsed .resizer { left: 0; opacity: 0; pointer-events: none
 }
 .tab:focus-visible { outline: none; box-shadow: var(--ring); }
 
-/* 标签拖拽只移动标签，帧保持原位；独立类名避免与目录树的克隆清理互相干扰。 */
-.tab.tab-sort-ghost { opacity: .25; }
-.tab.tab-sort-chosen, body.tabs-dragging { cursor: grabbing; }
-.tab-sort-fallback {
-  background: var(--bg-elev);
+/* 拖动保持真实标签在栏内，邻居只沿 X 轴让位；不叠加 hover 的 Y 轴位移。 */
+.tab { touch-action: pan-y; }
+body.tabs-dragging, body.tabs-dragging .tab { cursor: grabbing; }
+/* 特异性必须高于 .tab:hover:not(.active)，否则 hover 会换成透明底。 */
+body.tabs-dragging .tab.tab-drag-source {
+  z-index: 3;
+  background: var(--bg-elev-2);
   color: var(--text);
-  box-shadow: var(--shadow-3);
+  box-shadow: var(--shadow-2), inset 0 0 0 1px var(--border-strong);
+  will-change: transform;
 }
-body.tabs-dragging .tab:hover { transform: none; }
-body.tabs-dragging .tab-indicator { transition: none; }
+body.tabs-dragging .tab.active { background: var(--bg-active); }
+body.tabs-dragging .tab-indicator { visibility: hidden; }
 body.tabs-dragging .preview-frame { pointer-events: none; }
 
 
@@ -2499,6 +2519,77 @@ kbd {
   font-family: var(--font-mono);
   font-size: 10px;
   line-height: 1.5;
+}
+
+/* 首页轻量露出：不抢待看/最近打开，所有外链都有明确去向。 */
+.home-promo {
+  padding: 18px 20px; border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: var(--bg-elev); display: flex; flex-wrap: wrap;
+  align-items: center; justify-content: space-between; gap: 16px 24px;
+}
+.home-promo-copy { min-width: 0; }
+.home-promo-eyebrow, .recommend-eyebrow { color: var(--text-faint); font-size: 11px; font-weight: var(--fw-medium); }
+.home-promo h2 { margin: 5px 0; font-size: 15px; line-height: 1.5; color: var(--text); }
+.home-promo p { margin: 0; font-size: 12px; line-height: 1.7; color: var(--text-dim); }
+.home-promo-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; }
+.home-promo a, .recommend-panel a {
+  display: inline-flex; align-items: center; gap: 5px; text-decoration: none;
+  font-size: 12px; color: var(--text-dim); cursor: pointer;
+  transition: color var(--dur-fast) ease;
+}
+.home-promo a:hover, .recommend-panel a:hover { color: var(--accent); }
+.home-promo :is(a, button):focus-visible, .recommend-panel :is(a, button):focus-visible {
+  outline: none; box-shadow: var(--ring); border-radius: var(--r-sm);
+}
+.home-promo .recommend-primary, .recommend-panel .recommend-copy {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 34px; border: 1px solid transparent; border-radius: var(--r-sm);
+  padding: 7px 12px; font: inherit; font-size: 12px; line-height: 1.5;
+  cursor: pointer; transition: background var(--dur-fast) ease, color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+.home-promo .recommend-primary, .recommend-panel .recommend-primary { background: var(--accent); color: var(--on-accent); }
+.home-promo .recommend-primary:hover, .recommend-panel .recommend-primary:hover { background: var(--accent-hover); }
+.recommend-panel .recommend-secondary { background: var(--bg-elev); color: var(--text-dim); border-color: var(--border-strong); }
+.recommend-panel .recommend-secondary:hover { background: var(--bg-hover); color: var(--text); }
+.recommend-panel .recommend-copy { min-width: 122px; }
+.recommend-panel .recommend-copy:disabled { cursor: default; }
+.recommend-panel .recommend-copy[data-copied="true"] { background: var(--bg-active); border-color: var(--border); color: var(--text); }
+/* 特异性高于统一毛玻璃规则：复制和二维码面板使用稳定实底。 */
+.modal-panel.recommend-panel { width: 600px; background: var(--bg-elev); -webkit-backdrop-filter: none; backdrop-filter: none; }
+.recommend-body { padding: 22px; }
+.recommend-product h3 { margin: 7px 0; font-size: 23px; line-height: 1.4; color: var(--text); }
+.recommend-product p { margin: 0; font-size: 13px; line-height: 1.75; color: var(--text-dim); }
+.recommend-share-grid { display: grid; grid-template-columns: minmax(0, 1fr) 184px; align-items: start; gap: 22px; margin-top: 24px; }
+.recommend-share-copy { min-width: 0; }
+.recommend-share-copy label, .recommend-manual label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+#recommend-url, #recommend-manual-text {
+  display: block; box-sizing: border-box; width: 100%; border: 1px solid var(--border-input);
+  border-radius: var(--r-sm); padding: 9px 10px; background: var(--bg-elev-2);
+  color: var(--text); font-size: 12px; line-height: 1.6; font-family: var(--font-mono);
+}
+#recommend-url:focus-visible, #recommend-manual-text:focus-visible { outline: none; box-shadow: var(--ring); }
+.recommend-copy-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.recommend-privacy { margin: 12px 0 0; color: var(--text-faint); font-size: 11px; line-height: 1.6; }
+.recommend-feedback { min-height: 20px; margin: 5px 0 0; color: var(--text-dim); font-size: 11px; line-height: 1.6; }
+.recommend-feedback[data-error="true"] { color: var(--danger); }
+.recommend-qr-wrap { margin: 0; text-align: center; }
+/* 四周保留至少四个码元的白色静区，手机扫码不受旁边深色内容干扰。 */
+.recommend-qr { background: #fff; padding: 20px; border-radius: var(--r-md); width: 184px; height: 184px; box-sizing: border-box; color: #1d2230; font-size: 12px; }
+.recommend-qr :is(canvas, img) { display: block; width: 144px; height: 144px; }
+.recommend-qr-wrap figcaption { margin-top: 8px; color: var(--text-faint); font-size: 11px; }
+.recommend-manual { margin-top: 10px; }
+.recommend-manual.hidden { display: none; }
+#recommend-manual-text { resize: vertical; white-space: pre-wrap; }
+.recommend-creator { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
+.recommend-creator h3 { margin: 0 0 6px; font-size: 13px; color: var(--text); }
+.recommend-creator p { margin: 0; font-size: 13px; line-height: 1.6; color: var(--text-dim); }
+.recommend-creator-copy > span { display: block; margin-top: 3px; font-size: 11px; line-height: 1.6; color: var(--text-faint); }
+@media (max-width: 560px) {
+  .home-promo { padding: 16px; }
+  .recommend-body { padding: 18px; }
+  .recommend-product h3 { font-size: 21px; }
+  .recommend-share-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .recommend-qr-wrap { justify-self: center; }
 }
 
 /* modal */
@@ -5736,3 +5827,72 @@ html[data-desktop="darwin"].focus-mode #match-badge { -webkit-app-region: no-dra
   .is-downloading .cloud-badge { animation: none; }
 }
 :root[data-motion="reduce"] .is-downloading .cloud-badge { animation: none; }
+
+/* 使用统计：主信息分层呈现，技术细节折叠，沿用设置页的实底与对比度令牌。 */
+.telemetry-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.settings-panel .telemetry-head h3 { margin: 0; }
+.telemetry-lede { margin: 5px 0 0; color: var(--text-dim); font-size: 12px; line-height: 1.6; }
+.telemetry-switch { position: relative; display: block; width: 36px; height: 22px; flex: none; margin-top: 2px; cursor: pointer; }
+:is(.telemetry-setting, .usage-intro) .telemetry-switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; z-index: 1; }
+.telemetry-switch > span { display: block; width: 36px; height: 22px; border-radius: 12px; background: var(--border-strong); pointer-events: none; transition: background var(--dur-fast) ease; }
+.telemetry-switch > span::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--bg-elev); box-shadow: 0 1px 3px rgba(0,0,0,.15); transition: transform var(--dur-fast) ease; }
+.telemetry-switch input:checked + span { background: var(--accent); }
+.telemetry-switch input:checked + span::after { transform: translateX(14px); background: var(--on-accent); }
+.telemetry-switch input:focus-visible + span { box-shadow: var(--ring); }
+.telemetry-switch input:disabled { cursor: default; }
+.telemetry-switch input:disabled + span { opacity: .55; }
+.telemetry-facts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin: 16px 0 12px; }
+.telemetry-facts > div { padding: 12px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--r-md); }
+.telemetry-facts h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; color: var(--text); font-size: 12px; font-weight: var(--fw-semi); }
+.telemetry-facts ul { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 5px 8px; }
+.telemetry-facts li { font-size: 11px; line-height: 1.6; color: var(--text-dim); overflow-wrap: anywhere; }
+.telemetry-limits { display: flex; gap: 5px 14px; flex-wrap: wrap; font-size: 11px; line-height: 1.7; color: var(--text-faint); }
+.telemetry-limits > span { white-space: nowrap; }
+.telemetry-details { margin-top: 14px; border-top: 1px solid var(--border); }
+.telemetry-details summary { display: flex; align-items: center; justify-content: space-between; padding: 11px 0; color: var(--text-dim); font-size: 12px; cursor: pointer; list-style: none; }
+.telemetry-details summary::-webkit-details-marker { display: none; }
+.telemetry-details[open] summary .ico { transform: rotate(180deg); }
+.telemetry-details summary:focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--r-sm); }
+.telemetry-details dl { margin: 0; display: grid; gap: 10px; }
+.telemetry-details dl > div { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 12px; font-size: 11px; line-height: 1.7; }
+.telemetry-details dt { color: var(--text-faint); }
+.telemetry-details dd { margin: 0; color: var(--text-dim); overflow-wrap: anywhere; }
+.telemetry-setting a, .usage-intro a { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); text-decoration: none; font-size: 11px; }
+.telemetry-setting a:hover, .usage-intro a:hover { text-decoration: underline; text-underline-offset: 2px; }
+.telemetry-details > a { margin: 10px 0 14px; }
+.telemetry-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px 14px; flex-wrap: wrap; padding-top: 12px; border-top: 1px solid var(--border); }
+.telemetry-status-wrap { flex: 1; min-width: 170px; }
+.telemetry-status-tag { display: inline-flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 11px; font-weight: var(--fw-medium); }
+.telemetry-status-tag::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--text-faint); }
+.telemetry-status-tag[data-state="on"]::before { background: var(--ok); }
+.telemetry-status-tag[data-state="pending"]::before { background: var(--warn); }
+#telemetry-status { margin: 3px 0 0; color: var(--text-faint); font-size: 11px; line-height: 1.65; overflow-wrap: anywhere; }
+.telemetry-setting #telemetry-forget { flex: none; white-space: nowrap; }
+.modal-panel.usage-intro { width: 460px; background: var(--bg-elev); -webkit-backdrop-filter: none; backdrop-filter: none; }
+.usage-intro-body { padding: 26px; }
+.usage-intro-mark { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: var(--r-lg); color: var(--accent); background: var(--accent-soft); }
+.usage-intro h2 { margin: 14px 0 7px; font-size: 21px; line-height: 1.4; color: var(--text); }
+.usage-intro-lede { margin: 0; font-size: 13px; line-height: 1.7; color: var(--text-dim); }
+.usage-intro-choice { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px; margin: 20px 0 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg); }
+.usage-intro-choice strong { font-size: 13px; color: var(--text); }
+.usage-intro-choice p { margin: 4px 0 0; font-size: 11px; color: var(--text-dim); line-height: 1.6; }
+.usage-intro-note { margin: 0 0 8px; font-size: 12px; line-height: 1.75; color: var(--text-dim); }
+.usage-intro-feedback { min-height: 20px; margin: 8px 0 0; font-size: 11px; color: var(--danger); }
+.usage-intro-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.usage-intro-actions button { min-height: 34px; padding: 7px 12px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--bg-elev); color: var(--text-dim); font: inherit; font-size: 12px; cursor: pointer; }
+.usage-intro-actions button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.usage-intro-actions button.primary:hover { background: var(--accent-hover); }
+.usage-intro-actions button:focus-visible { outline: none; box-shadow: var(--ring); }
+.usage-intro-actions button:disabled { cursor: default; opacity: .6; }
+@media (max-width: 640px) { .telemetry-facts ul { grid-template-columns: minmax(0, 1fr); } .telemetry-details dl > div { grid-template-columns: minmax(0, 1fr); gap: 2px; } .usage-intro-body { padding: 22px; } }
+/* 保留既有小屏顶部导航意图：后面的桌面规则不能覆盖原有单列设置布局。 */
+@media (max-width: 700px) {
+  .settings-panel .settings-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .settings-panel .settings-nav { min-width: 0; }
+}
+@media (max-width: 700px) {
+  .settings-panel .settings-nav { align-items: center; padding: 8px; }
+  .settings-panel .settings-nav .settings-version { flex: none; margin-top: 0; padding: 0 8px; border-top: 0; white-space: nowrap; word-break: normal; }
+  .settings-panel .settings-nav .settings-changelog-btn { flex: none; width: auto; white-space: nowrap; }
+  .settings-panel .settings-nav .settings-update { flex: none; width: 180px; padding-bottom: 0; }
+}

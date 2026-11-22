@@ -16,7 +16,7 @@ const http = require('http');
 const { spawn } = require('child_process');
 
 const paths = require('../lib/paths');
-const { DEFAULT_IGNORE } = require('../lib/init');
+const { DEFAULT_IGNORE, telemetryDefaults } = require('../lib/init');
 
 const ROOT_DIR = path.join(__dirname, '..');
 const SERVER_FILE = path.join(ROOT_DIR, 'server.js');
@@ -32,7 +32,15 @@ function defaultConfig() {
     port: 4321,
     maxDepth: 6,
     docTypes: ['html', 'md'],
+    ...telemetryDefaults(),
   };
+}
+
+// 内部原生验证的双重开关：仅显式测试标记 + 隔离 ATLAS_HOME 才切资料目录。
+// 单独设置 ATLAS_HOME 的正式用户继续使用原有 Electron 资料与单实例逻辑。
+function nativeTestProfile(env = process.env) {
+  if (env.ATLAS_TEST_ELECTRON_PROFILE !== '1' || !env.ATLAS_HOME) return null;
+  return path.join(path.resolve(env.ATLAS_HOME), 'electron-test-profile');
 }
 
 // 确保配置文件存在；不存在则写默认。返回 { created, path }。
@@ -176,6 +184,7 @@ module.exports = {
   ensureConfig,
   readConfig,
   defaultConfig,
+  nativeTestProfile,
   findFreePort,
   healthCheck,
   readRunningPort,

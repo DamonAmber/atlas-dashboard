@@ -21,6 +21,12 @@ const pdf = require('./pdf');
 
 const isSmoke = process.argv.includes('--smoke');
 app.setName('Atlas');
+// 在请求单实例锁之前隔离内部验证资料，避免唤醒/复用已安装的正式 App。
+const testProfile = serverManager.nativeTestProfile();
+if (testProfile) {
+  fs.mkdirSync(testProfile, { recursive: true });
+  app.setPath('userData', testProfile);
+}
 
 let mainWindow = null;
 let tray = null;

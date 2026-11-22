@@ -207,7 +207,7 @@ done
 >   期望末行 `总计 10 项，失败 0 项`。**记得删掉 tgz**，否则会被 `git add -A` 带进 commit。
 > - `scroll-after-toggle.spec.js` 在 iframe 还没加载出内容时打印 `!! HTML 不够长，没法测试` 并跳过（也是 exit 0）。这是它长期的既有行为，不是本次改动引入的；判断是否回归的办法是 `git stash` 后对比同一行输出。
 
-当前 spec 清单（77 个）。除 `landing-demo`（`file://`）、`diff-algorithm`（纯函数单测）、
+当前 spec 清单（83 个）。除 `landing-demo`（`file://`）、`diff-algorithm`（纯函数单测）、
 `md-fence-infostring`（纯函数，不起服务）、`contrast-tokens`（纯 node 解析 styles.css）、
 `minimap-layout` / `river-scale`（纯 node require 前端模块）、`icloud-unit`（纯函数 + 桩）
 与 `fs-watcher` / `icloud-watcher`（直接对着临时目录测监听器，不起服务、不用浏览器）外，其余都通过
@@ -295,10 +295,12 @@ done
 > - `dir-picker.spec.js` — 浏览器内目录选择器（15 项。`/api/browse` 本身就是列真实文件系统目录的接口，用例会只读地浏览 home 与 `~/Documents`；因 CI runner 的 home 结构不保证，不放进 CI）
 > - `landing-demo.spec.js` — landing page demo 交互（28 项，`file://`，连服务都不需要）
 > - `e2e-install.spec.js` — npm pack + 模拟陌生用户安装（10 项，自建临时 home 与端口）
-> - `tab-reorder.spec.js` — Tab 拖拽与 DOM 复用（真实鼠标左右排序、按下/拖动中的目录刷新保护、编辑内容/帧/滚动状态保留、持久化/快捷键/关闭相邻项、溢出边缘滚动和停止、不变渲染零节点增删）
+> - `tab-reorder.spec.js` — Tab 拖拽与 DOM 复用（深浅主题/窄窗口/减少动效的完整生命周期矩阵，真实触摸轻点/长按/滑动、双向边缘滚动与静止指针插槽推进、栏外松手/捕获中断/窗口或侧栏几何变化恢复、拖动中新开/关闭标签与后台刷新；活动/后台标签拖动悬停的实底遮挡；正常动效逐帧验证水平跟手/中心阈值让位/快速反向/不等宽插槽/松手吸附无二次位移/活动底色无旧位置滑动，Esc/失焦/指针取消恢复；真实鼠标左右排序、按下/拖动中的目录刷新保护、编辑内容/帧/滚动状态保留、持久化/快捷键/关闭相邻项、溢出边缘滚动和停止、不变渲染零节点增删）
 > - `backend-perf.spec.js` — 后端热路径机制（分组索引与旧算法结果一致、避免逐文件顶层 find、超过 500 个候选时 hash 缓存复用及失效清理；使用原函数和 mock IO，不依赖 Git 历史或真实配置，耗时只作观测）
+> - `telemetry.spec.js` — 使用统计（新安装默认开启但首次说明确认前零上报/零身份生成，旧安装保持原选择与已关闭状态，首屏确认/关闭/退出、说明折叠与深浅/窄屏 UI，关闭时零上报/零身份生成、每日/重启/多实例去重、字段白名单、0600、超时退避与重试上限、关闭中断、离线删除/凭证不泄露、跨站拒绝、设置开关/删除确认与深浅/窄屏 UI；隔离本机采集模拟器，不发往真实统计域）
+> - `recommend-atlas.spec.js` — 官网与推荐入口（首页/侧栏可发现且不自动弹出；浏览器/桌面外壳、深浅主题/窄窗口、官网外链目标、公开链接/文案复制成功与失败兜底、连续复制无布局跳变、异步请求关闭重开隔离、二维码/库缺失降级、Esc/遮罩/图标关闭与焦点陷阱、局域网分享不受影响、无文档泄露和外网后台请求）
 > - `toolbar-more.spec.js` — 顶栏更多菜单（58 项，浏览器/桌面外壳、HTML/Markdown、深浅主题、多 Tab、真实点击命中、Esc/点击外部关闭与专注阅读动作）
-> - `release-security.spec.js` — 发布安全门禁（35 项，纯 Node，临时 App/npm 产物；覆盖白名单、凭据文件/内容、跨块扫描、符号链接、日志脱敏、公证配置与开源渠道保持；无需起服务）
+> - `release-security.spec.js` — 发布安全门禁（40 项，纯 Node，临时 App/npm 产物；覆盖白名单、凭据文件/内容、跨块扫描、符号链接、日志脱敏、公证配置与开源渠道保持；无需起服务）
 
 > ⚠️ **新写 spec 一律用 `startAtlas()`，不要直连 `:4321`。** 哪怕自认为"只读"也不要——
 > 点开一篇文档就会写 store 的 recent 与已读状态，折叠一个分组就会写 tree。
@@ -336,6 +338,51 @@ done
 - 缩略图失败条目与启动载入的条目同样按上限淘汰；活动日志异步统计所有保留日期的已存行数，每文件只读到日上限，避免历史日期在重启后绕过日上限；今天/昨天的合并预热预算保持不变。
 - watcher 不再把带点目录当作无关扩展名文件丢弃。过滤后的非文档路径需要在去抖之后异步 stat 区分目录，此处存在必要的额外 IO，但不在事件回调同步读盘，仍保留 ignored/depth 过滤。
 - 新 spec 已接入 npm test / CI；fs-watcher、thumbnail、link-index、activity-log 原 spec 补了对应回归。README / 官网 #features 同步 Tab 排序说明。
+
+### 使用统计与 Cloudflare 运维（2026-11-22 新授权）
+
+用户在 2026-11-22 另行授权使用统计，替代此前“遥测暂不上线”的当前约定；同日后续明确选择 **新安装默认开启，现有安装保持原选择**。新安装首次界面会展示可关闭的说明，`telemetryNoticePending` 清除前服务端不生成身份、不上报；旧配置缺字段也不自动开启，已关闭的不重开。历史闭源迁移仍取消，不合并旧遥测分支。仅收集随机安装标识、版本、平台、桌面/npm 渠道，不采集文档数据，后台服务单独在线不计活跃。明细保留 90 天，匿名日汇总长期保留；删除屏障约 8 天与 Cloudflare 灾难恢复副本留存按完整统计说明披露。
+
+- 新运行时 `lib/telemetry.js`：开关与首次说明门禁、身份与删除凭证、每日去重、有限超时/退避与删除请求。已同步 npm/macOS `files` 与发布安全独立白名单。
+- 云端源码、测试和部署工具仅在 `cloudflare/usage/`，**不进入 npm/macOS 发布物**；依赖隔离子包，当前开发依赖审计零漏洞。应用仍 Node >=18，云端构建测试 Node >=22。
+- 既有 `test.yml` 新增 `usage-worker` 作业，真实 Miniflare D1 + JWT 签名/issuer/audience/有效期/删除/去重/留存测试：`npm ci --prefix cloudflare/usage && npm test --prefix cloudflare/usage`；应用测试 `node tests/telemetry.spec.js`。新安装默认值由 `lib/init.js` 的 `telemetryDefaults()` 统一提供给 CLI 与桌面创建配置，不改旧配置。
+- Worker：`atlas-usage`；D1：`atlas-usage`；采集域名 `atlas-telemetry.unmadebox.com`；私有看板域名 `atlas-stats.unmadebox.com`。账户子域 `unmadebox-atlas.workers.dev` 仅为 Cron 前提，统计 Worker 的 workers.dev 与预览入口关闭。
+- Cron 每天 **01:07 UTC** 汇总并清理；Worker 按来源/安装限流、每日接收容量 10000，近似地点级限流不是全球防作弊保证。Worker 请求观测日志关闭，业务不存 IP/原始标识/删除凭证。D1 写入与索引仍计入免费额度。
+
+部署命令（这是统计服务部署，不是 Atlas/npm/App 发版）：
+
+```sh
+npm ci --prefix cloudflare/usage
+node cloudflare/usage/build-dashboard.mjs
+# 仅新账号没有 workers.dev 子域时执行；凭据由 Wrangler 子进程读取，不输出或保存
+node --use-env-proxy cloudflare/usage/bootstrap-account.mjs
+cloudflare/usage/node_modules/.bin/wrangler d1 execute atlas-usage --remote --config cloudflare/usage/wrangler.json --file cloudflare/usage/schema.sql
+WRANGLER_SEND_METRICS=false cloudflare/usage/node_modules/.bin/wrangler deploy --config cloudflare/usage/wrangler.json
+# 首次部署生成 HMAC 密钥，通过 stdin 上传；不要在聊天、仓库或日志展示它
+node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" | cloudflare/usage/node_modules/.bin/wrangler secret put HMAC_KEY --config cloudflare/usage/wrangler.json
+```
+
+**HMAC 密钥不可在例行部署中重新生成**，否则同一安装的历史关联、删除凭证映射失效。例行部署仅 `wrangler deploy`，已有 Secret 保留；最小权限与凭据规则仍遵守本文件。
+
+当前登录有 Worker/D1 权限，无 Access/Web Analytics 管理权限。用户必须在 Cloudflare One 创建 **只保护 `atlas-stats.unmadebox.com`** 的 Self-hosted Access 应用、仅允许自己的邮箱，并按需配置 One-time PIN；不要保护公共采集域名。Team Domain 和应用 AUD 是公开参数（不是 token），确认后运行：
+
+```sh
+node cloudflare/usage/configure-access.mjs --team 团队名.cloudflareaccess.com --aud 应用的64位AUD
+```
+
+Worker 在 Access 参数缺失时返回 503，未认证返回 401；**不能为展示看板关闭保护或临时公开数据**。配置好且登录验收之前，不得宣称私有看板可用。入口：https://one.dash.cloudflare.com/ 。
+
+2026-11-22 Access 配置进展：用户已创建只保护 `atlas-stats.unmadebox.com` 的应用、仅本人邮箱允许策略，并选择现有 Cloudflare 登录方式。Team Domain 为 `quiet-wave-d50d.cloudflareaccess.com`，应用 AUD 已写入 `cloudflare/usage/wrangler.json` 并部署。匿名访问看板首页和 `/api/summary` 均跳转到 Access 登录，公共采集健康接口 200、非法活动请求 400；用户随后提供了登录后的统计看板截图（显示读取时刻和真实查询结果），真实登录与受保护 API 数据读取已验收通过。
+
+官网访问统计已验收（2026-11-22）：`unmadebox.com` 原先已有 Web Analytics 自动设置，同一 zone 的子域默认共用统计。用户已在该站点的数据详情中使用 `Host 等于 atlas.unmadebox.com` 筛选，截图显示 Atlas 官网已有实际访问/浏览记录；不需要重复添加子域或重复嵌入脚本。看个人主站时使用 `Host 等于 unmadebox.com`，不能把整个 zone 的合并数据当成主站访问量。入口 https://dash.cloudflare.com/?to=/:account/web-analytics 。控制台截图的时间范围是 GMT+8，本项目活跃安装看板按 UTC 日历日，两者日期口径不同。Web Analytics 管理 API 权限仍不在当前 Wrangler 登录范围内，但既有站点统计已生效。此功能不修改/重新部署既有官网 Worker。
+
+只在隔离 `ATLAS_HOME` 下用 `ATLAS_TELEMETRY_TEST_URL=http://127.0.0.1:端口` 指向本机模拟采集器；此变量不能指定任意外站。未发新版、旧安装未开启或新安装未确认首次说明时，不会产生真实 Atlas 使用统计。线上验收只检查健康与错误/未认证拒绝，不以合成数据冒充真实用户。
+
+### 新官网同步（0.34.0 起）
+
+当前产品官网为 **https://atlas.unmadebox.com/**，源码位于同级 `unmadebox.com/atlas-site/` 仓库；GitHub Pages `docs/index.html` 继续保留为兼容介绍页。发版两处都同步功能、版本和使用统计说明，但都必须等 npm 与 macOS Release 三件资产就位后才部署。
+
+新官网沿用该仓库 README 的流程：只修改 `atlas-site/` 中相关页面/双语文案，跑 `python3 scripts/check_site.py` 与该站点必要的浏览器验证，提交相关源码后再执行 `wrangler deploy --config wrangler.atlas.toml`。不要顺便部署个人主站、游戏或音乐站，也不要把本机音频/云端凭据加入 Git。其推送不自动部署，所以发版结束时要分别核对新官网和 GitHub Pages。
 
 ### 步骤 1：更新 PUBLISHING.md
 
@@ -558,7 +605,7 @@ curl -s "https://api.github.com/repos/DamonAmber/atlas-dashboard/actions/runs?pe
 
 | 产物 | 包含范围 | 必要性 |
 |---|---|---|
-| npm（当前 59 个文件） | `bin/atlas.js`、`server.js`、显式列出的 `lib/*.js`、前端脚本/样式/本地 vendor/KaTeX 字体、package.json、README、MIT LICENSE | CLI 启动、本地服务、离线预览及开源使用说明；不包含 electron、tests、scripts、design 或凭据 |
+| npm（当前 60 个文件） | `bin/atlas.js`、`server.js`、显式列出的 `lib/*.js`、前端脚本/样式/本地 vendor/KaTeX 字体、package.json、README、MIT LICENSE | CLI 启动、本地服务、离线预览及开源使用说明；不包含 electron、tests、scripts、design 或凭据 |
 | App | `server.js`、同一组 lib/public 运行时文件、package.json、LICENSE、5 个 Electron 入口、两张 trayTemplate 图标，外加 electron-builder 自动收集的生产 node_modules | 桌面主进程/preload/PDF/服务管理/标题栏、菜单栏图标与 Node 生产依赖；保留开源源码、不混淆 |
 | App 外层 | Electron 运行时与本地化资源、App 图标、更新配置、签名资源 | 桌面启动、应用图标、更新与系统签名；构建用 entitlements 不作为 App 源码资源打包 |
 
@@ -636,6 +683,8 @@ rm -rf dist-app
 Developer ID Application 证书 → 导出为 .p12 → `base64 -i cert.p12 | pbcopy`。
 
 > 目前只出 arm64（Apple Silicon）。Intel / 通用二进制、Windows 待后续；App 自动更新已实现，依赖 zip 与 latest-mac.yml。
+
+**隔离原生验证（已有正式 App 在运行时）**：创建只包含 fixture 扫描根的独立 `ATLAS_HOME`，并额外设置 `ATLAS_TEST_ELECTRON_PROFILE=1`，再运行签名 App 的 `--smoke` 或 Playwright `_electron` 验证。双开关只在该隔离目录内使用 `electron-test-profile`，避免单实例锁唤醒现有 App；单独设置 `ATLAS_HOME` 的正式用户不会改变原资料目录。不要用 `--user-data-dir` 代替，它不保证改变 Electron 的 `app.getPath('userData')` 或单实例锁。验证后关闭自己的子进程并清理 fixture，不动正式 `~/.atlas` 或运行中的 App。
 
 **§3g 原生外壳实机手测（第 3 层，改过 `electron/` 或桌面外壳 CSS 的版本必做）：** 前两层是
 `desktop-chrome.spec.js`（假 `window.atlasDesktop` 桥，只测前端钩子）和 `--smoke` 冒烟，都碰不到主进程的
@@ -735,7 +784,7 @@ npm whoami   # 应输出 d4monwang
 2. **Generate New Token → Granular Access Token**
 3. 填：
    - **Token name**: `atlas-publish-<machine>`
-   - **Expiration**: `365 days`
+   - **Expiration**: 选择 npm 页面当前允许的有效期，到期前更新；不要假定永远支持 365 天
    - **Permissions → Packages and scopes**: `Read and write`
    - **Select packages and scopes**: 选 `Only select packages I choose`，输入 `atlas-dashboard` 选中
    - ⚡ **关键**：勾选 **"Bypass two-factor authentication when publishing packages"**
@@ -746,8 +795,8 @@ npm whoami   # 应输出 d4monwang
    ```
 6. 验证：
    ```bash
-   grep authToken ~/.npmrc      # 应输出 1 行
-   npm publish --dry-run        # 应不报 401/403
+   npm whoami                  # 只验证账号，不打印或 grep token
+   npm publish --dry-run        # 检查内容；成功不代表实际 publish 已满足二次认证
    ```
 
 ### 3. gh CLI 登录
@@ -802,6 +851,8 @@ gh api -X POST repos/<owner>/atlas-dashboard/pages \
 > ⚠️ 每次发版**必须**在此列表最上方加一行。GitHub Release workflow 依赖此格式抽取变更日志。
 > 格式：`- **X.Y.Z** (YYYY-MM-DD) — <描述>`
 
+
+- **0.34.0** (2026-11-22) — 修复浏览器式 **Tab 拖动动效**，新增 **官网推荐与可关闭的基础使用统计**，保持 MIT 开源及 npm + macOS App + 官网分发。① 标签拖动改为稳定插槽与真实标签水平跟手，相邻标签平滑让位，修复快速反向乱序、hover 透明底覆盖与松手选中背景二次滑动；Esc/失焦/捕获中断恢复，窗口或侧栏尺寸变化取消拖动，不丢文档与编辑状态。② 首页与侧栏常驻「推荐 Atlas」，复制官网链接/文案、二维码和 Unmade Box 作者入口；复制失败手动兜底，不启动局域网文档分享。新官网为 https://atlas.unmadebox.com/ 。③ Cloudflare Worker + D1 活跃安装统计，仅四个最少字段、不上传文件或文档数据；新安装默认开启但首次说明确认前不上报，旧安装保持原选择，已关闭的不自动开启。支持每日去重、有限退避、身份级删除与离线重试、90 天明细清理和匿名汇总；私有看板通过 Access JWT 校验保护，使用统计只计算界面前台活跃而非后台在线。④ 统计设置分组与折叠说明、简短状态/删除操作、窄屏布局优化；增加本地与云端安全/行为测试，新增运行时模块同步 npm/macOS 显式白名单，不打包云端源码、工具或凭据。⑤ 同步 GitHub Pages 介绍页与 atlas.unmadebox.com 新官网的功能/隐私说明，签名公证 DMG、zip、latest-mac.yml 在 npm 上架后随 Release 发布，官网最后更新。
 
 - **0.33.0** (2026-11-22) — 新增 **Tab 拖拽排序**，并修复更多菜单及后端性能/容量问题，保持 MIT 开源和 npm + macOS App + 官网原有渠道，不引入遥测或闭源迁移。① 标签左右拖动、边缘自动滚动、刷新后恢复顺序；拖动不切换活动文档、不丢未保存文本和预览状态，键盘与关闭邻居按新顺序工作；覆盖 Sortable 按下准备阶段与目录刷新共享状态冲突；快速查看在标签准备/拖动期间让位，避免长拖动时再次弹出预览。② 标签 DOM 按身份复用，不变渲染零节点增删；24 个 Tab 同机微基准每 100 次渲染中位约 88ms → 6ms（仅标签热路径，不代表整机性能倍数）。③ 顶栏建立正确层叠顺序，浏览器与 App 的 ⋯ 菜单不再被 Tab/预览层盖住。④ 自动分组建立身份索引、批量添加子项，避免平方开销；短 hash 缓存受文件索引上限约束并清理已删除路径，不再超过 500 条就整表清空；重复引用在 realpath/stat 前去重。⑤ 带点目录搬入/删除正确同步；失败缩略图及启动载入也执行数量淘汰；活动日志恢复所有保留日期的日上限，防止重启绕过。⑥ 固定 CI 的 Ubuntu 24.04 以兼容现有 Playwright，补齐 DMG 容器签名与签名/staple 后更新清单校验；npm 与 App 显式运行时白名单、真实产物凭据扫描门禁及日志脱敏，兼容外层 npm pack/publish dry-run；公证改用钥匙串/仓库外配置，CI 增加最终 App 与 DMG 签名、公证验收。保留开源源码、生产依赖和 asar:false。⑦ 新增 release-security / toolbar-more / tab-reorder / backend-perf spec，接入 npm test 与 CI；相关旧 spec 补回归，81 个 spec 全绿，另验证真实隔离 Electron 窗口与未签名 App 产物；正式签名、公证由发版阶段另验。⑧ README、官网 #features、应用内新功能引导与发布流程同步。
 

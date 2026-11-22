@@ -59,7 +59,7 @@ const state = {
   //   loaded = frame 是否已经导航过一次（懒加载：恢复的 Tab 先建帧、激活时才 set src）
   tabs: [],
   activeTabId: null,
-  tabsDragging: false,    // 标签排序期间延后标签 DOM 同步，避免破坏 Sortable 的落点
+  tabsDragging: false,    // 标签排序期间延后标签 DOM 同步，避免破坏拖拽的稳定插槽
   // 「AI 刚改过」：本会话经 SSE 收到 add / change、且不是 Atlas 自己写的（负载 self !== true）
   // 的文档。path → 收到时刻（ms）。JUST_CHANGED_MS 窗口内侧栏行 / 首页封面带 .just-changed
   // （点做 3 次轻闪），到期由一个共享定时器清理。
@@ -709,6 +709,8 @@ function popModal(entry) {
   if (entry && entry.prevFocus && document.contains(entry.prevFocus)) {
     try { entry.prevFocus.focus(); } catch {}
   }
+  // 首次统计说明让位给已打开的弹窗；关闭最后一层后再显示，避免叠两层遮罩。
+  if (!openModals.length && usageStatus?.noticePending) requestAnimationFrame(() => probeUsage(true));
 }
 
 // 用 capture 阶段：要先于其它全局快捷键处理，避免 Esc 同时清掉搜索框
@@ -1742,6 +1744,7 @@ async function fetchState() {
       recomputeTimeRange({ render: false });
     }
     stateLoaded = true;
+    probeUsage();  // 仅本地设置确认已同意后，才可能向固定统计服务发送活跃事件。
     if (!unchanged || needRecompute) {
       renderTagBar();
       render();
@@ -3814,117 +3817,204 @@ function pruneDeadTabs() {
   }
 }
 
-// 标签栏只有一个 Sortable 实例，独立于目录树的实例列表；渲染/切换不重建实例。
-let tabSortable = null;
-let tabScrollRaf = 0, tabScrollAt = 0, tabPointer = null;
+// 浏览器式标签拖动：按下时保存稳定插槽，拖动时只改 transform，落下才提交顺序。
+// 判定绝不读取动画中的邻居 rect，也不反复插入 DOM，避免让位后又命中旧位置而抖动。
+let tabDrag = null, tabDragBound = false, tabScrollRaf = 0;
+let tabSuppressClick = false;
 function stopTabAutoScroll() {
   if (tabScrollRaf) cancelAnimationFrame(tabScrollRaf);
-  tabScrollRaf = 0; tabScrollAt = 0; tabPointer = null;
+  tabScrollRaf = 0;
+}
+function tabDragOrder(d) {
+  const others = d.slots.filter(slot => slot !== d.source);
+  others.splice(d.target, 0, d.source);
+  return others;
+}
+function layoutTabDrag() {
+  const d = tabDrag;
+  if (!d || !d.started || d.settling) return;
+  const bar = els.tabBar;
+  // 内容坐标随滚动补偿；抓取点相对标签不变，纵向移动不影响标签高度。
+  const rawLeft = d.source.left + d.x - d.startX + bar.scrollLeft - d.startScroll;
+  const left = Math.max(d.slots[0].left, Math.min(d.right - d.source.width, rawLeft));
+  const center = rawLeft + d.source.width / 2;
+  d.target = d.slots.filter(slot => slot !== d.source && center > slot.left + slot.width / 2).length;
+  let nextLeft = d.slots[0].left;
+  for (const slot of tabDragOrder(d)) {
+    slot.el.style.transform = `translateX(${(slot === d.source ? left : nextLeft) - slot.left}px)`;
+    nextLeft += slot.width + d.gap;
+  }
 }
 function scrollTabsAtEdge(time) {
   tabScrollRaf = 0;
-  if (!state.tabsDragging || !document.body.classList.contains('tabs-dragging') || !tabPointer) return;
+  const d = tabDrag;
+  if (!d || !d.started || d.settling) return;
   const bar = els.tabBar, r = bar.getBoundingClientRect();
-  const { x, y } = tabPointer;
   let direction = 0;
-  if (y >= r.top - 10 && y <= r.bottom + 10) {
-    if (x >= r.right - 32 && x <= r.right + 20) direction = 1;
-    else if (x <= r.left + 32 && x >= r.left - 20) direction = -1;
+  if (d.y >= r.top - 10 && d.y <= r.bottom + 10) {
+    if (d.x >= r.right - 32 && d.x <= r.right + 20) direction = 1;
+    else if (d.x <= r.left + 32 && d.x >= r.left - 20) direction = -1;
   }
-  const delta = tabScrollAt ? Math.min(32, time - tabScrollAt) : 16;
-  tabScrollAt = time;
+  const delta = d.scrollAt ? Math.min(32, time - d.scrollAt) : 16;
+  d.scrollAt = time;
   const before = bar.scrollLeft;
   if (direction) bar.scrollLeft += direction * delta * .55;
-  // 无方向或已到边界就停，下一次移动会重新启动；不留常驻计时器。
-  if (bar.scrollLeft !== before) tabScrollRaf = requestAnimationFrame(scrollTabsAtEdge);
-  else tabScrollAt = 0;
+  if (bar.scrollLeft !== before) {
+    layoutTabDrag();  // 鼠标不动时也必须随滚动重新计算插槽。
+    tabScrollRaf = requestAnimationFrame(scrollTabsAtEdge);
+  } else d.scrollAt = 0;
 }
-function trackTabDragPointer(e) {
-  if (!state.tabsDragging) return;
-  const point = e.touches ? e.touches[0] : e;
-  if (!point) return;
-  tabPointer = { x: point.clientX, y: point.clientY };
-  if (!tabScrollRaf && document.body.classList.contains('tabs-dragging')) tabScrollRaf = requestAnimationFrame(scrollTabsAtEdge);
+function startTabDrag() {
+  const d = tabDrag;
+  if (!d || d.started) return;
+  clearTimeout(d.touchTimer);
+  const bar = els.tabBar;
+  d.barBounds = bar.getBoundingClientRect();
+  const nodes = [...bar.querySelectorAll('.tab')];
+  d.slots = nodes.map(el => ({ el, left: el.offsetLeft, width: el.getBoundingClientRect().width,
+    style: el.getAttribute('style') }));
+  d.source = d.slots.find(slot => slot.el === d.el);
+  d.target = d.slots.indexOf(d.source);
+  d.gap = parseFloat(getComputedStyle(bar).columnGap) || 0;
+  const last = d.slots[d.slots.length - 1];
+  d.right = last.left + last.width;
+  d.started = true;
+  // 固定本次拖动的宽度。没有 DOM 插入、flex 重新分配宽度或浮动副本。
+  for (const slot of d.slots) {
+    slot.el.style.flex = `0 0 ${slot.width}px`;
+    slot.el.style.transition = prefersReducedMotion() ? 'none' : 'transform 160ms ease';
+  }
+  d.el.classList.add('tab-drag-source');
+  d.el.style.transition = 'none';
+  document.body.classList.add('tabs-dragging');
+  if (window.AtlasPeek) AtlasPeek.close();
+  layoutTabDrag();
 }
-// PointerEvent 覆盖鼠标与触摸；旧浏览器降级，监听器只注册一次。
-if (window.PointerEvent) document.addEventListener('pointermove', trackTabDragPointer, { capture: true, passive: true });
-else {
-  document.addEventListener('mousemove', trackTabDragPointer, { capture: true, passive: true });
-  document.addEventListener('touchmove', trackTabDragPointer, { capture: true, passive: true });
+function flushAfterTabDrag() {
+  renderTabs({ scrollActive: false });
+  if (renderSkippedDuringDrag && !isDragging && !isInlineEditing()) {
+    renderSkippedDuringDrag = false;
+    render();
+  }
 }
-window.addEventListener('blur', stopTabAutoScroll);
-function ensureTabSortable() {
-  if (!els.tabBar || tabSortable || typeof Sortable === 'undefined') return;
-  tabSortable = new Sortable(els.tabBar, {
-    group: 'atlas-tabs',
-    draggable: '.tab',
-    direction: 'horizontal',
-    scroll: false,   // 标签栏由下方单个 rAF 驱动边缘滚动，避免插件漏掉快速移动后的末次判定
-    filter: '.tab-close, .tab-close *',
-    preventOnFilter: false,
-    forceFallback: true,
-    fallbackOnBody: true,
-    fallbackTolerance: 6,   // 普通点击的轻微抖动不应该变成拖拽
-    touchStartThreshold: 6,
-    delay: 150,
-    delayOnTouchOnly: true,
-    animation: prefersReducedMotion() ? 0 : 150,
-    ghostClass: 'tab-sort-ghost',
-    chosenClass: 'tab-sort-chosen',
-    dragClass: 'tab-sort-drag',
-    fallbackClass: 'tab-sort-fallback',
-    onChoose() {
-      // Sortable 在按下时就占用了全局准备状态，不能等移动后的 onStart 才保护它。
-      state.tabsDragging = true;
-    },
-    onUnchoose() {
-      if (document.body.classList.contains('tabs-dragging')) return;  // 实际拖动由 onEnd 收尾
-      state.tabsDragging = false;
-      stopTabAutoScroll();
-      setTimeout(() => {
-        if (state.tabsDragging) return;
-        renderTabs({ scrollActive: false });
-        if (renderSkippedDuringDrag && !isDragging && !isInlineEditing()) {
-          renderSkippedDuringDrag = false;
-          render();
-        }
-      }, 0);
-    },
-    onStart() {
-      state.tabsDragging = true;
-      document.body.classList.add('tabs-dragging');
-      if (tabPointer && !tabScrollRaf) tabScrollRaf = requestAnimationFrame(scrollTabsAtEdge);
-      if (window.AtlasPeek) AtlasPeek.close();
-    },
-    onChange() { positionTabIndicator(false); },
-    onEnd() {
-      state.tabsDragging = false;
-      document.body.classList.remove('tabs-dragging');
-      stopTabAutoScroll();
-      // 使用 Tab 身份而不是 DOM 索引：指示层不参与排序，拖拽期间删掉/新开的 Tab
-      // 也不能丢失；恢复最新的模型后再补渲染一次。
+function finishTabDrag(commit = true) {
+  const d = tabDrag;
+  if (!d) return;
+  clearTimeout(d.touchTimer);
+  clearTimeout(d.settleTimer);
+  stopTabAutoScroll();
+  try { if (d.el.hasPointerCapture(d.pointerId)) d.el.releasePointerCapture(d.pointerId); } catch {}
+  if (!d.started) {
+    tabDrag = null;
+    state.tabsDragging = false;
+    // 普通点击仍交给标签 click；稍后再处理按下期间推迟的渲染。
+    setTimeout(() => { if (!state.tabsDragging) flushAfterTabDrag(); }, 0);
+    return;
+  }
+  d.settling = true;
+  tabSuppressClick = true;
+  setTimeout(() => { tabSuppressClick = false; }, 0);
+  const ordered = commit ? tabDragOrder(d) : d.slots;
+  let left = d.slots[0].left;
+  for (const slot of ordered) {
+    slot.el.style.transition = prefersReducedMotion() ? 'none' : 'transform 160ms ease';
+    slot.el.style.transform = `translateX(${left - slot.left}px)`;
+    left += slot.width + d.gap;
+  }
+  const complete = () => {
+    if (tabDrag !== d) return;
+    if (commit) {
+      // 按身份合并最新模型：拖动期间文件删除、新开标签也不能丢失。
       const byId = new Map(state.tabs.map(tab => [tab.id, tab]));
-      const ordered = [];
-      for (const el of els.tabBar.querySelectorAll('.tab')) {
-        const tab = byId.get(el.dataset.tabId);
-        if (tab) { ordered.push(tab); byId.delete(tab.id); }
+      const tabs = [];
+      for (const slot of ordered) {
+        const id = slot.el.dataset.tabId, tab = byId.get(id);
+        if (tab) { tabs.push(tab); byId.delete(id); }
       }
-      ordered.push(...byId.values());
-      state.tabs.splice(0, state.tabs.length, ...ordered);
-      renderTabs({ scrollActive: false });
-      persistTabs();
-      // Sortable 的拖动状态在库内部共享，不能在 Tab 拖动中销毁目录树实例。
-      // 延后被跳过的目录刷新，等本次 onEnd 返回、库完成清理后再同步。
-      if (renderSkippedDuringDrag) {
-        renderSkippedDuringDrag = false;
-        setTimeout(() => { if (!isDragging && !state.tabsDragging && !isInlineEditing()) render(); }, 0);
-      }
-    },
-  });
+      tabs.push(...byId.values());
+      state.tabs.splice(0, state.tabs.length, ...tabs);
+    }
+    for (const slot of d.slots) {
+      slot.el.classList.remove('tab-drag-source');
+      if (slot.style === null) slot.el.removeAttribute('style');
+      else slot.el.setAttribute('style', slot.style);
+      slot.el.style.transition = 'none';
+    }
+    tabDrag = null;
+    state.tabsDragging = false;
+    // 指示层仍隐藏时先同步新 DOM，并取消它从旧插槽滑来的默认动画。
+    // 新位置落定后才撤掉拖动实底，同一帧交接给指示层，避免底色左右闪动。
+    flushAfterTabDrag();
+    positionTabIndicator(false);
+    document.body.classList.remove('tabs-dragging');
+    // DOM 新位置与 transform 清零必须在无过渡的同一帧落定，否则恢复默认
+    // transform transition 会把旧位移带进新插槽，造成松手后再滑一次/越位。
+    void els.tabBar.offsetWidth;
+    for (const slot of d.slots) {
+      if (slot.style === null) slot.el.removeAttribute('style');
+      else slot.el.setAttribute('style', slot.style);
+    }
+    if (commit) persistTabs();
+  };
+  if (prefersReducedMotion()) complete();
+  else d.settleTimer = setTimeout(complete, 170);
 }
-window.addEventListener('atlas:motion-change', () => {
-  if (tabSortable) tabSortable.option('animation', prefersReducedMotion() ? 0 : 150);
-});
+function ensureTabDrag() {
+  if (!els.tabBar || tabDragBound) return;
+  tabDragBound = true;
+  const bar = els.tabBar;
+  bar.addEventListener('pointerdown', e => {
+    const el = e.target.closest('.tab');
+    if (!el || e.target.closest('.tab-close') || e.button !== 0 || !e.isPrimary || tabDrag || isDragging) return;
+    state.tabsDragging = true;  // 按下就保护 DOM，普通点击也不能被后台刷新打断。
+    tabDrag = { el, pointerId: e.pointerId, startX: e.clientX,
+      x: e.clientX, y: e.clientY, startScroll: bar.scrollLeft,
+      touchReady: e.pointerType !== 'touch', started: false, settling: false };
+    if (e.pointerType === 'touch') {
+      const d = tabDrag;
+      d.touchTimer = setTimeout(() => { if (tabDrag === d) d.touchReady = true; }, 150);
+    }
+    el.setPointerCapture(e.pointerId);
+  });
+  document.addEventListener('pointermove', e => {
+    const d = tabDrag;
+    if (!d || e.pointerId !== d.pointerId || d.settling) return;
+    d.x = e.clientX; d.y = e.clientY;
+    if (!d.started) {
+      // 触摸长按前的滑动留给原生滚动，不将轻点/轻微抖动变成排序。
+      if (!d.touchReady) {
+        if (Math.hypot(d.x - d.startX, d.y - d.startY) >= 6) finishTabDrag(false);
+        return;
+      }
+      if (Math.abs(d.x - d.startX) < 6) return;
+      startTabDrag();
+    }
+    e.preventDefault();
+    layoutTabDrag();
+    if (!tabScrollRaf) tabScrollRaf = requestAnimationFrame(scrollTabsAtEdge);
+  }, { passive: false });
+  document.addEventListener('pointerup', e => {
+    if (!tabDrag || e.pointerId !== tabDrag.pointerId || tabDrag.settling) return;
+    tabDrag.x = e.clientX; tabDrag.y = e.clientY;
+    layoutTabDrag();
+    finishTabDrag();
+  });
+  bar.addEventListener('lostpointercapture', e => {
+    if (tabDrag && e.pointerId === tabDrag.pointerId && !tabDrag.settling) finishTabDrag(false);
+  });
+  document.addEventListener('pointercancel', e => {
+    if (tabDrag && e.pointerId === tabDrag.pointerId) finishTabDrag(false);
+  });
+  bar.addEventListener('click', e => {
+    if (tabSuppressClick) { e.preventDefault(); e.stopImmediatePropagation(); }
+  }, true);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && tabDrag) { e.preventDefault(); e.stopPropagation(); finishTabDrag(false); }
+  }, true);
+  window.addEventListener('blur', () => finishTabDrag(false));
+  window.addEventListener('resize', () => finishTabDrag(false));
+  bar.addEventListener('scroll', layoutTabDrag, { passive: true });
+}
 
 // 复用标签节点：切换只更新选中态，不重新创建整条标签栏，也不触碰任何预览 iframe。
 function renderTabs({ scrollActive = true } = {}) {
@@ -3979,9 +4069,9 @@ function renderTabs({ scrollActive = true } = {}) {
     if (el !== cursor) bar.insertBefore(el, cursor);
     cursor = el.nextElementSibling;
   }
-  // 指示层常驻末尾且不参与 Sortable，避免无变化的渲染仍移动节点。
+  // 指示层常驻末尾且不参与拖动，避免无变化的渲染仍移动节点。
   if (els.tabIndicator && bar.lastElementChild !== els.tabIndicator) bar.appendChild(els.tabIndicator);
-  ensureTabSortable();
+  ensureTabDrag();
   const activeEl = bar.querySelector('.tab.active');
   if (scrollActive && activeEl) activeEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   positionTabIndicator(true);
@@ -4030,7 +4120,16 @@ function positionTabIndicator(animate) {
 // 窗口 / 侧栏改宽会改变标签的排布，指示层要即时跟随（不滑动，避免拖影）。
 // ResizeObserver 一网打尽：窗口 resize、侧栏拖拽 / 收起展开导致的 tab-bar 宽度变化都会触发。
 if (window.ResizeObserver && els.tabBar) {
-  new ResizeObserver(() => positionTabIndicator(false)).observe(els.tabBar);
+  new ResizeObserver(() => {
+    const d = tabDrag;
+    if (d?.started && !d.settling) {
+      const bounds = els.tabBar.getBoundingClientRect();
+      // 侧栏收起/展开也会改变栏的坐标和可用宽度，但不会触发 window.resize。
+      // 旧插槽和抓取点此时已失效，按窗口 resize 的同一规则取消，避免跳位落错槽。
+      if (Math.abs(bounds.left - d.barBounds.left) > .5 || Math.abs(bounds.width - d.barBounds.width) > .5) finishTabDrag(false);
+    }
+    positionTabIndicator(false);
+  }).observe(els.tabBar);
 }
 
 // 键盘：前后切换 / 跳到第 n 个
@@ -7563,7 +7662,7 @@ const SHORTCUTS = [
       [[MOD, 'S'], '保存改动到文件（编辑态）'],
       [[MOD, '.'], '进入 / 退出专注阅读（Safari 请用顶栏按钮）'],
       [['?'], '打开这份快捷键清单'],
-      [['Esc'], '由近及远地退出：关快速查看 → 退出专注 → 关查找/弹窗 → 清空搜索 → 清除文档内高亮 → 收起对比 → 回到首页'],
+      [['Esc'], '拖动标签时取消排序；其他场景由近及远地退出：关快速查看 → 退出专注 → 关查找/弹窗 → 清空搜索 → 清除文档内高亮 → 收起对比 → 回到首页'],
     ],
   },
   {
@@ -7698,6 +7797,101 @@ function closeShortcuts() {
   root.classList.add('hidden');
   if (shortcutsEntry) { popModal(shortcutsEntry); shortcutsEntry = null; }
 }
+
+// ---------- 官网与推荐 Atlas（独立于局域网文档分享） ----------
+const ATLAS_SITES = Object.freeze({ official: 'https://atlas.unmadebox.com/', creator: 'https://unmadebox.com/' });
+const ATLAS_RECOMMEND_TEXT = '推荐一个我在用的本地文档工具 Atlas，可以把 AI 生成的 HTML 报告、网页原型和 Markdown 笔记集中浏览，还能跟进更新、对比版本。\n演示和安装：' + ATLAS_SITES.official + '\n作者的其他作品：' + ATLAS_SITES.creator;
+let recommendEntry = null, recommendEpoch = 0;
+const recommendCopyTimers = new Map();
+function resetRecommendCopy() {
+  for (const timer of recommendCopyTimers.values()) clearTimeout(timer);
+  recommendCopyTimers.clear();
+  for (const btn of document.querySelectorAll('[data-recommend-copy]')) {
+    btn.disabled = false;
+    delete btn.dataset.copied;
+    btn.querySelector('[data-copy-label]').textContent = btn.dataset.recommendCopy === 'link' ? '复制链接' : '复制推荐文案';
+  }
+}
+function openRecommend() {
+  const root = document.getElementById('recommend-modal');
+  if (!root || recommendEntry) return;
+  recommendEpoch++;
+  resetRecommendCopy();
+  const feedback = document.getElementById('recommend-feedback');
+  feedback.textContent = ''; delete feedback.dataset.error;
+  document.getElementById('recommend-manual').classList.add('hidden');
+  document.getElementById('recommend-manual-text').value = '';
+  const qr = document.getElementById('recommend-qr');
+  if (!qr.dataset.ready) {
+    try {
+      if (typeof QRCode === 'undefined') throw new Error('二维码库未加载');
+      renderQrCode(qr, ATLAS_SITES.official, 144);
+      // QRCode 默认生成的 img 没有 alt；语义由外层 role=img 统一提供。
+      for (const img of qr.querySelectorAll('img')) img.alt = '';
+      qr.dataset.ready = 'true';
+    } catch {
+      qr.textContent = '二维码暂不可用，请复制官网链接。';
+    }
+  }
+  root.classList.remove('hidden');
+  recommendEntry = pushModal({ panel: root.querySelector('.modal-panel'), close: closeRecommend,
+    initialFocus: root.querySelector('[data-recommend-copy="link"]') });
+}
+function closeRecommend() {
+  const root = document.getElementById('recommend-modal');
+  if (!root) return;
+  recommendEpoch++;  // 关闭/重开后，旧剪贴板请求不能污染新面板的状态。
+  root.classList.add('hidden');
+  resetRecommendCopy();
+  if (recommendEntry) { popModal(recommendEntry); recommendEntry = null; }
+}
+async function copyRecommend(btn) {
+  if (!recommendEntry || btn.disabled) return;
+  const epoch = recommendEpoch;
+  const text = btn.dataset.recommendCopy === 'link' ? ATLAS_SITES.official : ATLAS_RECOMMEND_TEXT;
+  const feedback = document.getElementById('recommend-feedback');
+  const label = btn.querySelector('[data-copy-label]');
+  const originalLabel = btn.dataset.recommendCopy === 'link' ? '复制链接' : '复制推荐文案';
+  if (recommendCopyTimers.has(btn)) clearTimeout(recommendCopyTimers.get(btn));
+  btn.disabled = true;
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('剪贴板不可用');
+    await navigator.clipboard.writeText(text);
+    if (epoch !== recommendEpoch) return;
+    btn.dataset.copied = 'true'; label.textContent = '已复制';
+    feedback.textContent = btn.dataset.recommendCopy === 'link' ? '官网链接已复制，可以发给朋友。' : '推荐文案已复制，包含官网与作者作品链接。';
+    delete feedback.dataset.error;
+    document.getElementById('recommend-manual').classList.add('hidden');
+    recommendCopyTimers.set(btn, setTimeout(() => {
+      delete btn.dataset.copied; label.textContent = originalLabel; recommendCopyTimers.delete(btn);
+    }, 1600));
+  } catch {
+    if (epoch !== recommendEpoch) return;
+    delete btn.dataset.copied; label.textContent = originalLabel;
+    feedback.textContent = '自动复制失败，请在下方手动复制。'; feedback.dataset.error = 'true';
+    document.getElementById('recommend-manual').classList.remove('hidden');
+    const field = document.getElementById('recommend-manual-text');
+    field.value = text; field.focus(); field.select();
+  } finally {
+    if (epoch === recommendEpoch) btn.disabled = false;
+  }
+}
+(() => {
+  const root = document.getElementById('recommend-modal');
+  if (!root) return;
+  document.getElementById('recommend-url').value = ATLAS_SITES.official;
+  for (const link of document.querySelectorAll('[data-atlas-site]')) {
+    link.href = ATLAS_SITES[link.dataset.atlasSite];
+  }
+  document.addEventListener('click', e => {
+    if (e.target.closest?.('[data-open-recommend]')) openRecommend();
+  });
+  root.addEventListener('click', e => {
+    if (isCloseTarget(e.target)) { closeRecommend(); return; }
+    const btn = e.target.closest?.('[data-recommend-copy]');
+    if (btn) copyRecommend(btn);
+  });
+})();
 
 // ==================== 更新日志 / 新功能引导 ====================
 // 数据来自 window.ATLAS_CHANGELOG（public/changelog.js，随版本发布，客户端与 web 共用）。
@@ -8464,8 +8658,133 @@ els.tree.addEventListener('keydown', (e) => {
   }
 });
 
+// ---------- 使用统计：只由真实界面前台事件触发，不运行后台心跳 ----------
+let usageCheckedDay = '', usageProbeBusy = false, usageSettingsBusy = false, usageStatus = null;
+let usageIntroEntry = null, usageIntroBusy = false;
+function renderUsageSetting(status) {
+  const toggle = document.getElementById('telemetry-toggle');
+  const button = document.getElementById('telemetry-forget');
+  const text = document.getElementById('telemetry-status');
+  const tag = document.getElementById('telemetry-status-tag');
+  if (!toggle || !button || !text) return;
+  if (!status) {
+    toggle.disabled = true; button.disabled = true;
+    if (tag) { tag.textContent = '不可用'; tag.dataset.state = 'off'; }
+    text.textContent = '当前服务不支持使用统计，未开启。';
+    return;
+  }
+  if (!usageSettingsBusy) toggle.checked = status.enabled === true;
+  toggle.disabled = usageSettingsBusy || !!status.deletionPending || !!status.noticePending || status.state === 'storage-error';
+  button.disabled = usageSettingsBusy || !status.hasIdentity || status.state === 'deleting';
+  button.textContent = status.deletionPending ? '重试删除' : '删除统计记录';
+  if (tag) {
+    tag.textContent = status.noticePending ? '待确认' : status.deletionPending ? '等待删除' : status.enabled ? '已开启' : '已关闭';
+    tag.dataset.state = status.noticePending || status.deletionPending || status.state === 'retry-later' ? 'pending' : status.enabled ? 'on' : 'off';
+  }
+  text.textContent = status.state === 'storage-error' ? '本地统计状态不可用，当前不会上报。' :
+    status.noticePending ? '首次说明确认前不会发送统计。' :
+    status.deletionPending ? '统计已关闭，删除尚未完成；联网进入前台后有限重试。' :
+    !status.enabled ? '不会上报。' + (status.hasIdentity ? '已有明细可在右侧删除。' : '') :
+    status.state === 'retry-later' ? '暂未上报成功；稍后有限重试，不影响文档。' :
+    status.lastSent ? '最近上报：' + new Date(status.lastSent).toLocaleString() : '只在打开界面或进入前台时发送每日活跃记录。';
+}
+function openUsageIntro() {
+  const root = document.getElementById('telemetry-intro-modal');
+  if (!root || usageIntroEntry || openModals.length || !usageStatus?.noticePending) return;
+  document.getElementById('telemetry-intro-toggle').checked = usageStatus.enabled === true;
+  document.getElementById('telemetry-intro-feedback').textContent = '';
+  root.classList.remove('hidden');
+  usageIntroEntry = pushModal({ panel: root.querySelector('.modal-panel'),
+    close: () => completeUsageIntro(false), initialFocus: document.getElementById('telemetry-intro-start') });
+}
+async function completeUsageIntro(enabled) {
+  if (!usageIntroEntry || usageIntroBusy) return;
+  usageIntroBusy = true;
+  const start = document.getElementById('telemetry-intro-start'), decline = document.getElementById('telemetry-intro-decline');
+  start.disabled = true; decline.disabled = true;
+  try {
+    if (!(await updateConfig({ telemetryEnabled: enabled === true, telemetryNoticePending: false }))) {
+      document.getElementById('telemetry-intro-feedback').textContent = '设置尚未保存，确认前不会发送统计，请重试。';
+      return;
+    }
+    await refreshUsageSetting();
+    document.getElementById('telemetry-intro-modal').classList.add('hidden');
+    popModal(usageIntroEntry); usageIntroEntry = null;
+    usageCheckedDay = '';
+    if (enabled) await probeUsage(true);
+  } finally { usageIntroBusy = false; start.disabled = false; decline.disabled = false; }
+}
+async function refreshUsageSetting() {
+  try {
+    const r = await fetch('/api/telemetry', { cache: 'no-store' });
+    usageStatus = r.ok ? await r.json() : null;
+  } catch { usageStatus = null; }
+  renderUsageSetting(usageStatus);
+  return usageStatus;
+}
+async function probeUsage(force = false) {
+  if (!stateLoaded || document.hidden || usageProbeBusy) return;
+  const day = new Date().toISOString().slice(0, 10);
+  if (!force && usageCheckedDay === day) return;
+  usageProbeBusy = true;
+  try {
+    const r = await fetch('/api/telemetry', { cache: 'no-store' });
+    if (!r.ok) { usageCheckedDay = day; return; }
+    const status = await r.json(); usageStatus = status; renderUsageSetting(status);
+    if (status.noticePending) { usageCheckedDay = ''; openUsageIntro(); return; }
+    usageCheckedDay = day;
+    if (!status.enabled && !status.deletionPending) return;
+    let appVersion;
+    const desktop = !!window.atlasDesktop?.isDesktop;
+    if (desktop && typeof window.atlasDesktop.appVersion === 'function') {
+      try { appVersion = await window.atlasDesktop.appVersion(); } catch {}
+    }
+    await fetch('/api/telemetry/active', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel: desktop ? 'desktop' : 'npm', ...(appVersion ? { appVersion } : {}) }) });
+  } catch { /* 统计不弹错误、不妨碍文档，下一次前台事件或下一日才重试。 */ }
+  finally { usageProbeBusy = false; }
+}
+(() => {
+  const toggle = document.getElementById('telemetry-toggle'), button = document.getElementById('telemetry-forget');
+  if (!toggle || !button) return;
+  const intro = document.getElementById('telemetry-intro-modal');
+  if (intro) {
+    document.getElementById('telemetry-intro-start').addEventListener('click', () => completeUsageIntro(document.getElementById('telemetry-intro-toggle').checked));
+    document.getElementById('telemetry-intro-decline').addEventListener('click', () => completeUsageIntro(false));
+    intro.addEventListener('click', e => { if (isCloseTarget(e.target)) completeUsageIntro(false); });
+  }
+  toggle.addEventListener('change', async () => {
+    const desired = toggle.checked; usageSettingsBusy = true; toggle.disabled = true; button.disabled = true;
+    try {
+      if (await updateConfig({ telemetryEnabled: desired })) {
+        usageCheckedDay = '';
+        await refreshUsageSetting();
+        if (desired) await probeUsage(true);
+      }
+    } finally {
+      usageSettingsBusy = false;
+      await refreshUsageSetting();
+      if (desired) setTimeout(() => { if (document.getElementById('settings-modal')?.classList.contains('hidden') === false) refreshUsageSetting(); }, 3200);
+    }
+  });
+  button.addEventListener('click', async () => {
+    if (!(await showConfirm({ title: '停止并删除此安装的统计记录？',
+      body: '先关闭使用统计，再删除云端明细。已生成的匿名日汇总不会撤回；断网时保留待删除请求，联网进入前台后重试。', confirmText: '停止并删除', danger: true }))) return;
+    usageSettingsBusy = true; toggle.disabled = true; button.disabled = true;
+    try {
+      const r = await fetch('/api/telemetry/forget', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      if (!r.ok) throw new Error('delete-failed');
+      usageStatus = await r.json(); usageCheckedDay = ''; renderUsageSetting(usageStatus);
+    } catch { document.getElementById('telemetry-status').textContent = '删除尚未确认，请稍后重试。'; }
+    finally { usageSettingsBusy = false; await refreshUsageSetting(); }
+  });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) probeUsage(true); });
+  window.addEventListener('online', () => { if (!document.hidden) probeUsage(true); });
+})();
+
 // ---------- 设置弹窗 ----------
 async function openSettings() {
+  refreshUsageSetting();
   const res = await fetch('/api/config');
   const cfg = await res.json();
   // 版本号：桌面 App 标注"桌面版"并显示 App bundle 的权威版本号（app.getVersion），
@@ -10759,7 +11078,7 @@ function renderShareUrls(container, urls) {
   });
 }
 
-function renderQrCode(container, text) {
+function renderQrCode(container, text, size = 180) {
   container.innerHTML = '';
   if (typeof QRCode === 'undefined') {
     container.textContent = '（QR 库未加载）';
@@ -10769,8 +11088,8 @@ function renderQrCode(container, text) {
   // eslint-disable-next-line no-new
   new QRCode(container, {
     text,
-    width: 180,
-    height: 180,
+    width: size,
+    height: size,
     colorDark: '#1d2230',
     colorLight: '#ffffff',
     correctLevel: QRCode.CorrectLevel.M,

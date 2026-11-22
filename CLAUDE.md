@@ -20,7 +20,7 @@
 
 ## 这个项目的关键事实
 
-- 项目方向（2026-11-21 确认）：保持 MIT 开源与 npm + macOS App + 官网分发；取消闭源仓库迁移，埋点/遥测暂不上线。旧闭源分支与 runbook 不能作为当前发布依据。
+- 项目方向（2026-11-21 确认）：保持 MIT 开源与 npm + macOS App + 官网分发；取消闭源仓库迁移；2026-11-22 用户另行授权新安装默认开启、首次显著告知且确认前不上报的 Cloudflare 活跃安装统计；旧安装保留原选择，已关闭的不重开，仅四个最少字段，不采集文档数据，不合并旧闭源/遥测分支。旧闭源分支与 runbook 不能作为当前发布依据。
 - npm 包名：`atlas-dashboard`
 - GitHub: `DamonAmber/atlas-dashboard`
 - 当前版本：见 `package.json` 的 `version` 字段，或 PUBLISHING.md 顶部的"已发布版本"

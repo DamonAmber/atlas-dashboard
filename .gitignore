@@ -9,3 +9,8 @@ dist-app/
 out/
 electron/build/notarize.env
 .agents/
+
+# Cloudflare 开发/部署状态与本地密钥（不进入源码或发布物）
+cloudflare/**/.wrangler/
+cloudflare/**/.dev.vars*
+cloudflare/**/.env*

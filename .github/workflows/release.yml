@@ -61,7 +61,8 @@ jobs:
           ---
 
           📦 **npm**: https://www.npmjs.com/package/atlas-dashboard/v/$VERSION
-          🌐 **介绍页**: https://damonamber.github.io/atlas-dashboard/
+          🌐 **官网**: https://atlas.unmadebox.com/
+          🧭 **兼容介绍页**: https://damonamber.github.io/atlas-dashboard/
           📝 **完整版本历史**: https://github.com/${{ github.repository }}/blob/main/PUBLISHING.md
 
           安装/升级:

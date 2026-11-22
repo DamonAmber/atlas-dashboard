@@ -1,0 +1,51 @@
+{
+  "name": "atlas-usage",
+  "main": "worker.js",
+  "account_id": "aa4c8bb2a36a9b9f7a1178ebb1d8e3a0",
+  "compatibility_date": "2026-11-20",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": {
+    "enabled": false
+  },
+  "routes": [
+    {
+      "pattern": "atlas-telemetry.unmadebox.com",
+      "custom_domain": true
+    },
+    {
+      "pattern": "atlas-stats.unmadebox.com",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "COLLECT_HOST": "atlas-telemetry.unmadebox.com",
+    "ADMIN_HOST": "atlas-stats.unmadebox.com",
+    "ACCESS_TEAM_DOMAIN": "https://quiet-wave-d50d.cloudflareaccess.com",
+    "ACCESS_AUD": "1cd8da53b0acd84b16c49765767278ae4d6d946b322a65d430779a03b8c42076",
+    "DAILY_REQUEST_LIMIT": "10000"
+  },
+  "triggers": {
+    "crons": [
+      "7 1 * * *"
+    ]
+  },
+  "ratelimits": [
+    {
+      "name": "RATE_LIMIT",
+      "namespace_id": "2026112201",
+      "simple": {
+        "limit": 20,
+        "period": 60
+      }
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "atlas-usage",
+      "database_id": "d8f6a8df-b695-4e42-bc8c-d0d9aa8f5356",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

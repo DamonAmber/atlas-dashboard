@@ -211,6 +211,16 @@
     <div id="tree-filter-note" class="tree-filter-note hidden" role="status"></div>
     <div id="tree" class="tree"></div>
 
+    <!-- 与实时状态分开：推荐的是 Atlas 工具，不是当前文档的局域网分享。 -->
+    <nav class="sidebar-discover" aria-label="Atlas 官网与推荐">
+      <a href="https://unmadebox.com/" data-atlas-site="creator" target="_blank" rel="noopener noreferrer" title="探索 Unmade Box 的工具、游戏和音乐作品">
+        <span>来自 Unmade Box</span><svg class="ico" width="11" height="11" aria-hidden="true"><use href="#i-external"/></svg>
+      </a>
+      <button type="button" data-open-recommend title="复制 Atlas 官网链接，推荐给朋友">
+        <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-share"/></svg><span>推荐 Atlas</span>
+      </button>
+    </nav>
+
     <footer class="sidebar-footer">
       <span id="save-status" title="保存状态">●</span>
       <!-- 实时更新连接状态（connectSSE 维护 data-state：live / retry / off）。
@@ -612,6 +622,19 @@
             </section>
           </div>
 
+          <section class="home-promo" aria-labelledby="home-promo-title">
+            <div class="home-promo-copy">
+              <div class="home-promo-eyebrow">Atlas · 来自 Unmade Box</div>
+              <h2 id="home-promo-title">散落的文档，归到一处。</h2>
+              <p>喜欢这个工具？推荐给朋友，也欢迎看看我的其他作品。</p>
+            </div>
+            <div class="home-promo-actions">
+              <button class="recommend-primary" type="button" data-open-recommend><svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-share"/></svg><span>推荐 Atlas</span></button>
+              <a href="https://atlas.unmadebox.com/" data-atlas-site="official" target="_blank" rel="noopener noreferrer">Atlas 官网<svg class="ico" width="12" height="12" aria-hidden="true"><use href="#i-external"/></svg></a>
+              <a href="https://unmadebox.com/" data-atlas-site="creator" target="_blank" rel="noopener noreferrer">探索 Unmade Box<svg class="ico" width="12" height="12" aria-hidden="true"><use href="#i-external"/></svg></a>
+            </div>
+          </section>
+
           <footer class="home-tips">
             <span><kbd>⌘K</kbd> 快速打开</span>
             <span><kbd>/</kbd> 搜索文件名与内容</span>
@@ -863,6 +886,33 @@
         </label>
         <p class="muted" id="notify-hint">需要浏览器允许通知权限。</p>
       </section>
+      <section class="modal-section telemetry-setting" data-pane="security" aria-labelledby="telemetry-setting-title">
+        <div class="telemetry-head">
+          <div><h3 id="telemetry-setting-title">帮助改进 Atlas</h3><p class="telemetry-lede">只发送基础使用信息，不涉及你的文档。</p></div>
+          <label class="telemetry-switch"><input type="checkbox" id="telemetry-toggle" role="switch" aria-label="使用统计" /><span aria-hidden="true"></span></label>
+        </div>
+        <div class="telemetry-facts">
+          <div><h4><svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-info"/></svg>会发送</h4><ul><li>随机安装标识</li><li>Atlas 版本</li><li>操作系统</li><li>桌面 / npm 渠道</li></ul></div>
+          <div><h4><svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-shield-check"/></svg>不会发送</h4><ul><li>文档内容</li><li>文件名与路径</li><li>扫描目录</li><li>文档数量</li></ul></div>
+        </div>
+        <div class="telemetry-limits"><span>每天最多一次</span><span>仅界面前台触发</span><span>随时可以关闭</span></div>
+        <details class="telemetry-details">
+          <summary>数据与隐私说明<svg class="ico" width="12" height="12" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
+          <dl>
+            <div><dt>默认策略</dt><dd>新安装默认开启，首次说明确认前不会上报。现有安装沿用原选择，已关闭的不自动开启。</dd></div>
+            <div><dt>统计口径</dt><dd>按 UTC 日历日计算。后台服务在线不计活跃，安装数不等于人数。</dd></div>
+            <div><dt>接收服务</dt><dd>Cloudflare · atlas-telemetry.unmadebox.com，网络请求仍由 Cloudflare 处理。</dd></div>
+            <div><dt>标识处理</dt><dd>随机标识经服务端 HMAC 存储，可关联多天活动；属于去标识化统计，不是完全匿名。</dd></div>
+            <div><dt>数据保留</dt><dd>明细保留 90 天，之后只保留不含安装标识的日汇总。</dd></div>
+            <div><dt>删除规则</dt><dd>删除时先关闭统计，再删除此安装的云端明细。已生成匿名汇总不撤回；离线时保留待删除请求。短期删除屏障与备份留存见完整说明。</dd></div>
+          </dl>
+          <a href="https://atlas-telemetry.unmadebox.com/privacy" target="_blank" rel="noopener noreferrer">完整统计说明<svg class="ico" width="11" height="11" aria-hidden="true"><use href="#i-external"/></svg></a>
+        </details>
+        <div class="telemetry-footer">
+          <div class="telemetry-status-wrap"><span class="telemetry-status-tag" id="telemetry-status-tag">读取中</span><p id="telemetry-status" role="status" aria-live="polite">正在读取统计设置…</p></div>
+          <button id="telemetry-forget" type="button" disabled title="停止使用统计并删除此安装的云端明细">删除统计记录</button>
+        </div>
+      </section>
       <section class="modal-section" data-pane="security">
         <h3>HTML 预览沙箱</h3>
         <p class="muted">
@@ -901,6 +951,69 @@
         </ul>
       </section>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 只在真正新建的配置上显示；服务端在确认前不生成身份、不发送统计。 -->
+  <div class="modal hidden" id="telemetry-intro-modal">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel usage-intro" aria-labelledby="telemetry-intro-title">
+      <div class="usage-intro-body">
+        <div class="usage-intro-mark" aria-hidden="true"><svg class="ico" width="22" height="22"><use href="#i-shield-check"/></svg></div>
+        <h2 id="telemetry-intro-title">欢迎使用 Atlas</h2>
+        <p class="usage-intro-lede">文档留在本机，基础统计帮助我们把工具做得更好。</p>
+        <div class="usage-intro-choice"><div><strong>使用统计</strong><p>新安装默认开启，你可以在开始前关闭。</p></div><label class="telemetry-switch"><input id="telemetry-intro-toggle" type="checkbox" role="switch" aria-label="使用统计" checked /><span aria-hidden="true"></span></label></div>
+        <p class="usage-intro-note">只发送随机安装标识、版本、平台和使用渠道，每天最多一次；不发送文档内容、文件名、路径或扫描目录。确认前不会发送。</p>
+        <a href="https://atlas-telemetry.unmadebox.com/privacy" target="_blank" rel="noopener noreferrer">数据与隐私说明<svg class="ico" width="11" height="11" aria-hidden="true"><use href="#i-external"/></svg></a>
+        <p class="usage-intro-feedback" id="telemetry-intro-feedback" role="status" aria-live="polite"></p>
+        <div class="usage-intro-actions"><button id="telemetry-intro-decline" type="button">暂不启用统计</button><button id="telemetry-intro-start" class="primary" type="button">开始使用</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 推荐 Atlas：只提供公开官网链接与文案，不创建局域网文档分享。 -->
+  <div class="modal hidden" id="recommend-modal">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel recommend-panel" aria-labelledby="recommend-title">
+      <header class="modal-header">
+        <h2 id="recommend-title">推荐 Atlas</h2>
+        <button class="modal-close" type="button" data-close aria-label="关闭推荐面板"><svg class="ico" width="15" height="15" aria-hidden="true"><use href="#i-x"/></svg></button>
+      </header>
+      <div class="recommend-body">
+        <section class="recommend-product" aria-labelledby="recommend-tagline">
+          <div class="recommend-eyebrow">ATLAS · 本地文档看板</div>
+          <h3 id="recommend-tagline">散落的文档，归到一处。</h3>
+          <p>把 AI 报告、网页原型和 Markdown 笔记集中到一个本地看板。</p>
+        </section>
+        <div class="recommend-share-grid">
+          <div class="recommend-share-copy">
+            <label for="recommend-url">Atlas 官网 · 演示与安装</label>
+            <input id="recommend-url" type="text" value="https://atlas.unmadebox.com/" readonly spellcheck="false" />
+            <div class="recommend-copy-actions">
+              <button class="recommend-copy recommend-primary" type="button" data-recommend-copy="link"><svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-clipboard"/></svg><span data-copy-label>复制链接</span></button>
+              <button class="recommend-copy recommend-secondary" type="button" data-recommend-copy="text"><svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-file-text"/></svg><span data-copy-label>复制推荐文案</span></button>
+            </div>
+            <p class="recommend-privacy">只分享公开官网，不会分享你的本地文档。</p>
+            <p class="recommend-feedback" id="recommend-feedback" role="status" aria-live="polite"></p>
+          </div>
+          <figure class="recommend-qr-wrap">
+            <div id="recommend-qr" class="recommend-qr" role="img" aria-label="Atlas 官网二维码"></div>
+            <figcaption>扫码了解与安装</figcaption>
+          </figure>
+        </div>
+        <div class="recommend-manual hidden" id="recommend-manual">
+          <label for="recommend-manual-text">复制受限，请选中文本手动复制</label>
+          <textarea id="recommend-manual-text" readonly rows="4" spellcheck="false"></textarea>
+        </div>
+        <section class="recommend-creator" aria-labelledby="recommend-creator-title">
+          <div class="recommend-creator-copy">
+            <h3 id="recommend-creator-title">认识 Unmade Box</h3>
+            <p>奇怪的点子，做出来再说。</p>
+            <span>工具、游戏、音乐和其他独立作品。</span>
+          </div>
+          <a href="https://unmadebox.com/" data-atlas-site="creator" target="_blank" rel="noopener noreferrer">探索 Unmade Box<svg class="ico" width="12" height="12" aria-hidden="true"><use href="#i-external"/></svg></a>
+        </section>
       </div>
     </div>
   </div>

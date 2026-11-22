@@ -31,6 +31,7 @@ const fsWatcher = require('./lib/fs-watcher');
 const { EventEmitter } = require('events');
 const userPaths = require('./lib/paths');
 const updateCheck = require('./lib/update-check');
+const telemetryLib = require('./lib/telemetry');
 const pdfExport = require('./lib/pdf-export');
 const chromium = require('./lib/chromium');
 const thumbnail = require('./lib/thumbnail');
@@ -74,6 +75,23 @@ function saveConfig(next) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2), 'utf8');
   config = next;
 }
+// 同一配置目录的桌面/CLI 共用身份，每次操作读取最新同意状态，尊重另一实例关闭。
+const telemetry = telemetryLib.createTelemetry({
+  dir: path.dirname(CONFIG_PATH), version: pkg.version,
+  endpoint: telemetryLib.testEndpoint(process.env),
+  enabled: () => {
+    try { const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); return cfg.telemetryEnabled === true && cfg.telemetryNoticePending !== true; }
+    catch { return false; }
+  },
+});
+
+async function telemetryStatus() {
+  const status = await telemetry.status();
+  let saved = {};
+  try { saved = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch {}
+  return { ...status, enabled: saved.telemetryEnabled === true, noticePending: saved.telemetryNoticePending === true };
+}
+
 function getScanRoots() {
   return (config.scanRoots || []).map(p => path.resolve(p));
 }
@@ -3493,6 +3511,22 @@ app.get('/api/browse', async (req, res) => {
   }
 });
 
+// 只在本机/同源界面事件中使用；状态接口不会暴露身份或删除凭证。
+app.get('/api/telemetry', async (_req, res) => { res.set('Cache-Control', 'no-store').json(await telemetryStatus()); });
+app.post('/api/telemetry/active', async (req, res) => {
+  const body = req.body || {};
+  if (Object.keys(body).some(k => !['channel', 'appVersion'].includes(k)) || !['desktop', 'npm'].includes(body.channel)) return res.status(400).json({ error: 'invalid-fields' });
+  // 返回本地接受状态，不让统计网络等待占用文档读取的请求槽。
+  telemetry.record({ channel: body.channel, appVersion: body.appVersion }).catch(() => {});
+  res.status(202).json({ ok: true });
+});
+app.post('/api/telemetry/forget', async (_req, res) => {
+  const next = { ...loadConfig(), telemetryEnabled: false, telemetryNoticePending: false };
+  saveConfig(next); telemetry.stop();
+  // 删除状态先持久化；短超时后反馈等待删除，不将网络失败伪装成删除成功。
+  res.set('Cache-Control', 'no-store').json(await telemetry.forget().then(() => telemetryStatus()));
+});
+
 app.get('/api/config', (_req, res) => {
   res.json({
     scanRoots: config.scanRoots || [],
@@ -3501,6 +3535,8 @@ app.get('/api/config', (_req, res) => {
     maxDepth: config.maxDepth,
     docTypes: getEnabledDocTypes(),
     version: pkg.version,
+    telemetryEnabled: config.telemetryEnabled === true,
+    telemetryNoticePending: config.telemetryNoticePending === true,
     // iCloud 云盘根（可用时）；不等能力探测
     icloudRoot: icloudStatusNow().available ? ICLOUD.root : null,
   });
@@ -3508,7 +3544,7 @@ app.get('/api/config', (_req, res) => {
 
 app.put('/api/config', (req, res) => {
   const body = req.body || {};
-  const next = { ...config };
+  const next = { ...loadConfig() };
   let rootsChanged = false;
   // ignore / maxDepth 作用于每个 watcher 自身，改了只能全部重建；
   // 只动 scanRoots 时走增量，避免为没变化的大目录重复建监听（会卡住事件循环数十秒）
@@ -3563,6 +3599,15 @@ app.put('/api/config', (req, res) => {
   // 全局信任开关：打开后所有 HTML 都以同源方式预览（等于回到 0.17 及更早的行为）
   if (typeof body.trustAllHtml === 'boolean') {
     next.trustAllHtml = body.trustAllHtml;
+  }
+  if ('telemetryNoticePending' in body) {
+    if (body.telemetryNoticePending !== false || typeof body.telemetryEnabled !== 'boolean') return res.status(400).json({ error: '首次说明需同时提交明确的统计开关选择' });
+    next.telemetryNoticePending = false;
+  }
+  if ('telemetryEnabled' in body) {
+    if (typeof body.telemetryEnabled !== 'boolean') return res.status(400).json({ error: '使用统计开关必须是布尔值' });
+    next.telemetryEnabled = body.telemetryEnabled;
+    if (!body.telemetryEnabled) { next.telemetryNoticePending = false; telemetry.stop(); }
   }
   saveConfig(next);
   // 扫描根 / ignore / maxDepth 变了 → 文件索引必须重建。

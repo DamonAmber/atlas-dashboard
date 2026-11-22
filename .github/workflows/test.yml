@@ -96,6 +96,8 @@ jobs:
             release-security \
             toolbar-more \
             tab-reorder \
+            recommend-atlas \
+            telemetry \
             backend-perf
           do
             echo "===== $spec ====="
@@ -106,3 +108,18 @@ jobs:
       - name: Sidebar perf (non-blocking)
         continue-on-error: true
         run: node tests/sidebar-perf.spec.js
+
+  usage-worker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: cloudflare/usage/package-lock.json
+      - name: 安装隔离的统计服务测试依赖
+        run: npm ci --prefix cloudflare/usage
+      - name: D1 与 Access 安全测试
+        run: npm test --prefix cloudflare/usage

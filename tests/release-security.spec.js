@@ -30,10 +30,17 @@ try {
     assert.strictEqual(pkg.build.asar, false);
     assert(!pkg.build.files.includes('electron/**'));
   });
-  check('保持 MIT / 可发布 npm，不引入遥测', () => {
+  check('保持 MIT / 可发布 npm，仅允许已授权的最少统计运行时', () => {
     assert.strictEqual(pkg.license, 'MIT'); assert(!pkg.private);
-    assert(!gate.APP_FILES.some(f => /telemetry|npm-sunset/.test(f)));
+    assert.deepStrictEqual(gate.APP_FILES.filter(f => /telemetry/.test(f)), ['lib/telemetry.js']);
+    assert(!gate.APP_FILES.some(f => /npm-sunset|posthog/i.test(f)));
+    assert(!gate.NPM_FILES.some(f => /cloudflare\//.test(f)));
   });
+  const manager = require('../electron/server-manager');
+  check('正常启动不改变 Electron 用户资料', () => assert.strictEqual(manager.nativeTestProfile({}), null));
+  check('单独指定 ATLAS_HOME 不改变既有 Electron 用户资料', () => assert.strictEqual(manager.nativeTestProfile({ ATLAS_HOME: tmp }), null));
+  check('测试标记没有隔离目录时不生效', () => assert.strictEqual(manager.nativeTestProfile({ ATLAS_TEST_ELECTRON_PROFILE: '1' }), null));
+  check('双开关仅在隔离目录下生成原生测试资料路径', () => assert.strictEqual(manager.nativeTestProfile({ ATLAS_HOME: tmp, ATLAS_TEST_ELECTRON_PROFILE: '1' }), path.join(tmp, 'electron-test-profile')));
   check('所有出包链路挂门禁', () => {
     assert.strictEqual(pkg.build.afterPack, './scripts/release-security.js');
     assert(pkg.scripts.prepack.includes('--npm'));
@@ -46,6 +53,10 @@ try {
     put(clean.root, 'node_modules/express/index.js', 'module.exports = {};');
     put(path.dirname(clean.root), 'app-update.yml', 'provider: github');
     assert.deepStrictEqual(gate.scanApp(clean.app).errors, []);
+  });
+  check('云端源码与密钥配置不能混入桌面发布物', () => {
+    const fixture = appFixture('cloud-source'); put(fixture.root, 'cloudflare/usage/worker.js');
+    assert(gate.scanApp(fixture.app).errors.some(e => /白名单外/.test(e)));
   });
   for (const filename of ['electron/build/notarize.env', 'electron/build/.env.local',
     'electron/build/cert.p12', 'electron/build/secret.pem', 'electron/build/private.key',
@@ -112,7 +123,7 @@ try {
   check('真实 npm tarball 通过且没有桌面资源、构建脚本或埋点', () => {
     const result = gate.scanNpm(ROOT);
     assert.deepStrictEqual(result.errors, []);
-    assert(!result.files.some(f => /^(electron|scripts|tests|infra|npm-sunset)\//.test(f)));
+    assert(!result.files.some(f => /^(electron|scripts|tests|infra|cloudflare|npm-sunset)\//.test(f)));
     assert(result.files.includes('bin/atlas.js'));
   });
   check('外层 npm dry-run 的 prepack 门禁仍能生成临时检查归档', () => {

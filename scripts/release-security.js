@@ -11,7 +11,7 @@ const LIB_FILES = [
   'activity-log', 'chromium', 'diff', 'edit-apply', 'edit-backup', 'editable',
   'fs-watcher', 'icloud-download', 'icloud', 'init', 'link-index', 'paths',
   'pdf-export', 'plain-render', 'restart-helper-template', 'self-writes',
-  'share', 'thumbnail', 'update-check', 'version-store',
+  'share', 'telemetry', 'thumbnail', 'update-check', 'version-store',
 ].map(name => `lib/${name}.js`);
 const PUBLIC_FILES = [
   'public/index.html', 'public/styles.css', 'public/app.js', 'public/changelog.js',
