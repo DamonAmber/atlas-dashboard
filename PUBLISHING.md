@@ -710,6 +710,15 @@ Developer ID Application 证书 → 导出为 .p12 → `base64 -i cert.p12 | pbc
 
 ## 故障排查
 
+### Git HTTPS 推送超时但 API 正常（2026-11-22）
+
+现象：普通 push、临时 HTTP/1.1/当前代理或已验证 gh 凭据仍超时，远端 main 没收到提交。先查询远端 SHA，不能把本地 commit 成功当成 push 成功，也不要并发重复推送、强推或改用户全局网络配置。
+
+同账号 GitHub API 正常且具有本仓库写权限时，可用 Git 数据 API上传既有提交的 blobs/tree/commit：每个 blob SHA、完整 tree SHA、最终 commit SHA 必须与本地完全一致，远端须仍等于该提交的父提交，才 `PATCH git/refs/heads/main` 且 `force:false`。有任一 SHA 不同或远端移动就停，不覆盖别人的改动。成功后再 GET ref 确认，才更新本地 `refs/remotes/origin/main` 缓存。API 更新也要等 Pages/CI 结果；新官网 Cloudflare 手动部署仍是独立步骤。
+
+0.34.0 本次 root 官网提交与新官网提交已按此恢复，均保持原 SHA；npm/Release 上架先于新官网与兼容介绍页部署。
+
+
 ### 公证 profile 读取失败（2026-11-22）
 
 现象：较早的 history 查询成功，但构建时 notarytool 返回 `No Keychain password item found for profile: atlas-notary`；后来同一默认 profile 的 history 查询又恢复成功，显式登录钥匙串查询仍没有该项。**这不证明 App 专用密码过期，也不能认定凭据被删除**；具体临时不可读原因尚未确认。
