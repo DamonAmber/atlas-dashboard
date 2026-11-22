@@ -56,7 +56,7 @@ NEW_VERSION="0.x.y"   # 替换成实际新版本号
 node -e "const p=require('./package.json'); p.version='$NEW_VERSION'; require('fs').writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n');"
 
 # 2. 先把 macOS App 打好 + 公证（放在打 tag 之前，让资产提前躺在 dist-app/ 里就位）
-APPLE_KEYCHAIN_PROFILE=atlas-notary npm run app:build
+APPLE_KEYCHAIN_PROFILE=atlas-notary APPLE_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db" npm run app:build
 #    再单独公证 DMG 容器 + staple —— 见「桌面 App（macOS DMG）发版」章节
 #    （npm-only 发版、用户说"先不出 DMG"时跳过第 2 / 8 步）
 
@@ -616,9 +616,10 @@ curl -s "https://api.github.com/repos/DamonAmber/atlas-dashboard/actions/runs?pe
 ```bash
 # 首次：用户本人在终端交互运行，按提示输入 Apple ID、新 App 专用密码与 Team ID。
 # 不把密码放在命令行、聊天、仓库文件或日志里。
-xcrun notarytool store-credentials atlas-notary
+xcrun notarytool store-credentials atlas-notary \
+  --keychain "$HOME/Library/Keychains/login.keychain-db"
 # 以后只传 profile 名；不要同时设置 APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD。
-APPLE_KEYCHAIN_PROFILE=atlas-notary npm run app:build
+APPLE_KEYCHAIN_PROFILE=atlas-notary APPLE_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db" npm run app:build
 # 产物：dist-app/ 下 Atlas-mac-arm64.dmg（人工下载）+ .zip + latest-mac.yml（自动更新）
 # ⚠️ electron-builder 只公证并 staple 了 .app，DMG 容器本身没被公证/staple —— 要手动补，见下方「DMG 单独公证」
 ```
@@ -637,7 +638,7 @@ APPLE_KEYCHAIN_PROFILE=atlas-notary npm run app:build
 
 ```bash
 xcrun notarytool submit dist-app/Atlas-mac-arm64.dmg \
-  --keychain-profile atlas-notary --wait
+  --keychain-profile atlas-notary --keychain "$HOME/Library/Keychains/login.keychain-db" --wait
 # 等到 status: Accepted（约 1-3 分钟）后再 staple
 xcrun stapler staple dist-app/Atlas-mac-arm64.dmg
 xcrun stapler validate dist-app/Atlas-mac-arm64.dmg   # 应 The validate action worked!
@@ -710,6 +711,20 @@ Developer ID Application 证书 → 导出为 .p12 → `base64 -i cert.p12 | pbc
 
 ## 故障排查
 
+### 公证 profile 读取失败（2026-11-22）
+
+现象：配置名的前置检查可通过，甚至较早的 history 查询成功，但构建时 notarytool 返回 `No Keychain password item found for profile: atlas-notary`。App 可能已签名并过 afterPack，但**不代表公证完成，禁止先发 npm/上传未公证安装包**。先直接查询 profile 并确认登录钥匙串状态；如果仍不可用，由用户本人在系统终端交互重建，显式写入登录钥匙串，不在聊天里输入 Apple 密码。
+
+```sh
+xcrun notarytool store-credentials atlas-notary \
+  --keychain "$HOME/Library/Keychains/login.keychain-db"
+xcrun notarytool history --keychain-profile atlas-notary \
+  --keychain "$HOME/Library/Keychains/login.keychain-db"
+```
+
+构建时同时传 `APPLE_KEYCHAIN_PROFILE=atlas-notary` 和 `APPLE_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"`，避免依赖默认/iCloud 钥匙串的可用状态。只缺凭据时不用改源码或关闭签名/公证，仍保留原运行时白名单门禁。新 App 专用密码由本人从 https://account.apple.com/ 的“登录与安全 → App 专用密码”生成；不要用 Apple 登录密码替代，不保存到仓库或日志。
+
+
 **0.33.0 发版补充（2026-11-22）：**
 - npm 普通登录并不等于满足发布 2FA；未配置 2FA 的账号没有 OTP 可输入。由账号持有人在 npm 网页配置安全密钥 / Touch ID 等二次认证，再在正常终端交互发布；不要关闭 2FA、不要把验证码或 token 发到聊天。非交互 publish 被 E403 拒绝时停止。
 - npm 发布回执可能显示「package is being processed」，此时即使显示 `+ package@version`，registry 暂时仍可能 E404。等待指定版本可查询并核对 dist.shasum，不重复发布，验证后再打 tag。
@@ -732,8 +747,8 @@ Developer ID Application 证书 → 导出为 .p12 → `base64 -i cert.p12 | pbc
 | tests workflow 失败但本地通过 | 多半是 fixture HTML 不够长 / 不含某关键字。看 `.github/workflows/test.yml` 里 `Prepare fixture HTML files` 那一步，按需调整 |
 | `npm pack` → **`EACCES: permission denied, rename '.../_cacache/tmp/...'`**（或 `EEXIST`） | `~/.npm/_cacache` 里有目录属主是 `root`，历史上某次 `sudo npm` 留下的，跟本仓库无关。**不要 `sudo chown` 用户的 npm 缓存**（影响面比这个问题大得多）。用一次性缓存目录绕开就行：`npm pack --cache /tmp/atlas-npmcache`。步骤 0 里给 `e2e-install.spec.js` 备 tgz 时会撞到这个。0.17.1 发版时遇到过。 |
 | `xcrun stapler validate <dmg>` → **`does not have a ticket stapled to it`**；`stapler staple <dmg>` → **`Record not found` / `Could not find ... ticket`** | 不是构建坏了。`build.mac.notarize: true` 只公证 `.app`，**DMG 容器没被公证**，所以 staple 找不到票。按「[DMG 单独公证 + staple](#桌面-appmacos-dmg发版)」把 dmg 也 `notarytool submit --wait` 一次再 staple。app 本身其实已 notarized+stapled（`spctl` 显示 accepted），这步是让下载的 dmg 容器离线也干净。0.22.0 发版时遇到并补流程。 |
-| `npm run app:build` → **`codesign ... The timestamp service is not available`**（退出码 1，签某个 `locale.pak` 时失败） | Apple 的安全时间戳服务（`codesign --timestamp` 联网访问 `timestamp.apple.com`）**瞬时不可用**，不是证书/凭据/代码问题。**直接重跑** `APPLE_KEYCHAIN_PROFILE=atlas-notary npm run app:build` 即可，一般第二次就过（electron-builder 用 `--force` 重签，不用清理）。0.24.1 发版时遇到，重试一次即成功。 |
-| `npm run app:build` 公证阶段 → **`Failed to notarize via notarytool. HTTP status code: 403. A required agreement is missing or has expired`** | 不是证书/凭据/代码问题，签名那步其实已成功。Apple **更新了开发者协议**（Program License Agreement 等），公证会一直 403 直到**账号持有人**登录 <https://developer.apple.com/account> 或 App Store Connect **接受新协议**。重跑没用，必须先签协议。签完直接重跑 `APPLE_KEYCHAIN_PROFILE=atlas-notary npm run app:build` 即可。0.31.0 发版时遇到。 |
+| `npm run app:build` → **`codesign ... The timestamp service is not available`**（退出码 1，签某个 `locale.pak` 时失败） | Apple 的安全时间戳服务（`codesign --timestamp` 联网访问 `timestamp.apple.com`）**瞬时不可用**，不是证书/凭据/代码问题。**直接重跑** `APPLE_KEYCHAIN_PROFILE=atlas-notary APPLE_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db" npm run app:build` 即可，一般第二次就过（electron-builder 用 `--force` 重签，不用清理）。0.24.1 发版时遇到，重试一次即成功。 |
+| `npm run app:build` 公证阶段 → **`Failed to notarize via notarytool. HTTP status code: 403. A required agreement is missing or has expired`** | 不是证书/凭据/代码问题，签名那步其实已成功。Apple **更新了开发者协议**（Program License Agreement 等），公证会一直 403 直到**账号持有人**登录 <https://developer.apple.com/account> 或 App Store Connect **接受新协议**。重跑没用，必须先签协议。签完直接重跑 `APPLE_KEYCHAIN_PROFILE=atlas-notary APPLE_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db" npm run app:build` 即可。0.31.0 发版时遇到。 |
 | `gh release upload` **卡住 / 5 分钟超时中断**，Release 上只挂了 `latest-mac.yml` | 一条命令里塞了两个 ~124MB 的 zip+dmg（合计 ~248MB），超过默认超时。**分开单独上传**（各给足时间），传完用 `gh release view --json assets` 核对三件都在、`size` 与本地 `stat -f %z` 一致。0.22.0 发版时遇到。 |
 | **分开单独传 zip/dmg 仍然卡**：`gh release upload` 和直接 `curl` 到 `uploads.github.com` 都传不完，Release assets 长时间只剩 `latest-mac.yml` | 本机→GitHub 上行**网络抖动**期，单个 124MB 也传不完（而同一时段 `notarytool` 传 Apple 却很快，说明是到 GitHub 这条路的问题）。两条上传**并行**时每条被挤到 ~27KB/s，且长连接（~40 分钟）会被对端掐断：`curl: (55) Recv failure: Connection reset by peer`（实测 zip 传到 64MB、dmg 到 70MB 就断）。**诊断**：前台 `curl --max-time 100 … -o /tmp/x -w "uploaded=%{size_upload} speed=%{speed_upload}"`，看这 100s 到底传了多少字节 / 平均速度，据此区分"慢"还是"完全卡死"。**处置**：改成**单连接、串行、一次传完、中途绝不打断**——GitHub 资产上传**不支持断点续传**，一旦中断（含命令超时被杀、`Ctrl-C`）就得从 0 重来，反复打断只会永远传不完；同名残片会占住 asset 名，重传前先 `gh release view --json assets` 确认没有半成品（有就先删）。单连接通常能跑满带宽（本次网络恢复后 zip 19.5s、dmg 43.7s 就传完了）。若持续极慢，就等网速恢复再一次性传，别并行、别中断。**另注意**：用 `pgrep -fl` / `ps` 排查上传进程会把命令行里的 `gh` token 明文打出来——构造 `curl` 时用 `TOKEN=$(gh auth token)` 引用变量、不要把 token 写进会被别人看到的地方；万一泄露，`gh auth refresh` 轮换。0.29.2 发版时遇到。 |
 | 用户反馈**官网说有新版、但点下载 404**；或 `releases/latest/download/Atlas-mac-arm64.dmg` 一段时间内 404 | 发版顺序错了：官网（`docs/`）或空 Release 领先于真实产物。根因两条——① docs 和代码放同一个 commit 一起 push，Pages 立刻部署、官网提前宣告新版而包还在传；② tag 触发的 Release 若不是草稿会立刻抢 `latest`，130MB dmg 上传期间 latest 指向一个还没这个资产的 Release。**修复（已固化进流程）**：Release 由 `release.yml` 建成**草稿**，传齐资产再 `gh release edit --draft=false --latest` 转正；**官网（docs/）永远最后一步 push**（TL;DR 第 10 步）。0.24.0 发版时踩到，由此修订顺序铁律。 |
